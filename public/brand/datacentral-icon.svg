@@ -1,0 +1,14 @@
+<svg xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" version="1.1" id="svg2" viewBox="220 80 216.09332 216.09332">
+  <defs id="defs6"></defs>
+  <namedview id="namedview4" pagecolor="#ffffff" bordercolor="#000000" borderopacity="0.25"></namedview>
+  <g id="g8" transform="matrix(1.3333333,0,0,-1.3333333,0,396.09333)">
+    <g id="g10" transform="scale(0.1)">
+      <g transform="scale(0.55) translate(3000,1340)">
+      <path d="M 0,1995.96 V 665.449 C 0,297.93 297.934,0 665.453,0 H 969.297 V 1995.96 H 0" style="fill:#f9c815;fill-opacity:1;fill-rule:nonzero;stroke:none" id="path12"></path>
+      <path d="M 969.297,1995.96 V 0 H 1952.68 V 1995.96 H 969.297" style="fill:#6640a2;fill-opacity:1;fill-rule:nonzero;stroke:none" id="path14"></path>
+      <path d="m 969.297,2970.73 v -974.77 h 983.383 v 974.77 H 969.297" style="fill:#f07124;fill-opacity:1;fill-rule:nonzero;stroke:none" id="path16"></path>
+      <path d="M 1952.68,2970.73 V 0 h 321.55 c 375.03,0 679.05,304.02 679.05,679.039 V 2291.68 c 0,375.03 -304.02,679.05 -679.05,679.05 h -321.55" style="fill:#ed0e78;fill-opacity:1;fill-rule:nonzero;stroke:none" id="path18"></path>
+      </g>
+    </g>
+  </g>
+</svg>
