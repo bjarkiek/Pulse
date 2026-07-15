@@ -17,6 +17,10 @@ function limitFor(request: NextRequest) {
 
 const FRAME_ANCESTORS = process.env.DC_FRAME_ANCESTORS || "'self' https://*.datacentral.ai";
 
+// Keep in sync with the Content-Security-Policy value in next.config.ts (this replaces, not merges with, that header on proxy-matched paths).
+const BASE_CSP =
+  "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://*.blob.core.windows.net";
+
 export function isEmbedRequest(request: NextRequest): boolean {
   return request.nextUrl.searchParams.has("dcdata") ||
     request.headers.get("sec-fetch-dest")?.toLowerCase() === "iframe";
@@ -27,13 +31,13 @@ export async function proxy(request: NextRequest) {
 
   if (!path.startsWith("/api")) {
     const withFraming = (r: NextResponse) => {
-      r.headers.set("content-security-policy", `frame-ancestors ${FRAME_ANCESTORS}`);
+      r.headers.set("content-security-policy", `${BASE_CSP}; frame-ancestors ${FRAME_ANCESTORS}`);
       return r;
     };
     // frame-ancestors 'none' on OAuth pages — the /oauth/authorize consent button
     // grants a full-power MCP token, so it must NEVER be frameable (anti-clickjacking).
     const denyFraming = (r: NextResponse) => {
-      r.headers.set("content-security-policy", "frame-ancestors 'none'");
+      r.headers.set("content-security-policy", `${BASE_CSP}; frame-ancestors 'none'`);
       return r;
     };
     if (path === "/mcp" || path.startsWith("/oauth"))
@@ -51,7 +55,7 @@ export async function proxy(request: NextRequest) {
       // Resolve against PULSE_PUBLIC_URL when set so App Service TLS termination
       // doesn't yield an http:// Location the Secure session cookie won't accompany.
       const base = process.env.PULSE_PUBLIC_URL || request.url;
-      return NextResponse.redirect(new URL(target, base));
+      return NextResponse.redirect(new URL(target, base), 302);
     }
     return withFraming(NextResponse.next());
   }

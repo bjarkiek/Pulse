@@ -9,7 +9,7 @@ import { resolveUserForDcLaunch, resolveUserForEntra } from "../lib/server/user-
 import { listUsers } from "../lib/server/admin-repository";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
 import { GET as dcEmbedGet } from "../app/dc-embed/route";
-import { isEmbedRequest } from "../proxy";
+import { isEmbedRequest, proxy } from "../proxy";
 import { NextRequest } from "next/server";
 
 function requestWithCookie(token: string): Request {
@@ -227,4 +227,25 @@ test("embed detection: dcdata param or Sec-Fetch-Dest iframe", () => {
   assert.equal(isEmbedRequest(new NextRequest("http://localhost/", {
     headers: { "sec-fetch-dest": "iframe" } })), true);
   assert.equal(isEmbedRequest(new NextRequest("http://localhost/")), false);
+});
+
+// Next.js does NOT merge proxy-set headers with the static CSP from next.config.ts's
+// headers() — it replaces it. The proxy must therefore compose the FULL policy itself
+// on every branch, not just append frame-ancestors. This test locks that behavior in.
+test("proxy composes the full CSP (base directives + frame-ancestors), not just frame-ancestors alone", async () => {
+  const mcpRes = await proxy(new NextRequest("http://localhost/mcp"));
+  assert.ok(mcpRes, "proxy must return a NextResponse for a matched path");
+  const mcpCsp = mcpRes.headers.get("content-security-policy") ?? "";
+  assert.ok(mcpCsp.includes("default-src 'self'"), "mcp CSP must retain base default-src");
+  assert.ok(mcpCsp.includes("frame-ancestors 'none'"), "mcp CSP must deny framing");
+
+  const rootRes = await proxy(new NextRequest("http://localhost/"));
+  assert.ok(rootRes, "proxy must return a NextResponse for a matched path");
+  const rootCsp = rootRes.headers.get("content-security-policy") ?? "";
+  assert.ok(rootCsp.includes("default-src 'self'"), "root CSP must retain base default-src");
+  assert.ok(
+    rootCsp.includes("connect-src 'self' https://*.blob.core.windows.net"),
+    "root CSP must retain base connect-src",
+  );
+  assert.ok(rootCsp.includes("frame-ancestors"), "root CSP must still declare frame-ancestors");
 });
