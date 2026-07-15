@@ -11,6 +11,7 @@ export async function GET(request: Request) {
           id: current.userId,
           email: current.email,
           name: current.name,
+          locale: current.locale,
         },
         organizations: current.memberships,
         activeOrganizationId: current.activeOrganizationId,

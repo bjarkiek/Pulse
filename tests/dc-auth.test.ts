@@ -10,6 +10,7 @@ import { listUsers } from "../lib/server/admin-repository";
 import { getIdentity } from "../lib/server/auth";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
 import { GET as dcEmbedGet } from "../app/dc-embed/route";
+import { GET as meGet } from "../app/api/v1/me/route";
 import { isEmbedRequest, proxy } from "../proxy";
 import { NextRequest } from "next/server";
 
@@ -210,6 +211,21 @@ test("dc-auth signed payload for unknown user returns 403 not_provisioned", asyn
   const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: sign(dcdata) }));
   assert.equal(res.status, 403);
   assert.equal((await res.json()).error, "not_provisioned");
+});
+
+test("GET /api/v1/me returns the canonical user shape with locale, name, and top-level auth fields", async () => {
+  globalThis.pulseMemoryUsers = undefined;
+  globalThis.pulseMemoryOrganizations = undefined;
+  globalThis.pulseMemoryAudit = undefined;
+  const res = await meGet(new Request("http://localhost/api/v1/me"));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.user.locale, "user.locale must be present");
+  assert.equal(body.user.locale, "en");
+  assert.ok(body.user.name, "user.name must be present");
+  assert.notEqual(body.authMethod, undefined);
+  assert.notEqual(body.dcEmbed, undefined);
+  assert.notEqual(body.isVerified, undefined);
 });
 
 test("dc-embed page contains both AppReady spellings, forwarding, and _top fallback", async () => {

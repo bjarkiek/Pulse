@@ -7,6 +7,7 @@ export type CurrentUser = {
   userId: string;
   email: string;
   name: string;
+  locale: string;
   authMethod: NonNullable<PulseIdentity["authMethod"]>;
   isVerified: boolean;
   dcEmbed: boolean;
@@ -27,8 +28,9 @@ export async function getCurrentUser(request: Request): Promise<CurrentUser> {
       organizationId: context.activeOrganizationId ?? identity.organizationId,
     },
     userId: identity.id,
-    email: identity.email,
-    name: identity.name,
+    email: context.user.email,
+    name: context.user.name,
+    locale: context.user.locale,
     authMethod: identity.authMethod ?? "dev",
     isVerified: identity.isVerified ?? false,
     dcEmbed: identity.dcEmbed ?? false,
