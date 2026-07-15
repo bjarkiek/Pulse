@@ -18,6 +18,7 @@ import { POST as register } from "../app/oauth/register/route";
 import { POST as token } from "../app/oauth/token/route";
 import { GET as authorize } from "../app/oauth/authorize/route";
 import { POST as decision } from "../app/oauth/authorize/decision/route";
+import { POST as mcp } from "../app/mcp/route";
 
 beforeEach(() => {
   globalThis.pulseMemoryMcpRefreshTokens = undefined;
@@ -395,4 +396,30 @@ test("decision rejects when the re-resolved user does not match the pending cons
   }));
   assert.equal(dec.status, 400);
   assert.equal(await dec.text(), "Signed-in user does not match the consent request.");
+});
+
+// --- Task 26: /mcp endpoint ---
+
+test("mcp without a bearer returns 401 with the resource_metadata challenge", async () => {
+  const res = await mcp(new Request("http://localhost/mcp", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) }));
+  assert.equal(res.status, 401);
+  assert.match(res.headers.get("www-authenticate") ?? "",
+    /^Bearer resource_metadata="http:\/\/localhost\/\.well-known\/oauth-protected-resource\/mcp"$/);
+});
+
+test("mcp with a valid token lists tools bound to the user", async () => {
+  const user = { id: "33333333-3333-4333-8333-333333333333", email: "mcp-user@uidata.com", name: "MCP User" };
+  const token = await issueAccessToken(user, "client-1");
+  const res = await mcp(new Request("http://localhost/mcp", { method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.result.tools.some((t: { name: string }) => t.name === "submit_request"));
 });
