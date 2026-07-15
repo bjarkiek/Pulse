@@ -2,6 +2,7 @@ import type { PulseIdentity } from "@/lib/domain";
 import { readSession } from "@/lib/server/session";
 import { verifyDcLaunch } from "@/lib/server/datacentral";
 import { resolveUserForDcLaunch } from "@/lib/server/user-directory";
+import { isAzureSqlConfigured } from "@/lib/server/database";
 
 type ClientPrincipal = {
   claims?: Array<{ typ: string; val: string }>;
@@ -121,9 +122,15 @@ export async function getIdentity(request: Request): Promise<PulseIdentity> {
   }
 
   // ④ Demo fallback — local dev, or explicitly opted in via PULSE_ALLOW_DEMO_IDENTITY.
+  // Confined to memory mode: even with the flag set (or NODE_ENV !== production),
+  // a box with Azure SQL configured must never hand out this identity. Plan C's
+  // deviation #11 warns against seeded real users with isAzureSqlConfigured()
+  // === false; this closes the inverse gap — a SQL-backed box (i.e. production)
+  // that mistakenly sets PULSE_ALLOW_DEMO_IDENTITY must not grant admin either.
   const localAllowed =
-    process.env.NODE_ENV !== "production" ||
-    process.env.PULSE_ALLOW_DEMO_IDENTITY === "true";
+    !isAzureSqlConfigured() &&
+    (process.env.NODE_ENV !== "production" ||
+      process.env.PULSE_ALLOW_DEMO_IDENTITY === "true");
   if (localAllowed)
     return {
       id: "11111111-1111-4111-8111-111111111111",

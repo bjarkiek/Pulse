@@ -365,6 +365,56 @@ test("decision rejects a cross-site POST (origin host mismatch) with 403, not a 
   assert.equal(await dec.text(), "Cross-site request rejected.");
 });
 
+test("decision fails closed (403, not 500) on a malformed Origin header, e.g. the literal string \"null\"", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz`));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  const nonce = html.match(/name="nonce" value="([^"]+)"/)?.[1];
+  assert.ok(nonce);
+
+  // Browsers send the literal string "null" as Origin for opaque origins
+  // (e.g. a sandboxed iframe or a file:// document). `new URL("null")`
+  // throws — an unguarded parse here would 500 instead of denying the
+  // request, so this must land on the same 403 path as a real cross-site
+  // mismatch, not crash.
+  const dec = await decision(new Request("http://localhost/oauth/authorize/decision", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "null" },
+    body: new URLSearchParams({ nonce: nonce!, action: "allow" }).toString(),
+  }));
+  assert.equal(dec.status, 403);
+  assert.equal(await dec.text(), "Cross-site request rejected.");
+});
+
+test("decision does not throw when the Origin header is absent (falls through to the sec-fetch-site check)", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz`));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  const nonce = html.match(/name="nonce" value="([^"]+)"/)?.[1];
+  assert.ok(nonce);
+
+  const dec = await decision(new Request("http://localhost/oauth/authorize/decision", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" }, // no origin header at all
+    body: new URLSearchParams({ nonce: nonce!, action: "allow" }).toString(),
+  }));
+  assert.equal(dec.status, 302);
+  const location = dec.headers.get("location")!;
+  assert.match(location, /^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?code=.+&state=xyz$/);
+});
+
 test("decision rejects when the re-resolved user does not match the pending consent's userId", async () => {
   const reg = await register(new Request("http://localhost/oauth/register", {
     method: "POST", headers: { "content-type": "application/json" },

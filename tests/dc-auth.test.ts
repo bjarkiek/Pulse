@@ -70,6 +70,41 @@ test("getIdentity falls back to demo identity outside production", async () => {
   assert.equal(identity.isVerified, false);
 });
 
+test("getIdentity confines the demo fallback to memory mode: SQL-configured + PULSE_ALLOW_DEMO_IDENTITY=true still throws UNAUTHORIZED", async () => {
+  // isAzureSqlConfigured() reads these env vars directly (lib/server/database.ts);
+  // setting one is enough to simulate a SQL-backed (i.e. production-shaped) box
+  // without needing a real database connection — getIdentity's demo branch only
+  // ever calls isAzureSqlConfigured() as a boolean, never getSqlPool().
+  const originalServer = process.env.AZURE_SQL_SERVER;
+  const originalFlag = process.env.PULSE_ALLOW_DEMO_IDENTITY;
+  process.env.AZURE_SQL_SERVER = "fake-sql-server.database.windows.net";
+  process.env.PULSE_ALLOW_DEMO_IDENTITY = "true";
+  try {
+    await assert.rejects(
+      getIdentity(new Request("http://localhost/api/v1/me")),
+      /UNAUTHORIZED/,
+    );
+  } finally {
+    if (originalServer === undefined) delete process.env.AZURE_SQL_SERVER;
+    else process.env.AZURE_SQL_SERVER = originalServer;
+    if (originalFlag === undefined) delete process.env.PULSE_ALLOW_DEMO_IDENTITY;
+    else process.env.PULSE_ALLOW_DEMO_IDENTITY = originalFlag;
+  }
+});
+
+test("getIdentity still grants the demo identity when SQL is NOT configured and PULSE_ALLOW_DEMO_IDENTITY=true", async () => {
+  const originalFlag = process.env.PULSE_ALLOW_DEMO_IDENTITY;
+  process.env.PULSE_ALLOW_DEMO_IDENTITY = "true";
+  try {
+    const identity = await getIdentity(new Request("http://localhost/api/v1/me"));
+    assert.equal(identity.authMethod, "dev");
+    assert.equal(identity.role, "System admin");
+  } finally {
+    if (originalFlag === undefined) delete process.env.PULSE_ALLOW_DEMO_IDENTITY;
+    else process.env.PULSE_ALLOW_DEMO_IDENTITY = originalFlag;
+  }
+});
+
 test("set-cookie strings carry the right attributes", () => {
   const set = sessionSetCookie("abc");
   assert.match(set, /^pulse-session=abc; Path=\/; Max-Age=\d+; HttpOnly/);
@@ -282,6 +317,21 @@ test("dc-embed escapes a script-breaking returnUrl instead of injecting raw mark
   const html = await res.text();
   assert.ok(!html.includes("<script>alert(1)</script>"), "raw malicious markup must not appear unescaped");
   assert.ok(html.includes("\\u003c/script\\u003e"), "the < and > around the injected tag must be escaped");
+});
+
+test("proxy fails closed (403 CSRF_REJECTED, not a throw) on a malformed Origin during a mutation", async () => {
+  // Browsers send the literal string "null" as Origin for opaque origins.
+  // `new URL("null")` throws — an unguarded parse in the CSRF gate would 500
+  // instead of denying the mutation, so this must land on the same
+  // CSRF_REJECTED path as a genuine cross-site mismatch, not crash.
+  const res = await proxy(new NextRequest("http://localhost/api/v1/requests", {
+    method: "POST",
+    headers: { origin: "null" },
+  }));
+  assert.ok(res, "proxy must return a response, not throw");
+  assert.equal(res.status, 403);
+  const body = await res.json();
+  assert.equal(body.error.code, "CSRF_REJECTED");
 });
 
 test("embed detection: dcdata param or Sec-Fetch-Dest iframe", () => {

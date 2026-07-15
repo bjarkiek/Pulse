@@ -65,11 +65,19 @@ export async function proxy(request: NextRequest) {
   const mutation = !["GET", "HEAD", "OPTIONS"].includes(request.method);
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
-  if (
-    mutation &&
-    ((origin && new URL(origin).host !== request.nextUrl.host) ||
-      fetchSite === "cross-site")
-  )
+  // Opaque/malformed Origin values (e.g. the literal string "null") make
+  // `new URL(origin)` throw. Fail closed — treat anything unparseable as a
+  // cross-site mismatch (rejected below) rather than letting the exception
+  // escape as an uncaught 500.
+  let originMismatch = false;
+  if (origin) {
+    try {
+      originMismatch = new URL(origin).host !== request.nextUrl.host;
+    } catch {
+      originMismatch = true;
+    }
+  }
+  if (mutation && (originMismatch || fetchSite === "cross-site"))
     return NextResponse.json(
       {
         error: {

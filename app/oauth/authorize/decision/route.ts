@@ -18,7 +18,19 @@ function textError(status: number, message: string): Response {
 
 function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
-  if (origin && new URL(origin).host !== new URL(request.url).host) return false;
+  if (origin) {
+    // Opaque/malformed Origin values (e.g. the literal string "null" browsers
+    // send for sandboxed/file-origin requests) make `new URL(origin)` throw.
+    // Fail closed — treat anything unparseable as NOT same-origin rather than
+    // letting the exception escape as an uncaught 500.
+    let originHost: string;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return false;
+    }
+    if (originHost !== new URL(request.url).host) return false;
+  }
   if (request.headers.get("sec-fetch-site") === "cross-site") return false;
   return true;
 }
