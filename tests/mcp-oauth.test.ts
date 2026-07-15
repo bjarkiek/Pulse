@@ -12,7 +12,7 @@ import {
   MCP_AUDIENCE,
 } from "../lib/server/mcp/tokens";
 import { isAllowedRedirectUri } from "../lib/server/mcp/client-store";
-import { putOnce, takeOnce, CODE_TTL_MS } from "../lib/server/mcp/code-cache";
+import { putOnce, takeOnce, CODE_TTL_MS, CONSENT_TTL_MS, type PendingConsent } from "../lib/server/mcp/code-cache";
 import { GET as asMetadata } from "../app/.well-known/oauth-authorization-server/route";
 import { POST as register } from "../app/oauth/register/route";
 import { POST as token } from "../app/oauth/token/route";
@@ -285,4 +285,114 @@ test("authorize with unregistered redirect_uri is a 400, not a redirect", async 
   const res = await authorize(new Request(
     `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://evil.example/cb")}&response_type=code&code_challenge=x&code_challenge_method=S256`));
   assert.equal(res.status, 400);
+});
+
+// --- Task 25 consent-flow security regression coverage ---
+// The properties below were verified by hand during Task 25 review (ad hoc
+// scripts, since deleted) but never committed as regression tests. They lock
+// in: (1) the consent page HTML-escapes an attacker-controlled client_name,
+// (2) authorize never redirects on an unresolvable client_id (open-redirect
+// guard), (3) PKCE is mandatory, (4) the decision POST rejects cross-site
+// requests, and (5) the decision POST rejects a re-resolved user that
+// doesn't match the identity the consent nonce was minted for.
+
+test("authorize HTML-escapes an XSS-attempting client_name instead of injecting it raw", async () => {
+  const maliciousName = '"><script>alert(1)</script>';
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: maliciousName, redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  assert.equal(reg.status, 201);
+  const { client_id } = await reg.json();
+
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz`));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  // The raw payload must never appear unescaped in the response...
+  assert.equal(html.includes('"><script>alert(1)</script>'), false);
+  assert.equal(html.includes("<script>alert(1)</script>"), false);
+  // ...but its HTML-escaped form must, proving the name was rendered through
+  // escapeHtml() rather than dropped or filtered.
+  assert.ok(html.includes("&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+});
+
+test("authorize with an unknown client_id is a local 400 text response, never a redirect", async () => {
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=does-not-exist&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256`));
+  assert.equal(res.status, 400);
+  assert.ok(res.status < 300 || res.status >= 400); // explicitly not a 3xx redirect
+  assert.equal(res.headers.get("location"), null);
+  assert.equal(await res.text(), "Unknown client_id.");
+});
+
+test("authorize without a code_challenge redirects back to the client with error=invalid_request", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&state=xyz`));
+  assert.equal(res.status, 302);
+  const location = res.headers.get("location")!;
+  assert.match(
+    location,
+    /^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?error=invalid_request&error_description=[^&]+&state=xyz$/,
+  );
+});
+
+test("decision rejects a cross-site POST (origin host mismatch) with 403, not a redirect", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz`));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  const nonce = html.match(/name="nonce" value="([^"]+)"/)?.[1];
+  assert.ok(nonce);
+
+  const dec = await decision(new Request("http://localhost/oauth/authorize/decision", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
+    body: new URLSearchParams({ nonce: nonce!, action: "allow" }).toString(),
+  }));
+  assert.equal(dec.status, 403);
+  assert.equal(await dec.text(), "Cross-site request rejected.");
+});
+
+test("decision rejects when the re-resolved user does not match the pending consent's userId", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id, client_name } = await reg.json();
+
+  // The localhost demo identity (lib/server/auth.ts fallback ④) always
+  // resolves to id 11111111-1111-4111-8111-111111111111 in this test
+  // environment, so pinning any other userId on the pending consent
+  // guarantees the binding check in decision/route.ts fails.
+  const nonce = "mismatched-user-nonce";
+  const pending: PendingConsent = {
+    clientId: client_id,
+    clientName: client_name,
+    redirectUri: "https://claude.ai/api/mcp/auth_callback",
+    codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    state: "xyz",
+    userId: "00000000-0000-4000-8000-000000000000",
+    email: "someone-else@uidata.com",
+    name: "Someone Else",
+  };
+  putOnce("consent", nonce, pending, CONSENT_TTL_MS);
+
+  const dec = await decision(new Request("http://localhost/oauth/authorize/decision", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "http://localhost" },
+    body: new URLSearchParams({ nonce, action: "allow" }).toString(),
+  }));
+  assert.equal(dec.status, 400);
+  assert.equal(await dec.text(), "Signed-in user does not match the consent request.");
 });
