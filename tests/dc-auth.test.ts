@@ -9,6 +9,8 @@ import { resolveUserForDcLaunch, resolveUserForEntra } from "../lib/server/user-
 import { listUsers } from "../lib/server/admin-repository";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
 import { GET as dcEmbedGet } from "../app/dc-embed/route";
+import { isEmbedRequest } from "../proxy";
+import { NextRequest } from "next/server";
 
 function requestWithCookie(token: string): Request {
   return new Request("http://localhost/api/v1/me", {
@@ -218,4 +220,11 @@ test("dc-embed escapes a script-breaking returnUrl instead of injecting raw mark
   const html = await res.text();
   assert.ok(!html.includes("<script>alert(1)</script>"), "raw malicious markup must not appear unescaped");
   assert.ok(html.includes("\\u003c/script\\u003e"), "the < and > around the injected tag must be escaped");
+});
+
+test("embed detection: dcdata param or Sec-Fetch-Dest iframe", () => {
+  assert.equal(isEmbedRequest(new NextRequest("http://localhost/?dcdata=x")), true);
+  assert.equal(isEmbedRequest(new NextRequest("http://localhost/", {
+    headers: { "sec-fetch-dest": "iframe" } })), true);
+  assert.equal(isEmbedRequest(new NextRequest("http://localhost/")), false);
 });
