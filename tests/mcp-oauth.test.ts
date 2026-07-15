@@ -14,6 +14,8 @@ import {
 import { isAllowedRedirectUri } from "../lib/server/mcp/client-store";
 import { putOnce, takeOnce, CODE_TTL_MS } from "../lib/server/mcp/code-cache";
 import { GET as asMetadata } from "../app/.well-known/oauth-authorization-server/route";
+import { POST as register } from "../app/oauth/register/route";
+import { POST as token } from "../app/oauth/token/route";
 
 beforeEach(() => {
   globalThis.pulseMemoryMcpRefreshTokens = undefined;
@@ -21,6 +23,7 @@ beforeEach(() => {
   globalThis.pulseMcpEphemeralKey = undefined;
   globalThis.pulseMemoryUsers = undefined;
   globalThis.pulseMcpCodeCache = undefined;
+  globalThis.pulseMcpOauthRateLimit = undefined;
 });
 
 const mcpTestUser = { id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com", name: "Bjarki" };
@@ -133,6 +136,58 @@ test("verifyCodeChallenge rejects wrong verifier and out-of-bounds lengths", () 
 test("randomToken is url-safe without padding", () => {
   const t = randomToken();
   assert.match(t, /^[A-Za-z0-9_-]+$/);
+});
+
+test("register accepts valid uris and returns a public client", async () => {
+  const res = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.ok(body.client_id);
+  assert.equal(body.token_endpoint_auth_method, "none");
+});
+
+test("register rejects a non-loopback http redirect uri", async () => {
+  const res = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: ["http://evil.example/cb"] }),
+  }));
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_redirect_uri");
+});
+
+test("token endpoint burns the code on first use", async () => {
+  globalThis.pulseMcpCodeCache = undefined;
+  globalThis.pulseMemoryUsers = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Bjarki",
+      email: "bjarki@uidata.com",
+      status: "Active",
+      authentication: "Entra ID",
+      memberships: [],
+    },
+  ];
+  const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+  const challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+  putOnce("code", "code-1", {
+    clientId: "c1", redirectUri: "https://claude.ai/cb", codeChallenge: challenge,
+    userId: "11111111-1111-4111-8111-111111111111",
+  }, CODE_TTL_MS);
+  const form = () => {
+    const f = new URLSearchParams({ grant_type: "authorization_code", client_id: "c1",
+      code: "code-1", redirect_uri: "https://claude.ai/cb", code_verifier: verifier });
+    return new Request("http://localhost/oauth/token", { method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" }, body: f.toString() });
+  };
+  const first = await token(form());
+  assert.equal(first.status, 200);
+  assert.ok((await first.json()).access_token);
+  const replay = await token(form());
+  assert.equal(replay.status, 400);
+  assert.equal((await replay.json()).error, "invalid_grant");
 });
 
 test("takeOnce returns the value exactly once", () => {
