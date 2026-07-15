@@ -14,6 +14,8 @@ import { isDuplicate } from "../lib/server/slack/dedupe";
 import { resolveSlackIdentity } from "../lib/server/slack/identity";
 import { stripMentions } from "../lib/server/slack/event-handler";
 import { isSlackConfigured, startSlackAssistant } from "../lib/server/slack/socket-service";
+import { listRequests } from "../lib/server/request-repository";
+import { getProductMemory } from "../lib/server/product-repository";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -161,6 +163,83 @@ test("internal idea workflow: create, set published wording, publish with confir
   const publishText = await publish!.run(identity, { id, confirmed_safe: true });
   assert.match(publishText, new RegExp(id));
   assert.doesNotMatch(publishText, /doesn't exist or you don't have access/);
+});
+
+test("bulk_triage refuses to mutate without explicit confirmation, proceeds once confirmed", async () => {
+  const tool = getChatTools().find((t) => t.name === "bulk_triage");
+  const before = (await listRequests(identity)).find((r) => r.id === "DCI-1042");
+  const unconfirmed = await tool!.run(identity, {
+    requestIds: ["DCI-1042"], ownerId: "me",
+  });
+  assert.match(unconfirmed, /confirm/i);
+  assert.match(unconfirmed, /confirmed: true/);
+  const afterUnconfirmed = (await listRequests(identity)).find((r) => r.id === "DCI-1042");
+  assert.equal(afterUnconfirmed!.owner, before!.owner);
+
+  const confirmed = await tool!.run(identity, {
+    requestIds: ["DCI-1042"], ownerId: "me", confirmed: true,
+  });
+  assert.match(confirmed, /Updated 1 request/);
+  const afterConfirmed = (await listRequests(identity)).find((r) => r.id === "DCI-1042");
+  assert.equal(afterConfirmed!.owner, identity.name);
+});
+
+test("merge_ideas refuses to mutate without explicit confirmation, proceeds once confirmed", async () => {
+  const tool = getChatTools().find((t) => t.name === "merge_ideas");
+  const unconfirmed = await tool!.run(identity, {
+    targetId: "IDEA-318", sourceId: "IDEA-327", reason: "Duplicate report distribution idea",
+  });
+  assert.match(unconfirmed, /confirm/i);
+  assert.match(unconfirmed, /confirmed: true/);
+  assert.equal(
+    getProductMemory().find((p) => p.id === "IDEA-327")!.internalStatus,
+    "Discovery",
+  );
+
+  const confirmed = await tool!.run(identity, {
+    targetId: "IDEA-318", sourceId: "IDEA-327",
+    reason: "Duplicate report distribution idea", confirmed: true,
+  });
+  assert.match(confirmed, /Merged IDEA-327 into IDEA-318/);
+  assert.equal(
+    getProductMemory().find((p) => p.id === "IDEA-327")!.internalStatus,
+    "Archived",
+  );
+});
+
+test("publish_release refuses to mutate without explicit confirmation, proceeds once confirmed", async () => {
+  const create = getChatTools().find((t) => t.name === "create_idea");
+  const update = getChatTools().find((t) => t.name === "update_idea");
+  const publish = getChatTools().find((t) => t.name === "publish_idea");
+  const createRelease = getChatTools().find((t) => t.name === "create_release");
+  const publishRelease = getChatTools().find((t) => t.name === "publish_release");
+
+  const createText = await create!.run(identity, {
+    internalTitle: "Release confirmation idea",
+    internalDescription: "Idea bundled into a release for the confirmation test.",
+    area: "Distribution",
+  });
+  const ideaId = createText.match(/IDEA-\d+/)![0];
+  await update!.run(identity, {
+    id: ideaId, publishedTitle: "Release confirmation idea",
+    publishedDescription: "Customer-safe wording.",
+  });
+  await publish!.run(identity, { id: ideaId, confirmed_safe: true });
+  const releaseText = await createRelease!.run(identity, {
+    title: "Confirmation release", date: "2026-07-15",
+    summary: "Bundles the confirmation idea.", availability: "General availability",
+    ideaIds: [ideaId],
+  });
+  const releaseId = releaseText.match(/REL-\d+/)![0];
+
+  const unconfirmed = await publishRelease!.run(identity, { id: releaseId });
+  assert.match(unconfirmed, /confirm/i);
+  assert.match(unconfirmed, /confirmed: true/);
+  assert.equal(getProductMemory().find((p) => p.id === ideaId)!.internalStatus, "Discovery");
+
+  const confirmed = await publishRelease!.run(identity, { id: releaseId, confirmed: true });
+  assert.match(confirmed, new RegExp(releaseId));
+  assert.equal(getProductMemory().find((p) => p.id === ideaId)!.internalStatus, "Released");
 });
 
 test("admin settings round trip: get_settings then save_settings bumps formulaVersion on weight change", async () => {

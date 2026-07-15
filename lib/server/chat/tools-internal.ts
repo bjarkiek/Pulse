@@ -92,8 +92,8 @@ export const internalTools: ChatTool[] = [
     title: "Bulk triage",
     description:
       "Bulk-update owner, tags, and/or triage due date for up to 100 requests (DCI-####) at once. " +
-      "This is a bulk action — confirm with the user before running on more than 5 requests. " +
-      "Do not retry on timeout.",
+      "This is a bulk action — set confirmed true ONLY after the user explicitly confirms running this " +
+      "update on the given requests. Do not retry on timeout.",
     inputSchema: {
       requestIds: z
         .array(z.string())
@@ -102,14 +102,26 @@ export const internalTools: ChatTool[] = [
       ownerId: z.string().optional().describe("User id to assign as owner, or 'me'"),
       tagIds: z.array(z.string()).optional().describe("Tag taxonomy value ids"),
       triageDueAt: z.string().optional().describe("yyyy-MM-dd"),
+      confirmed: z
+        .boolean()
+        .describe(
+          "Set true ONLY after the user explicitly confirms this bulk triage update",
+        ),
       organization_id: orgIdParam,
     },
     readOnly: false,
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
+        const requestIds = input.requestIds as string[];
+        if (!input.confirmed) {
+          return (
+            `This will update owner/tags/triage due date for ${requestIds?.length ?? 0} request(s). ` +
+            "Please confirm with the user, then call again with confirmed: true."
+          );
+        }
         const result = await bulkUpdateTriage(scoped, {
-          requestIds: input.requestIds as string[],
+          requestIds,
           ownerId: input.ownerId as string | undefined,
           tagIds: input.tagIds as string[] | undefined,
           triageDueAt: input.triageDueAt as string | undefined,
@@ -287,17 +299,28 @@ export const internalTools: ChatTool[] = [
     description:
       "Merge a duplicate idea into a surviving idea — destructive: the source idea's links, followers, and " +
       "interest move to the target and the source becomes an archived alias that redirects to the target. " +
-      "Confirm with the user before running. A reason is required. Do not retry on timeout.",
+      "Set confirmed true ONLY after the user explicitly confirms this merge. A reason is required. " +
+      "Do not retry on timeout.",
     inputSchema: {
       targetId: z.string().describe("Surviving idea public id, e.g. IDEA-318"),
       sourceId: z.string().describe("Duplicate idea public id to merge away"),
       reason: z.string(),
+      confirmed: z
+        .boolean()
+        .describe("Set true ONLY after the user explicitly confirms this merge"),
       organization_id: orgIdParam,
     },
     readOnly: false,
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
+        if (!input.confirmed) {
+          return (
+            `This will merge ${input.sourceId} into ${input.targetId} — the source idea's links, followers, ` +
+            "and interest move to the target and the source becomes an archived alias. Please confirm with " +
+            "the user, then call again with confirmed: true."
+          );
+        }
         const result = await mergeIdeas(
           scoped,
           input.targetId as string,
@@ -479,16 +502,25 @@ export const internalTools: ChatTool[] = [
     title: "Publish release",
     description:
       "Publish a release (REL-###) — HIGH BLAST RADIUS: cascades every bundled idea to Released, sets its " +
-      "availability and release notes, and notifies followers by email and in-app. Confirm with the user " +
-      "before running. Do not retry on timeout.",
+      "availability and release notes, and notifies followers by email and in-app. Set confirmed true ONLY " +
+      "after the user explicitly confirms this publish. Do not retry on timeout.",
     inputSchema: {
       id: z.string().describe("Release public id, e.g. REL-3"),
+      confirmed: z
+        .boolean()
+        .describe("Set true ONLY after the user explicitly confirms this release publish"),
       organization_id: orgIdParam,
     },
     readOnly: false,
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
+        if (!input.confirmed) {
+          return (
+            `This will publish ${input.id} — cascading every bundled idea to Released and notifying ` +
+            "followers by email and in-app. Please confirm with the user, then call again with confirmed: true."
+          );
+        }
         const release = await publishRelease(scoped, input.id as string);
         return `Published ${release.id} '${release.title}' — notified followers.`;
       }),
