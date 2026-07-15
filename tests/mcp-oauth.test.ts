@@ -190,6 +190,43 @@ test("token endpoint burns the code on first use", async () => {
   assert.equal((await replay.json()).error, "invalid_grant");
 });
 
+test("token endpoint burns the code even when the first request fails client_id validation", async () => {
+  globalThis.pulseMcpCodeCache = undefined;
+  globalThis.pulseMemoryUsers = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Bjarki",
+      email: "bjarki@uidata.com",
+      status: "Active",
+      authentication: "Entra ID",
+      memberships: [],
+    },
+  ];
+  const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+  const challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+  putOnce("code", "code-burn", {
+    clientId: "c1", redirectUri: "https://claude.ai/cb", codeChallenge: challenge,
+    userId: "11111111-1111-4111-8111-111111111111",
+  }, CODE_TTL_MS);
+  const form = (clientId: string) => {
+    const f = new URLSearchParams({ grant_type: "authorization_code", client_id: clientId,
+      code: "code-burn", redirect_uri: "https://claude.ai/cb", code_verifier: verifier });
+    return new Request("http://localhost/oauth/token", { method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" }, body: f.toString() });
+  };
+  // First request uses the WRONG client_id — validation must fail...
+  const invalid = await token(form("WRONG"));
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error, "invalid_grant");
+  // ...but the code must already be burned, so a second request with the
+  // CORRECT client_id (and everything else valid) must also fail. If the
+  // endpoint ever regressed to validate-before-burn, this second call would
+  // succeed with a 200 since the code would still be live.
+  const retry = await token(form("c1"));
+  assert.equal(retry.status, 400);
+  assert.equal((await retry.json()).error, "invalid_grant");
+});
+
 test("takeOnce returns the value exactly once", () => {
   globalThis.pulseMcpCodeCache = undefined;
   putOnce("code", "k1", { a: 1 }, CODE_TTL_MS);
