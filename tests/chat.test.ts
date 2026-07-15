@@ -6,6 +6,7 @@ import {
 import {
   getChatTools, chatToolErrorMessage, buildAssistantInstructions,
 } from "../lib/server/chat/tool-registry";
+import { isAssistantConfigured, sendChat } from "../lib/server/chat/assistant-service";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -34,6 +35,8 @@ beforeEach(() => {
   globalThis.pulseMemoryExternalLinks = undefined;
   globalThis.pulseMemoryWebhooks = undefined;
   globalThis.pulseMemoryOrganizations = undefined;
+  globalThis.pulseAnthropicClient = undefined;
+  delete process.env.ANTHROPIC_API_KEY;
 });
 
 test("history windows to the most recent N in chronological order", async () => {
@@ -185,4 +188,12 @@ test("buildAssistantInstructions reflects internal staff vs customer using the r
   const customerText = buildAssistantInstructions(identity, customerCtx);
   assert.match(customerText, /customer user/i);
   assert.match(customerText, /Origo/);
+});
+
+test("unconfigured assistant returns a friendly notice and never throws", async () => {
+  delete process.env.ANTHROPIC_API_KEY;
+  assert.equal(isAssistantConfigured(), false);
+  const result = await sendChat(identity, "hello");
+  assert.match(result.reply, /ANTHROPIC_API_KEY/);
+  assert.equal(result.dataChanged, false);
 });
