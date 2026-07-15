@@ -1,85 +1,52 @@
-import { z } from "zod";
-import type { ZodRawShape } from "zod";
 import type { PulseIdentity } from "@/lib/domain";
+import { getIdentityContext } from "../identity-repository";
 import { customerTools } from "./tools-customer";
+import { internalTools } from "./tools-internal";
+import { adminTools } from "./tools-admin";
 
-/**
- * The single source of truth both hosts consume: the in-app assistant wraps
- * these with betaZodTool (z.object(inputSchema)), the MCP endpoint registers
- * them directly (the MCP SDK takes a raw shape, not a z.object()).
- */
-export type ChatTool = {
-  name: string; // snake_case, e.g. "list_my_requests"
-  title?: string;
-  description: string; // states WHEN to call it, prerequisites, id formats (DCI-####, IDEA-###), date format yyyy-MM-dd
-  inputSchema: ZodRawShape; // zod RAW SHAPE (not z.object) — MCP SDK takes shapes; chat host wraps with z.object()
-  readOnly: boolean; // MCP readOnlyHint; chat host flips dataChanged on !readOnly success
-  group: "customer" | "internal" | "admin";
-  run: (
-    identity: PulseIdentity,
-    args: Record<string, unknown>,
-  ) => Promise<string>;
-};
+export type {
+  ChatTool,
+} from "./tool-contract";
+export {
+  orgIdParam,
+  withScope,
+  chatToolErrorMessage,
+} from "./tool-contract";
 
-/**
- * Every tool's inputSchema includes this. A function (not a shared const)
- * because tools-customer.ts and tool-registry.ts import from each other —
- * a plain `const` would be in its temporal dead zone the first time the
- * circular import is resolved, but hoisted function declarations are safe.
- */
-export function orgIdParam() {
-  return z
-    .string()
-    .max(32)
-    .optional()
-    .describe(
-      "Act in this organization (must be one of the user's memberships); defaults to the active organization",
-    );
-}
+// getIdentityContext isn't exported with a named return type — derive one
+// here rather than adding an export to identity-repository.ts.
+export type IdentityContext = Awaited<ReturnType<typeof getIdentityContext>>;
 
-/**
- * Rule: run() never hands repositories the shared per-request identity
- * (requireMembership mutates it) — it scopes a COPY first. Also centralizes
- * error-to-text mapping so every tool's run body can stay a one-liner.
- */
-export async function withScope(
-  identity: PulseIdentity,
-  args: Record<string, unknown>,
-  run: (
-    scoped: PulseIdentity,
-    args: Record<string, unknown>,
-  ) => Promise<string>,
-): Promise<string> {
-  const scoped: PulseIdentity = {
-    ...identity,
-    organizationId: (args.organization_id as string) ?? identity.organizationId,
-  };
-  try {
-    return await run(scoped, args);
-  } catch (error) {
-    return chatToolErrorMessage(error);
-  }
-}
-
-export function chatToolErrorMessage(error: unknown): string {
-  const code = error instanceof Error ? error.message : String(error);
-  if (code === "FORBIDDEN" || code === "NOT_FOUND")
-    return "That item doesn't exist or you don't have access to it.";
-  if (code === "UNAUTHORIZED") return "You are not signed in.";
-  if (code === "INVALID_ACTIVE_ORGANIZATION_REQUIRED")
-    return "You belong to several organizations — pass organization_id (ask get_me for the list).";
-  if (code.startsWith("INVALID_") || code.startsWith("MANDATORY_"))
-    return code.replace(/^INVALID_/, "").replaceAll("_", " ").toLowerCase();
-  console.error("chat tool: unexpected error", error);
-  return "Unexpected error performing that action. Try rephrasing.";
-}
-
-// Internal- and admin-group tools land in later tasks (tools-internal.ts /
-// tools-admin.ts); getChatTools() already assembles customer ∪ internal ∪
-// admin so those files only need to be added to the spread below.
-const internalTools: ChatTool[] = [];
-const adminTools: ChatTool[] = [];
-
-export function getChatTools(): ChatTool[] {
+export function getChatTools() {
   return [...customerTools, ...internalTools, ...adminTools];
+}
+
+/**
+ * Shared instructions consumed by BOTH the in-app chat system prompt
+ * (Task 14) and the MCP ServerInstructions (Task 26). Membership shape is
+ * the real one from identity-repository.ts: { id, name, type, role, active }
+ * — there is no organizationId/organizationName/organizationType/status field.
+ */
+export function buildAssistantInstructions(
+  identity: PulseIdentity,
+  ctx: IdentityContext,
+): string {
+  const membership = ctx.organizations.find(
+    (o) => o.id === (ctx.activeOrganizationId ?? identity.organizationId),
+  );
+  const internal = ctx.organizations.find((o) => o.type === "Internal");
+  return `DataCentral Pulse is the customer-feedback and product-roadmap tool where customers
+submit requests (DCI-####) and follow product ideas (IDEA-###), and the DataCentral team
+triages, links, scores, publishes and releases them.
+You are acting as ${identity.name} (${identity.email})${membership ? `, active organization ${membership.name} (role: ${membership.role})` : ""}.
+${internal ? `They are DataCentral staff (${internal.role}).` : "They are a customer user: only their own organization's data is accessible. Politely refuse triage, internal, or admin actions."}
+Permissions are enforced server-side.
+
+Rules: requests are private to their organization; ideas are the public catalogue.
+Request statuses: Draft, Submitted, Needs information, Linked, Routed to support, Closed, Withdrawn —
+customers may edit only while Submitted/Needs information and may only Withdraw.
+Idea statuses: Discovery, Candidate, Planned, In progress, Released, Not planned, Archived;
+publishing customer-visible wording requires an explicit safe-wording confirmation.
+Use find_similar before submit_request. Titles ≤140 chars; text fields ≤5000. Dates are yyyy-MM-dd.
+Refer to items by public ids (DCI-####, IDEA-###, REL-###).`;
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { orgIdParam, withScope, type ChatTool } from "./tool-registry";
+import { orgIdParam, withScope, type ChatTool } from "./tool-contract";
 import { getIdentityContext } from "../identity-repository";
 import {
   createRequest,
@@ -43,7 +43,7 @@ export const customerTools: ChatTool[] = [
     description:
       "Get your identity, your organization memberships (with role per organization), and which " +
       "organization is currently active. Call this first if you need an organization_id for another tool.",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "customer",
     run: (identity, args) =>
@@ -69,7 +69,7 @@ export const customerTools: ChatTool[] = [
       "optionally filtered by exact status (e.g. Submitted, Needs information, Linked, Routed to support, Closed, Withdrawn).",
     inputSchema: {
       status: z.string().optional().describe("Exact status to filter by"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -94,7 +94,7 @@ export const customerTools: ChatTool[] = [
       "Use this to check status, area, impact, visibility, owner, and what happened recently.",
     inputSchema: {
       id: z.string().describe("Request public id, e.g. DCI-1051"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -124,7 +124,7 @@ export const customerTools: ChatTool[] = [
     inputSchema: {
       query: z.string().min(3).max(500).describe("The problem statement or title to search for"),
       area: z.string().optional().describe("Product area to bias matching, e.g. 'Distribution'"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -160,7 +160,7 @@ export const customerTools: ChatTool[] = [
       workaround: z.string().optional(),
       desiredTiming: z.string().optional(),
       linkedIdeaId: z.string().optional().describe("IDEA-### id of a PUBLISHED idea this supports"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -181,7 +181,7 @@ export const customerTools: ChatTool[] = [
       id: z.string().describe("Request public id, e.g. DCI-1051"),
       title: z.string().max(140).optional(),
       problem: z.string().max(5000).optional(),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -213,7 +213,7 @@ export const customerTools: ChatTool[] = [
       ]),
       explanation: z.string().optional().describe("Required when status is Closed"),
       supportReference: z.string().optional().describe("Required when status is Routed to support"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -236,7 +236,7 @@ export const customerTools: ChatTool[] = [
     title: "Get request draft",
     description:
       "Get the current in-progress (unsubmitted) request draft for the active organization, if any.",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "customer",
     run: (identity, args) =>
@@ -266,7 +266,7 @@ export const customerTools: ChatTool[] = [
       workaround: z.string().optional(),
       desiredTiming: z.string().optional(),
       linkedIdeaId: z.string().optional(),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -281,7 +281,7 @@ export const customerTools: ChatTool[] = [
     title: "Discard request draft",
     description:
       "Discard the in-progress request draft for the active organization. Do not retry on timeout.",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: false,
     group: "customer",
     run: (identity, args) =>
@@ -298,7 +298,7 @@ export const customerTools: ChatTool[] = [
       "Uploading and downloading files is UI-only and not available in chat.",
     inputSchema: {
       id: z.string().describe("Request public id, e.g. DCI-1051"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -322,7 +322,7 @@ export const customerTools: ChatTool[] = [
     inputSchema: {
       id: z.string().describe("Request public id, e.g. DCI-1051"),
       includeInternal: z.boolean().optional(),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -350,7 +350,7 @@ export const customerTools: ChatTool[] = [
       body: z.string().max(5000),
       visibility: z.enum(["Customer", "Internal"]),
       attachmentIds: z.array(z.string()).optional(),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -375,7 +375,7 @@ export const customerTools: ChatTool[] = [
       id: z.string().describe("Request public id, e.g. DCI-1051"),
       commentId: z.string(),
       body: z.string().max(5000),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -400,7 +400,7 @@ export const customerTools: ChatTool[] = [
       id: z.string().describe("Request public id, e.g. DCI-1051"),
       commentId: z.string(),
       reason: z.string().describe("Required reason for removal/moderation"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -423,7 +423,7 @@ export const customerTools: ChatTool[] = [
     inputSchema: {
       area: z.string().optional(),
       horizon: z.enum(horizons).optional(),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -452,7 +452,7 @@ export const customerTools: ChatTool[] = [
       "resolve automatically to the surviving idea.",
     inputSchema: {
       id: z.string().describe("Idea public id, e.g. IDEA-318"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: true,
     group: "customer",
@@ -475,7 +475,7 @@ export const customerTools: ChatTool[] = [
     inputSchema: {
       id: z.string().describe("Idea public id, e.g. IDEA-318"),
       markAsSolvesMyNeed: z.boolean().optional(),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -490,7 +490,7 @@ export const customerTools: ChatTool[] = [
     name: "view_roadmap",
     title: "View roadmap",
     description: "View the published roadmap, grouped by horizon (Now, Next, Later, Released).",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "customer",
     run: (identity, args) =>
@@ -511,7 +511,7 @@ export const customerTools: ChatTool[] = [
     name: "list_releases",
     title: "List releases",
     description: "List published product releases with their summary and availability.",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "customer",
     run: (identity, args) =>
@@ -527,7 +527,7 @@ export const customerTools: ChatTool[] = [
     name: "list_notifications",
     title: "List notifications",
     description: "List your recent notifications.",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "customer",
     run: (identity, args) =>
@@ -545,7 +545,7 @@ export const customerTools: ChatTool[] = [
     description: "Mark a notification as read. Do not retry on timeout.",
     inputSchema: {
       id: z.string().describe("Notification id"),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",
@@ -559,7 +559,7 @@ export const customerTools: ChatTool[] = [
     name: "get_notification_preferences",
     title: "Get notification preferences",
     description: "List your notification delivery cadence preferences per event type.",
-    inputSchema: { organization_id: orgIdParam() },
+    inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "customer",
     run: (identity, args) =>
@@ -579,7 +579,7 @@ export const customerTools: ChatTool[] = [
     inputSchema: {
       eventType: z.enum(notificationEventTypes),
       cadence: z.enum(["Immediate", "Daily", "Weekly", "Off"]),
-      organization_id: orgIdParam(),
+      organization_id: orgIdParam,
     },
     readOnly: false,
     group: "customer",

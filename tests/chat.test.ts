@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   appendChatMessage, getChatHistory, clearChatHistory, getUserByEmail,
 } from "../lib/server/chat/chat-repository";
-import { getChatTools, chatToolErrorMessage } from "../lib/server/chat/tool-registry";
+import {
+  getChatTools, chatToolErrorMessage, buildAssistantInstructions,
+} from "../lib/server/chat/tool-registry";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -31,6 +33,7 @@ beforeEach(() => {
   globalThis.pulseMemoryNotificationPreferences = undefined;
   globalThis.pulseMemoryExternalLinks = undefined;
   globalThis.pulseMemoryWebhooks = undefined;
+  globalThis.pulseMemoryOrganizations = undefined;
 });
 
 test("history windows to the most recent N in chronological order", async () => {
@@ -88,4 +91,98 @@ test("tenant isolation flows through tools (cross-org read reads as not found)",
     organizationId: "ORG-002", role: "Requester", isInternal: false };
   const text = await tool!.run(otherTenant, { id: "DCI-1042" });
   assert.match(text, /doesn't exist or you don't have access/);
+});
+
+test("internal tool refuses a customer identity via repository role gate", async () => {
+  const tool = getChatTools().find((t) => t.name === "list_triage_queue");
+  const customer = { ...identity, id: "44444444-4444-4444-8444-444444444444",
+    role: "Requester", isInternal: false };
+  const text = await tool!.run(customer, {});
+  assert.match(text, /doesn't exist or you don't have access/);
+});
+
+test("publish_idea demands explicit confirmed_safe", () => {
+  const tool = getChatTools().find((t) => t.name === "publish_idea");
+  assert.match(tool!.description, /confirm/i);
+  assert.ok("confirmed_safe" in tool!.inputSchema);
+});
+
+test("admin tool refuses a customer identity via repository admin gate", async () => {
+  const tool = getChatTools().find((t) => t.name === "list_organizations");
+  const customer = { ...identity, id: "55555555-5555-4555-8555-555555555555",
+    role: "Requester", isInternal: false };
+  const text = await tool!.run(customer, {});
+  assert.match(text, /doesn't exist or you don't have access/);
+});
+
+test("registry assembles customer, internal, and admin groups with no duplicate names", () => {
+  const tools = getChatTools();
+  const names = tools.map((t) => t.name);
+  assert.equal(new Set(names).size, names.length);
+  assert.ok(tools.some((t) => t.group === "internal"));
+  assert.ok(tools.some((t) => t.group === "admin"));
+});
+
+test("internal idea workflow: create, set published wording, publish with confirmation", async () => {
+  const create = getChatTools().find((t) => t.name === "create_idea");
+  const update = getChatTools().find((t) => t.name === "update_idea");
+  const publish = getChatTools().find((t) => t.name === "publish_idea");
+  const createText = await create!.run(identity, {
+    internalTitle: "Bulk export API",
+    internalDescription: "Let customers export in bulk via API.",
+    area: "Distribution",
+  });
+  const created = createText.match(/IDEA-\d+/);
+  assert.ok(created);
+  const id = created[0];
+  const updateText = await update!.run(identity, {
+    id,
+    publishedTitle: "Bulk export API",
+    publishedDescription: "Export your data in bulk via API.",
+  });
+  assert.match(updateText, new RegExp(id));
+  const rejected = await publish!.run(identity, { id, confirmed_safe: false });
+  assert.match(rejected, /safe wording confirmation/i);
+  const publishText = await publish!.run(identity, { id, confirmed_safe: true });
+  assert.match(publishText, new RegExp(id));
+  assert.doesNotMatch(publishText, /doesn't exist or you don't have access/);
+});
+
+test("admin settings round trip: get_settings then save_settings bumps formulaVersion on weight change", async () => {
+  const getTool = getChatTools().find((t) => t.name === "get_settings");
+  const saveTool = getChatTools().find((t) => t.name === "save_settings");
+  const before = await getTool!.run(identity, {});
+  assert.match(before, /Formula v1\b/);
+  const saveText = await saveTool!.run(identity, {
+    attachmentMaxMb: 25,
+    requestAttachmentMaxMb: 100,
+    retentionDays: 365,
+    defaultLocale: "en",
+    roadmapDisclaimer: "Directional only.",
+    scoreWeights: { impact: 20, reach: 20, strategy: 20, commercial: 20, urgency: 20 },
+  });
+  assert.match(saveText, /formula v2/i);
+});
+
+test("buildAssistantInstructions reflects internal staff vs customer using the real membership shape", () => {
+  const internalCtx = {
+    user: { id: identity.id, email: identity.email, name: identity.name, locale: "en" },
+    organizations: [
+      { id: "ORG-DC", name: "DataCentral", type: "Internal", role: "System admin", active: true },
+    ],
+    activeOrganizationId: "ORG-DC",
+  };
+  const internalText = buildAssistantInstructions(identity, internalCtx);
+  assert.match(internalText, /DataCentral staff/);
+
+  const customerCtx = {
+    user: { id: identity.id, email: identity.email, name: identity.name, locale: "en" },
+    organizations: [
+      { id: "ORG-001", name: "Origo", type: "Customer", role: "Requester", active: true },
+    ],
+    activeOrganizationId: "ORG-001",
+  };
+  const customerText = buildAssistantInstructions(identity, customerCtx);
+  assert.match(customerText, /customer user/i);
+  assert.match(customerText, /Origo/);
 });
