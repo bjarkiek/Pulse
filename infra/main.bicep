@@ -31,6 +31,17 @@ param dcAppSecret string
 param communicationEmailEndpoint string = ''
 @description('Verified MailFrom address in Azure Communication Services Email.')
 param communicationEmailSender string = ''
+@description('Anthropic API key for the AI assistant (in-app chat and the Slack bot). Leave empty to leave the assistant unconfigured.')
+@secure()
+param anthropicApiKey string = ''
+@description('Model id used by the AI assistant.')
+param anthropicModel string = 'claude-opus-4-8'
+@description('Slack bot token (xoxb-…) for the Socket Mode assistant integration. Leave empty to leave Slack unconfigured.')
+@secure()
+param slackBotToken string = ''
+@description('Slack app-level token (xapp-…) for Socket Mode. Leave empty to leave Slack unconfigured.')
+@secure()
+param slackAppToken string = ''
 
 var tags = { application: 'DataCentral Pulse', environment: 'production' }
 var storageName = '${take(replace(namePrefix, '-', ''), 18)}files'
@@ -102,6 +113,24 @@ resource dcAppSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   properties: { value: dcAppSecret }
 }
 
+resource anthropicApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(anthropicApiKey)) {
+  parent: vault
+  name: 'anthropic-api-key'
+  properties: { value: anthropicApiKey }
+}
+
+resource slackBotTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(slackBotToken)) {
+  parent: vault
+  name: 'slack-bot-token'
+  properties: { value: slackBotToken }
+}
+
+resource slackAppTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(slackAppToken)) {
+  parent: vault
+  name: 'slack-app-token'
+  properties: { value: slackAppToken }
+}
+
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
   location: location
@@ -162,6 +191,7 @@ resource database 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
   properties: { zoneRedundant: false, requestedBackupStorageRedundancy: 'Zone' }
 }
 
+// Slack Socket Mode + in-memory OAuth/chat caches require a single instance — do not scale out.
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: '${namePrefix}-plan'
   location: location
@@ -213,6 +243,12 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         // App-level session auth (below) is now authoritative; Easy Auth headers are
         // not trusted for identity unless explicitly re-enabled during migration.
         { name: 'PULSE_TRUST_EASYAUTH_HEADERS', value: 'false' }
+        // AI assistant (in-app chat panel + Slack bot). Each of these three is optional;
+        // the assistant/Slack integration stays unconfigured until its secret is set.
+        { name: 'ANTHROPIC_API_KEY', value: !empty(anthropicApiKey) ? '@Microsoft.KeyVault(SecretUri=${anthropicApiKeySecret!.properties.secretUriWithVersion})' : '' }
+        { name: 'ANTHROPIC_MODEL', value: anthropicModel }
+        { name: 'SLACK_BOT_TOKEN', value: !empty(slackBotToken) ? '@Microsoft.KeyVault(SecretUri=${slackBotTokenSecret!.properties.secretUriWithVersion})' : '' }
+        { name: 'SLACK_APP_TOKEN', value: !empty(slackAppToken) ? '@Microsoft.KeyVault(SecretUri=${slackAppTokenSecret!.properties.secretUriWithVersion})' : '' }
       ]
     }
   }

@@ -102,6 +102,15 @@ In-app and email notifications are inserted transactionally with the change that
 
 The same scheduler identity should invoke `POST /api/v1/internal/jobs/webhooks` every minute and `POST /api/v1/internal/jobs/retention` daily. Webhook deliveries use an HMAC-SHA256 signature over `<timestamp>.<raw-body>`, reject private-network destinations, retry with backoff, and expose no customer text in the event envelope. Retention first removes eligible private blobs, then hard-deletes expired soft-deleted records using the administrator-configured retention period.
 
+## AI assistant + Slack
+
+Pulse includes an optional AI assistant (in-app chat panel, plus a Slack bot for DMs and `@mentions`) built on the Anthropic API. Both surfaces share the same identity, tool permissions, and conversation history.
+
+- Set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`) to enable the assistant. Without it, the chat panel reports itself as unconfigured and the Slack integration never starts.
+- Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to additionally enable the Slack bot over Socket Mode. See [`docs/slack-setup.md`](docs/slack-setup.md) for the full walkthrough: creating the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml), generating tokens, the Slack-email-to-`dbo.Users.email` identity prerequisite, and verification steps.
+- Slack Socket Mode and the assistant's in-memory caches require running a single App Service instance — see the comment on the plan/SKU in [`infra/main.bicep`](infra/main.bicep).
+- Full environment variable and infrastructure parameter reference is (or will be) in `configInfo.md`.
+
 ## Validation
 
 ```bash
