@@ -42,6 +42,9 @@ param slackBotToken string = ''
 @description('Slack app-level token (xapp-…) for Socket Mode. Leave empty to leave Slack unconfigured.')
 @secure()
 param slackAppToken string = ''
+@description('Signs and verifies MCP OAuth 2.1 authorization codes and access tokens issued by /oauth/token.')
+@secure()
+param mcpTokenSigningKey string
 
 var tags = { application: 'DataCentral Pulse', environment: 'production' }
 var storageName = '${take(replace(namePrefix, '-', ''), 18)}files'
@@ -129,6 +132,12 @@ resource slackAppTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if
   parent: vault
   name: 'slack-app-token'
   properties: { value: slackAppToken }
+}
+
+resource mcpTokenSigningKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'mcp-token-signing-key'
+  properties: { value: mcpTokenSigningKey }
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -249,6 +258,8 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'ANTHROPIC_MODEL', value: anthropicModel }
         { name: 'SLACK_BOT_TOKEN', value: !empty(slackBotToken) ? '@Microsoft.KeyVault(SecretUri=${slackBotTokenSecret!.properties.secretUriWithVersion})' : '' }
         { name: 'SLACK_APP_TOKEN', value: !empty(slackAppToken) ? '@Microsoft.KeyVault(SecretUri=${slackAppTokenSecret!.properties.secretUriWithVersion})' : '' }
+        // Signs/verifies MCP OAuth 2.1 authorization codes and access tokens (app/oauth/*, app/mcp).
+        { name: 'MCP_TOKEN_SIGNING_KEY', value: '@Microsoft.KeyVault(SecretUri=${mcpTokenSigningKeySecret.properties.secretUriWithVersion})' }
       ]
     }
   }
@@ -278,6 +289,19 @@ resource authentication 'Microsoft.Web/sites/config@2024-04-01' = if (!empty(ent
         '/api/v1/internal/jobs/notifications'
         '/api/v1/internal/jobs/retention'
         '/api/v1/internal/jobs/webhooks'
+        // MCP endpoint + OAuth 2.1 discovery/registration/token routes must stay
+        // reachable while Easy Auth remains deployed in AllowAnonymous-transition
+        // mode; each route enforces its own MCP bearer-token authorization.
+        // '/oauth/authorize' and '/oauth/authorize/decision' are deliberately NOT
+        // excluded here — an unauthenticated browser hitting authorize must fall
+        // through to the app's own login redirect.
+        '/mcp'
+        '/.well-known/oauth-authorization-server'
+        '/.well-known/oauth-authorization-server/mcp'
+        '/.well-known/oauth-protected-resource'
+        '/.well-known/oauth-protected-resource/mcp'
+        '/oauth/register'
+        '/oauth/token'
       ]
     }
     httpSettings: {
