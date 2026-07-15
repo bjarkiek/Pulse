@@ -7,6 +7,7 @@ import {
 import { verifyDcLaunch } from "../lib/server/datacentral";
 import { resolveUserForDcLaunch, resolveUserForEntra } from "../lib/server/user-directory";
 import { listUsers } from "../lib/server/admin-repository";
+import { POST as dcAuthPost } from "../app/dc-auth/route";
 
 function requestWithCookie(token: string): Request {
   return new Request("http://localhost/api/v1/me", {
@@ -17,6 +18,7 @@ function requestWithCookie(token: string): Request {
 beforeEach(() => {
   delete process.env.PULSE_SESSION_SECRET;
   delete process.env.DC_APP_SECRET;
+  delete process.env.DC_SESSION_CHECK;
 });
 
 test("session token round-trips claims", async () => {
@@ -147,4 +149,44 @@ test("dc launch signs in a user whose subject was backfilled to an Entra oid, wi
   });
   assert.equal(user.id, oid);
   assert.equal(user.externalSubject, oid); // oid kept — NOT rebound to dc:77
+});
+
+function dcAuthRequest(body: unknown): Request {
+  return new Request("http://localhost/dc-auth", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+test("dc-auth with no credentials returns 400", async () => {
+  const res = await dcAuthPost(dcAuthRequest({}));
+  assert.equal(res.status, 400);
+});
+
+test("dc-auth with a bad signature returns 401", async () => {
+  process.env.DC_APP_SECRET = TEST_SECRET;
+  const dcdata = Buffer.from(JSON.stringify(launchPayload), "utf8").toString("base64");
+  const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: "bogus" + sign(dcdata).slice(5) }));
+  assert.equal(res.status, 401);
+});
+
+test("dc-auth signed payload for provisioned user returns 200 with session cookie", async () => {
+  process.env.DC_APP_SECRET = TEST_SECRET;
+  process.env.DC_SESSION_CHECK = "off";
+  const payload = { ...launchPayload, userEmail: "bjarki@uidata.com", userName: "bjarki@uidata.com" };
+  const dcdata = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+  const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: sign(dcdata) }));
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("set-cookie") ?? "", /^pulse-session=/);
+});
+
+test("dc-auth signed payload for unknown user returns 403 not_provisioned", async () => {
+  process.env.DC_APP_SECRET = TEST_SECRET;
+  process.env.DC_SESSION_CHECK = "off";
+  const payload = { ...launchPayload, userEmail: "nobody@nowhere.example", userName: "nobody@nowhere.example" };
+  const dcdata = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+  const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: sign(dcdata) }));
+  assert.equal(res.status, 403);
+  assert.equal((await res.json()).error, "not_provisioned");
 });
