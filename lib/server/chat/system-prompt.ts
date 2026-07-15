@@ -19,9 +19,9 @@ const WEEKDAYS = [
  * first Thursday). Computed on UTC calendar fields to stay independent of
  * server timezone.
  */
-function isoWeek(date: Date): number {
+export function isoWeek(date: Date): number {
   const d = new Date(
-    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
   );
   const dayNum = d.getUTCDay() || 7; // Monday=1 .. Sunday=7
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
@@ -29,9 +29,9 @@ function isoWeek(date: Date): number {
   return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
 }
 
-function todayLine(now = new Date()): string {
+export function todayLine(now = new Date()): string {
   const isoDate = now.toISOString().slice(0, 10);
-  const weekday = WEEKDAYS[now.getDay()];
+  const weekday = WEEKDAYS[now.getUTCDay()];
   return `Today is ${isoDate} (${weekday}, ISO week ${isoWeek(now)}).`;
 }
 

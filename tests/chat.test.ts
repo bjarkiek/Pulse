@@ -7,6 +7,7 @@ import {
   getChatTools, chatToolErrorMessage, buildAssistantInstructions,
 } from "../lib/server/chat/tool-registry";
 import { isAssistantConfigured, sendChat } from "../lib/server/chat/assistant-service";
+import { todayLine } from "../lib/server/chat/system-prompt";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -188,6 +189,53 @@ test("buildAssistantInstructions reflects internal staff vs customer using the r
   const customerText = buildAssistantInstructions(identity, customerCtx);
   assert.match(customerText, /customer user/i);
   assert.match(customerText, /Origo/);
+});
+
+test("todayLine reports a self-consistent UTC calendar day regardless of server timezone", () => {
+  // Independent reference implementation (nearest-Thursday method), deliberately
+  // written differently from lib/server/chat/system-prompt.ts's isoWeek so this
+  // is a real cross-check, not a restatement of the same algorithm.
+  function referenceIsoWeek(date: Date): number {
+    const target = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+    const dayNr = (target.getUTCDay() + 6) % 7; // 0=Mon..6=Sun
+    target.setUTCDate(target.getUTCDate() - dayNr + 3); // nearest Thursday
+    const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+    const firstDayNr = (firstThursday.getUTCDay() + 6) % 7;
+    firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNr + 3);
+    return 1 + Math.round((target.getTime() - firstThursday.getTime()) / (7 * 86400000));
+  }
+
+  const samples = [
+    new Date(Date.UTC(2026, 0, 1)), // Thursday, ISO week 1
+    new Date(Date.UTC(2025, 11, 29)), // Monday, ISO week 1 (of 2026)
+    new Date(Date.UTC(2026, 6, 15, 23, 0, 0)), // near the next UTC day boundary
+    new Date(Date.UTC(2020, 11, 31)), // Thursday, ISO week 53
+  ];
+
+  const originalTz = process.env.TZ;
+  // A far-ahead offset (UTC+14) so local calendar getters would land on a
+  // different day than the UTC ones for the near-midnight sample above —
+  // this is exactly the divergence the UTC-only fix guards against.
+  process.env.TZ = "Pacific/Kiritimati";
+  try {
+    for (const now of samples) {
+      const isoDate = now.toISOString().slice(0, 10);
+      const expectedWeekday = now.toLocaleDateString("en-US", {
+        weekday: "long",
+        timeZone: "UTC",
+      });
+      const expectedWeek = referenceIsoWeek(now);
+      assert.equal(
+        todayLine(now),
+        `Today is ${isoDate} (${expectedWeekday}, ISO week ${expectedWeek}).`,
+      );
+    }
+  } finally {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  }
 });
 
 test("unconfigured assistant returns a friendly notice and never throws", async () => {

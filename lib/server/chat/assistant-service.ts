@@ -126,7 +126,8 @@ export async function sendChat(identity: PulseIdentity, text: string) {
       console.warn(
         JSON.stringify({ level: "warn", message: "assistant api error", status: error.status }),
       );
-      reply = `The assistant hit an error: ${error.message}`;
+      reply =
+        "The assistant ran into a problem completing that request. Please try again in a moment.";
     } else {
       console.error(
         JSON.stringify({ level: "error", message: "assistant unexpected error" }),
