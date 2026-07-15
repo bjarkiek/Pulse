@@ -1,6 +1,6 @@
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
 import type { DataCentralLaunch } from "./datacentral";
-import type { UserRecord } from "./admin-repository";
+import { users, type UserRecord } from "@/lib/server/admin-repository";
 
 export type ProvisionedUser = {
   id: string;
@@ -10,23 +10,12 @@ export type ProvisionedUser = {
   externalSubject: string | null;
 };
 
-// Same in-memory store admin-repository.ts seeds (globalThis.pulseMemoryUsers is
-// declared there). The seed literal is duplicated here rather than imported so
-// this module never has to route through admin-repository's assertAdmin gate —
-// the `||=` guard means whichever module touches the store first wins and the
-// other's guard is a no-op.
+// admin-repository.ts owns the in-memory user-store seed (globalThis.pulseMemoryUsers).
+// users() is its private seeding helper, exported with no admin gate (only
+// listUsers/saveUser call assertAdmin) so it can be reused here as the single
+// source of truth for the seed data.
 function memoryUsers(): UserRecord[] {
-  globalThis.pulseMemoryUsers ||= [
-    {
-      id: "11111111-1111-4111-8111-111111111111",
-      name: "Bjarki Kristjánsson",
-      email: "bjarki@uidata.com",
-      status: "Active",
-      authentication: "Entra ID",
-      memberships: [{ companyId: "ORG-001", role: "Company admin" }],
-    },
-  ];
-  return globalThis.pulseMemoryUsers;
+  return users();
 }
 
 function toProvisioned(user: UserRecord): ProvisionedUser {

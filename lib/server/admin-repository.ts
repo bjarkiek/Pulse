@@ -42,7 +42,7 @@ function organizations() {
   ];
   return globalThis.pulseMemoryOrganizations;
 }
-function users() {
+export function users() {
   globalThis.pulseMemoryUsers ||= [
     {
       id: "11111111-1111-4111-8111-111111111111",
