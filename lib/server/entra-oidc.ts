@@ -1,5 +1,6 @@
 import * as oidc from "openid-client";
 import { SignJWT, jwtVerify } from "jose";
+import { secret } from "@/lib/server/session";
 
 declare global { var pulseOidcConfig: Promise<oidc.Configuration> | undefined; }
 
@@ -27,11 +28,10 @@ export function redirectUri(): string {
 // state/nonce we expect back from Entra, and the sanitized post-login
 // returnUrl across the redirect out to Entra and back to /auth/callback.
 //
-// Signed with the same secret material as the session cookie. session.ts's
-// `secret()` helper is module-private and this task's file list does not
-// include modifying session.ts, so the fallback (PULSE_SESSION_SECRET, with
-// a fixed dev-only fallback string, disabled in production when unset) is
-// mirrored here rather than imported.
+// Signed with the same secret material as the session cookie, via session.ts's
+// exported `secret()` helper (PULSE_SESSION_SECRET, with a fixed dev-only fallback
+// string, disabled in production when unset) — one source of the signing-key
+// derivation for both `pulse-session` and `pulse-oidc`.
 // ---------------------------------------------------------------------------
 
 export const OIDC_STATE_COOKIE = "pulse-oidc";
@@ -40,11 +40,7 @@ const OIDC_STATE_TTL_SECONDS = 600;
 export type OidcState = { cv: string; state: string; nonce: string; ru: string };
 
 function oidcStateSecret(): Uint8Array | null {
-  const s = process.env.PULSE_SESSION_SECRET;
-  if (s && s.length >= 32) return new TextEncoder().encode(s);
-  if (process.env.NODE_ENV !== "production")
-    return new TextEncoder().encode("pulse-dev-session-secret-not-for-production");
-  return null; // production without secret => standalone OIDC state signing disabled
+  return secret();
 }
 
 // Returns null when the secret isn't configured (production without

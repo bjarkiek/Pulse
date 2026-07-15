@@ -14,7 +14,7 @@ export type SessionClaims = {
 export const SESSION_COOKIE = "pulse-session";
 const TTL_SECONDS = 60 * 60 * 12; // 12h; embed re-handshakes on expiry, standalone re-SSO-redirects
 
-function secret(): Uint8Array | null {
+export function secret(): Uint8Array | null {
   const s = process.env.PULSE_SESSION_SECRET;
   if (s && s.length >= 32) return new TextEncoder().encode(s);
   if (process.env.NODE_ENV !== "production")

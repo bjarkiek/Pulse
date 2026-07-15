@@ -24,6 +24,7 @@ beforeEach(() => {
   delete process.env.PULSE_SESSION_SECRET;
   delete process.env.DC_APP_SECRET;
   delete process.env.DC_SESSION_CHECK;
+  delete process.env.PULSE_TRUST_DC_HEADERS;
 });
 
 test("session token round-trips claims", async () => {
@@ -211,6 +212,33 @@ test("dc-auth signed payload for unknown user returns 403 not_provisioned", asyn
   const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: sign(dcdata) }));
   assert.equal(res.status, 403);
   assert.equal((await res.json()).error, "not_provisioned");
+});
+
+function dcHeaderRequest(dcData: string, dcSig: string): Request {
+  return new Request("http://localhost/api/v1/me", {
+    headers: { "x-dc-data": dcData, "x-dc-sig": dcSig },
+  });
+}
+
+test("getIdentity gates the X-DC-Data/X-DC-Sig header path behind PULSE_TRUST_DC_HEADERS", async () => {
+  process.env.DC_APP_SECRET = TEST_SECRET;
+  const payload = { ...launchPayload, userEmail: "bjarki@uidata.com", userName: "bjarki@uidata.com" };
+  const dcdata = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+  const request = () => dcHeaderRequest(dcdata, sign(dcdata));
+
+  // Default off: valid signed headers alone must NOT resolve an identity — the branch
+  // is skipped entirely and falls through to the demo fallback in this test env.
+  delete process.env.PULSE_TRUST_DC_HEADERS;
+  const unset = await getIdentity(request());
+  assert.equal(unset.authMethod, "dev");
+  assert.equal(unset.isVerified, false);
+
+  // Opted in: the same signed headers now resolve via the dc-hmac header path.
+  process.env.PULSE_TRUST_DC_HEADERS = "true";
+  const enabled = await getIdentity(request());
+  assert.equal(enabled.authMethod, "dc-hmac");
+  assert.equal(enabled.isVerified, true);
+  assert.equal(enabled.email, "bjarki@uidata.com");
 });
 
 test("GET /api/v1/me returns the canonical user shape with locale, name, and top-level auth fields", async () => {

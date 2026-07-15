@@ -55,33 +55,43 @@ export async function getIdentity(request: Request): Promise<PulseIdentity> {
 
   // ② X-DC-Data/X-DC-Sig headers — per-request DataCentral launch re-verification,
   // for callers that carry the signed launch payload directly rather than a session.
-  const dcData = request.headers.get("x-dc-data");
-  const dcSig = request.headers.get("x-dc-sig");
-  if (dcData && dcSig) {
-    const launch = verifyDcLaunch(dcData, dcSig);
-    if (launch) {
-      // Map provisioning errors to codes apiError understands — otherwise
-      // NOT_PROVISIONED/USER_DISABLED fall through apiError's default → 500.
-      let user;
-      try {
-        user = await resolveUserForDcLaunch(launch);
-      } catch (e) {
-        const code = e instanceof Error ? e.message : "";
-        if (code === "NOT_PROVISIONED" || code === "USER_DISABLED")
-          throw new Error("FORBIDDEN");
-        throw e;
+  // Gated behind an explicit opt-in, mirroring ③ below: unlike the /dc-auth exchange
+  // (which converts a launch payload into a short-lived, TTL'd session cookie once),
+  // this path re-verifies and re-resolves the user on EVERY request with no freshness
+  // check and ignores DC_SESSION_CHECK, so a captured dcdata+dcsig (which rides in
+  // launch URLs and can leak via Referer/history/logs) would otherwise be an indefinite
+  // replay primitive. No code in the app emits these headers today — the embed flow
+  // converts to a cookie via /dc-auth — so this is only needed for a caller that
+  // explicitly authenticates via forwarded DataCentral launch headers.
+  if (process.env.PULSE_TRUST_DC_HEADERS === "true") {
+    const dcData = request.headers.get("x-dc-data");
+    const dcSig = request.headers.get("x-dc-sig");
+    if (dcData && dcSig) {
+      const launch = verifyDcLaunch(dcData, dcSig);
+      if (launch) {
+        // Map provisioning errors to codes apiError understands — otherwise
+        // NOT_PROVISIONED/USER_DISABLED fall through apiError's default → 500.
+        let user;
+        try {
+          user = await resolveUserForDcLaunch(launch);
+        } catch (e) {
+          const code = e instanceof Error ? e.message : "";
+          if (code === "NOT_PROVISIONED" || code === "USER_DISABLED")
+            throw new Error("FORBIDDEN");
+          throw e;
+        }
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          organizationId: orgHint,
+          role: "Unknown",
+          isInternal: false,
+          dcEmbed: true,
+          authMethod: "dc-hmac",
+          isVerified: true,
+        };
       }
-      return {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        organizationId: orgHint,
-        role: "Unknown",
-        isInternal: false,
-        dcEmbed: true,
-        authMethod: "dc-hmac",
-        isVerified: true,
-      };
     }
   }
 
