@@ -60,13 +60,14 @@ function buildRunnerTools(
     betaZodTool({
       name: "switch_organization",
       description:
-        "Switch the user's active organization for this and future turns. Use get_me to list memberships.",
+        "Switch the user's active organization. On the web app this persists; pass organization_id on individual tools to act in a specific org. Use get_me to list memberships.",
       inputSchema: z.object({ organizationId: z.string().max(32) }),
       run: async ({ organizationId }: { organizationId: string }) => {
         try {
           await requireMembership({ ...identity }, organizationId);
           identity.organizationId = organizationId;
           state.switchedOrganizationId = organizationId;
+          state.dataChanged = true;
           return `Active organization switched to ${organizationId}.`;
         } catch (error) {
           return chatToolErrorMessage(error);
