@@ -17,6 +17,7 @@ export type UserRecord = {
   email: string;
   status: "Active" | "Invited" | "Suspended";
   authentication: "OTP" | "Entra ID";
+  externalSubject?: string | null;
   memberships: Array<{
     companyId: string;
     role: "Company admin" | "Requester" | "Viewer" | "Product manager";
@@ -170,6 +171,12 @@ export async function saveUser(identity: PulseIdentity, item: UserRecord) {
     const found = users().findIndex(
       (value) => value.id === id || value.email === item.email,
     );
+    // New users have no real identity yet: stamp a 'pending:' placeholder
+    // subject so the DataCentral/Entra resolvers can later claim this row by
+    // email. Existing users keep whatever subject they already have (never
+    // overwrite a real identity link with the caller-supplied payload).
+    saved.externalSubject =
+      found >= 0 ? users()[found].externalSubject : `pending:${item.email.toLowerCase()}`;
     if (found >= 0) users()[found] = saved;
     else users().push(saved);
     globalThis.pulseMemoryAudit ||= [];
@@ -190,14 +197,18 @@ export async function saveUser(identity: PulseIdentity, item: UserRecord) {
   const transaction = new sql.Transaction(pool);
   await transaction.begin();
   try {
+    // A new row has no real identity yet, so it gets a 'pending:{email}'
+    // placeholder subject; an existing row's external_subject is left
+    // untouched here (the identity resolvers own that column from then on).
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, id)
       .input("name", sql.NVarChar(200), item.name)
       .input("email", sql.NVarChar(320), item.email)
       .input("status", sql.NVarChar(32), item.status)
       .input("auth", sql.NVarChar(32), item.authentication)
+      .input("pendingSubject", sql.NVarChar(128), `pending:${item.email.toLowerCase()}`)
       .query(
-        "MERGE dbo.Users target USING(SELECT @id id) source ON target.id=source.id WHEN MATCHED THEN UPDATE SET display_name=@name,email=@email,status=@status,auth_method=@auth,updated_at=SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT(id,email,display_name,status,auth_method) VALUES(@id,@email,@name,@status,@auth);",
+        "MERGE dbo.Users target USING(SELECT @id id) source ON target.id=source.id WHEN MATCHED THEN UPDATE SET display_name=@name,email=@email,status=@status,auth_method=@auth,updated_at=SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT(id,email,display_name,status,auth_method,external_subject) VALUES(@id,@email,@name,@status,@auth,@pendingSubject);",
       );
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, id)
