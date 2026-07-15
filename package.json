@@ -12,7 +12,7 @@
     "build:sites": "bash scripts/build-verified.sh",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && node --import tsx --test --test-concurrency=1 tests/domain.test.mjs tests/openapi.test.mjs tests/workflow.test.ts tests/dc-auth.test.ts tests/chat.test.ts",
+    "test": "npm run typecheck && node --import tsx --test --test-concurrency=1 tests/domain.test.mjs tests/openapi.test.mjs tests/workflow.test.ts tests/dc-auth.test.ts tests/chat.test.ts tests/mrkdwn.test.ts",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "eslint app lib --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
