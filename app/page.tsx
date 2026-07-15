@@ -3,6 +3,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
+import { ChatPanel } from "./chat-panel";
 
 function mutationHeaders(json = true) {
   return {
@@ -757,6 +758,17 @@ function AppShell() {
   // Set from /api/v1/me when this session was launched from inside the
   // DataCentral iframe. Cosmetic only — server authorization is unchanged.
   const [dcEmbed, setDcEmbed] = useState(false);
+  // The /api/v1/me user payload (id/email/name/locale) — used to localize
+  // the chat assistant panel.
+  const [meUser, setMeUser] = useState<{
+    id: string;
+    email: string;
+    name: string;
+    locale: string;
+  } | null>(null);
+  // Bumped whenever the chat assistant reports it changed data server-side,
+  // so identity-gated data-loading effects below refetch without a reload.
+  const [dataVersion, setDataVersion] = useState(0);
 
   function openRequest(item: RequestItem) {
     setDetailRequest(item);
@@ -799,6 +811,7 @@ function AppShell() {
         if (!context) return;
         setOrganizationContexts(context.organizations || []);
         setDcEmbed(Boolean(context.dcEmbed));
+        setMeUser(context.user ?? null);
         const requested = new URLSearchParams(window.location.search).get(
           "organization",
         );
@@ -840,7 +853,7 @@ function AppShell() {
           setToast("Pulse is using the local preview data.");
       });
     return () => controller.abort();
-  }, [identityReady]);
+  }, [identityReady, dataVersion]);
 
   useEffect(() => {
     if (detailRequest || !identityReady || !requests.length) return;
@@ -871,7 +884,7 @@ function AppShell() {
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [identityReady]);
+  }, [identityReady, dataVersion]);
 
   useEffect(() => {
     if (!identityReady) return;
@@ -887,7 +900,7 @@ function AppShell() {
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [identityReady]);
+  }, [identityReady, dataVersion]);
 
   useEffect(() => {
     if (!identityReady) return;
@@ -901,7 +914,7 @@ function AppShell() {
       .then((data) => setIdeas(data.items))
       .catch(() => {});
     return () => controller.abort();
-  }, [identityReady]);
+  }, [identityReady, dataVersion]);
 
   useEffect(() => {
     if (toast) {
@@ -918,7 +931,7 @@ function AppShell() {
       .then((data) => setNotifications(data.items || []))
       .catch(() => {});
     return () => controller.abort();
-  }, [identityReady]);
+  }, [identityReady, dataVersion]);
 
   function navigate(next: Page) {
     setPage(next);
@@ -1307,6 +1320,10 @@ function AppShell() {
           <span>{toast}</span>
         </div>
       )}
+      <ChatPanel
+        locale={meUser?.locale ?? "en"}
+        onDataChanged={() => setDataVersion((v) => v + 1)}
+      />
     </div>
   );
 }
