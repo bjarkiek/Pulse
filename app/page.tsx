@@ -1154,11 +1154,13 @@ function AppShell() {
             <h1>{pageTitles[page]}</h1>
           </div>
           <div className="topbar-actions">
-            <button className="workspace-switcher">
-              <Icon name="building" size={15} />
-              <span>Origo</span>
-              <Icon name="chevron" size={13} />
-            </button>
+            {!dcEmbed && (
+              <button className="workspace-switcher">
+                <Icon name="building" size={15} />
+                <span>Origo</span>
+                <Icon name="chevron" size={13} />
+              </button>
+            )}
             <button
               className="icon-button notification-button"
               aria-label="Notifications"
@@ -1200,6 +1202,7 @@ function AppShell() {
               onOpenRequest={openRequest}
               onOpenIdea={setDetailIdea}
               onNavigate={navigate}
+              dcEmbed={dcEmbed}
             />
           )}
           {page === "ideas" && (
@@ -1335,6 +1338,7 @@ function HomePage({
   onOpenRequest,
   onOpenIdea,
   onNavigate,
+  dcEmbed,
 }: {
   requests: RequestItem[];
   ideas: Idea[];
@@ -1342,6 +1346,7 @@ function HomePage({
   onOpenRequest: (request: RequestItem) => void;
   onOpenIdea: (idea: Idea) => void;
   onNavigate: (page: Page) => void;
+  dcEmbed: boolean;
 }) {
   const [search, setSearch] = useState("");
   const matches =
@@ -1359,7 +1364,7 @@ function HomePage({
       <section className="welcome-row">
         <div>
           <p className="eyebrow">Customer feedback</p>
-          <h2>Good morning, Bjarki</h2>
+          {!dcEmbed && <h2>Good morning, Bjarki</h2>}
           <p>
             Track your requests and help shape what DataCentral builds next.
           </p>
