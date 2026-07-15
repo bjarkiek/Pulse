@@ -12,6 +12,8 @@ import { GET as chatGet, POST as chatPost, DELETE as chatDelete } from "../app/a
 import { POST as transcriptPost } from "../app/api/v1/chat/transcript/route";
 import { isDuplicate } from "../lib/server/slack/dedupe";
 import { resolveSlackIdentity } from "../lib/server/slack/identity";
+import { stripMentions } from "../lib/server/slack/event-handler";
+import { isSlackConfigured, startSlackAssistant } from "../lib/server/slack/socket-service";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -43,7 +45,10 @@ beforeEach(() => {
   globalThis.pulseAnthropicClient = undefined;
   globalThis.pulseSlackDedupe = undefined;
   globalThis.pulseSlackEmailCache = undefined;
+  globalThis.pulseSlackApp = undefined;
   delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.SLACK_BOT_TOKEN;
+  delete process.env.SLACK_APP_TOKEN;
 });
 
 test("history windows to the most recent N in chronological order", async () => {
@@ -390,4 +395,31 @@ test("slack identity caches the verified email per slack user id for about an ho
   assert.ok(cached);
   const ttlMs = cached!.expiresAt - Date.now();
   assert.ok(ttlMs > 55 * 60_000 && ttlMs <= 60 * 60_000);
+});
+
+test("stripMentions removes slack mention tags and trims surrounding whitespace", () => {
+  assert.equal(stripMentions("<@U123> hello there"), "hello there");
+  assert.equal(stripMentions("hi <@U123> and <@U456>, how are you?"), "hi  and , how are you?");
+  assert.equal(stripMentions("   "), "");
+  assert.equal(stripMentions(""), "");
+});
+
+test("isSlackConfigured requires both tokens to be set together", () => {
+  delete process.env.SLACK_BOT_TOKEN;
+  delete process.env.SLACK_APP_TOKEN;
+  assert.equal(isSlackConfigured(), false);
+  process.env.SLACK_BOT_TOKEN = "xoxb-test";
+  assert.equal(isSlackConfigured(), false);
+  process.env.SLACK_APP_TOKEN = "xapp-test";
+  assert.equal(isSlackConfigured(), true);
+  delete process.env.SLACK_BOT_TOKEN;
+  delete process.env.SLACK_APP_TOKEN;
+});
+
+test("startSlackAssistant is a no-op without both tokens: never throws, never connects", async () => {
+  delete process.env.SLACK_BOT_TOKEN;
+  delete process.env.SLACK_APP_TOKEN;
+  assert.equal(isSlackConfigured(), false);
+  await startSlackAssistant();
+  assert.equal(globalThis.pulseSlackApp, undefined);
 });

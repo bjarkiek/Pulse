@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   turbopack: { root: process.cwd() },
   poweredByHeader: false,
   experimental: { serverActions: { bodySizeLimit: "1mb" } },
+  serverExternalPackages: ["@slack/bolt", "@slack/socket-mode", "@slack/web-api"],
   async headers() {
     return [{ source: "/(.*)", headers: [
       { key: "X-Content-Type-Options", value: "nosniff" },
