@@ -10,6 +10,8 @@ import { isAssistantConfigured, sendChat } from "../lib/server/chat/assistant-se
 import { todayLine } from "../lib/server/chat/system-prompt";
 import { GET as chatGet, POST as chatPost, DELETE as chatDelete } from "../app/api/v1/chat/messages/route";
 import { POST as transcriptPost } from "../app/api/v1/chat/transcript/route";
+import { isDuplicate } from "../lib/server/slack/dedupe";
+import { resolveSlackIdentity } from "../lib/server/slack/identity";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -39,6 +41,8 @@ beforeEach(() => {
   globalThis.pulseMemoryWebhooks = undefined;
   globalThis.pulseMemoryOrganizations = undefined;
   globalThis.pulseAnthropicClient = undefined;
+  globalThis.pulseSlackDedupe = undefined;
+  globalThis.pulseSlackEmailCache = undefined;
   delete process.env.ANTHROPIC_API_KEY;
 });
 
@@ -316,4 +320,74 @@ test("transcript POST returns the raw text unmodified when the assistant is unco
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.text, "so, um, the the request is broken");
+});
+
+test("dedupe: first occurrence passes, repeat within window is suppressed", () => {
+  globalThis.pulseSlackDedupe = undefined;
+  assert.equal(isDuplicate("C1:1626000000.000100"), false);
+  assert.equal(isDuplicate("C1:1626000000.000100"), true);
+});
+
+test("dedupe: distinct keys are independent", () => {
+  globalThis.pulseSlackDedupe = undefined;
+  assert.equal(isDuplicate("C1:1626000000.000100"), false);
+  assert.equal(isDuplicate("C1:1626000000.000200"), false);
+});
+
+function fakeSlackClient(email: string | null) {
+  return { users: { info: async () => ({ user: { profile: { email } } }) } };
+}
+
+test("slack identity maps verified email to a Pulse user", async () => {
+  const result = await resolveSlackIdentity(fakeSlackClient("bjarki@uidata.com") as never, "U123");
+  assert.ok("value" in result);
+  assert.equal(result.value.email, "bjarki@uidata.com");
+  assert.ok(result.value.organizationId); // an active org was selected
+});
+
+test("slack identity refuses unknown emails politely", async () => {
+  const result = await resolveSlackIdentity(fakeSlackClient("nobody@nowhere.example") as never, "U999");
+  assert.ok("refusal" in result);
+  assert.match(result.refusal, /isn't linked/);
+});
+
+test("slack identity refuses when the slack profile has no verified email", async () => {
+  const result = await resolveSlackIdentity(fakeSlackClient(null) as never, "U000");
+  assert.ok("refusal" in result);
+  assert.match(result.refusal, /isn't linked/);
+});
+
+test("slack identity refuses a disabled user", async () => {
+  globalThis.pulseMemoryUsers = [
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      name: "Disabled User",
+      email: "disabled@uidata.com",
+      status: "Suspended",
+      authentication: "Entra ID",
+      memberships: [{ companyId: "ORG-001", role: "Requester" }],
+    },
+  ];
+  const result = await resolveSlackIdentity(fakeSlackClient("disabled@uidata.com") as never, "U456");
+  assert.ok("refusal" in result);
+  assert.match(result.refusal, /disabled/);
+});
+
+test("slack identity caches the verified email per slack user id for about an hour", async () => {
+  let calls = 0;
+  const client = {
+    users: {
+      info: async () => {
+        calls += 1;
+        return { user: { profile: { email: "bjarki@uidata.com" } } };
+      },
+    },
+  };
+  await resolveSlackIdentity(client as never, "U123");
+  await resolveSlackIdentity(client as never, "U123");
+  assert.equal(calls, 1);
+  const cached = globalThis.pulseSlackEmailCache?.get("U123");
+  assert.ok(cached);
+  const ttlMs = cached!.expiresAt - Date.now();
+  assert.ok(ttlMs > 55 * 60_000 && ttlMs <= 60 * 60_000);
 });
