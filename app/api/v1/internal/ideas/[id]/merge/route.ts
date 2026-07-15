@@ -9,7 +9,7 @@ export async function POST(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

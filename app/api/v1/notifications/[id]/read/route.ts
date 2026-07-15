@@ -9,7 +9,7 @@ export async function POST(
   try {
     const { id } = await context.params;
     return json(
-      await markNotificationRead(getIdentity(request), id),
+      await markNotificationRead(await getIdentity(request), id),
       {},
       correlation,
     );

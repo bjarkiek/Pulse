@@ -5,7 +5,7 @@ export async function GET(request: Request) {
   const id = correlationId(request);
   try {
     return json(
-      { items: await listReleases(getIdentity(request), false) },
+      { items: await listReleases(await getIdentity(request), false) },
       {},
       id,
     );

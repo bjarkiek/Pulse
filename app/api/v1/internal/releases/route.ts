@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const id = correlationId(request);
   try {
     return json(
-      { items: await listReleases(getIdentity(request), true) },
+      { items: await listReleases(await getIdentity(request), true) },
       {},
       id,
     );
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const id = correlationId(request);
   try {
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

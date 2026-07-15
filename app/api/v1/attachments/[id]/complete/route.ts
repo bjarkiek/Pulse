@@ -17,7 +17,7 @@ export async function POST(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const attachment = await getAttachment(identity, id);
     const parent = await getRequest(identity, attachment.requestId);
     if (["Withdrawn", "Closed", "Routed to support"].includes(parent.status))

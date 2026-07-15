@@ -6,7 +6,7 @@ import { bulkUpdateTriage } from "@/lib/server/triage-repository";
 export async function POST(request: Request) {
   const id = correlationId(request);
   try {
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

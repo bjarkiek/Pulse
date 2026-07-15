@@ -6,7 +6,7 @@ import { createRequest, listRequests } from "@/lib/server/request-repository";
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    return json({ items: await listRequests(getIdentity(request)) }, {}, id);
+    return json({ items: await listRequests(await getIdentity(request)) }, {}, id);
   } catch (error) {
     return apiError(error, id);
   }
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const id = correlationId(request);
   try {
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

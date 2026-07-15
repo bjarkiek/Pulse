@@ -13,7 +13,7 @@ export async function GET(
   try {
     const { id } = await context.params;
     return json(
-      { items: await listExternalLinks(getIdentity(request), id) },
+      { items: await listExternalLinks(await getIdentity(request), id) },
       {},
       correlation,
     );
@@ -30,7 +30,7 @@ export async function POST(
   try {
     const { id } = await context.params;
     return json(
-      await addExternalLink(getIdentity(request), id, await request.json()),
+      await addExternalLink(await getIdentity(request), id, await request.json()),
       { status: 201 },
       correlation,
     );

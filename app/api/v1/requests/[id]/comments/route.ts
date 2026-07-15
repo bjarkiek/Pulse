@@ -12,7 +12,7 @@ export async function GET(request: Request, context: Context) {
     const includeInternal =
       new URL(request.url).searchParams.get("includeInternal") === "true";
     return json(
-      { items: await listComments(getIdentity(request), id, includeInternal) },
+      { items: await listComments(await getIdentity(request), id, includeInternal) },
       {},
       correlation,
     );
@@ -25,7 +25,7 @@ export async function POST(request: Request, context: Context) {
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

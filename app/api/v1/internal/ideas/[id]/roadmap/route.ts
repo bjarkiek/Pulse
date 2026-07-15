@@ -11,7 +11,7 @@ export async function PUT(
     return json(
       {
         item: await placeRoadmap(
-          getIdentity(request),
+          await getIdentity(request),
           id,
           await request.json(),
         ),

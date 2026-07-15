@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   try {
     const limit = Number(new URL(request.url).searchParams.get("limit") || 100);
     return json(
-      { items: await listAudit(getIdentity(request), limit) },
+      { items: await listAudit(await getIdentity(request), limit) },
       {},
       id,
     );

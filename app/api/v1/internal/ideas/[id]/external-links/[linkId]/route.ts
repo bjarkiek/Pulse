@@ -10,7 +10,7 @@ export async function DELETE(
   try {
     const { id, linkId } = await context.params;
     return json(
-      await removeExternalLink(getIdentity(request), id, linkId),
+      await removeExternalLink(await getIdentity(request), id, linkId),
       {},
       correlation,
     );

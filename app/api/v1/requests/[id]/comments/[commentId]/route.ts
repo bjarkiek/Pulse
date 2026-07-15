@@ -11,7 +11,7 @@ export async function PATCH(request: Request, context: Context) {
     const body = await request.json();
     return json(
       {
-        item: await editComment(getIdentity(request), id, commentId, body.body),
+        item: await editComment(await getIdentity(request), id, commentId, body.body),
       },
       {},
       correlation,
@@ -29,7 +29,7 @@ export async function DELETE(request: Request, context: Context) {
     return json(
       {
         item: await removeComment(
-          getIdentity(request),
+          await getIdentity(request),
           id,
           commentId,
           body.reason || "",

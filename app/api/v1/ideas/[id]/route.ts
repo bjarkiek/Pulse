@@ -9,7 +9,7 @@ export async function GET(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    return json(await getIdea(getIdentity(request), id), {}, correlation);
+    return json(await getIdea(await getIdentity(request), id), {}, correlation);
   } catch (error) {
     return apiError(error, correlation);
   }

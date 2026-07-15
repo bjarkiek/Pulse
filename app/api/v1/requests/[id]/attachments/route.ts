@@ -35,7 +35,7 @@ export async function GET(request: Request, context: Context) {
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const items = await listAttachments(getIdentity(request), id);
+    const items = await listAttachments(await getIdentity(request), id);
     return json(
       {
         items: items.map((item) => ({
@@ -60,7 +60,7 @@ export async function POST(request: Request, context: Context) {
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

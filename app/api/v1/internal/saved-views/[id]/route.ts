@@ -9,7 +9,7 @@ export async function DELETE(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    await deleteSavedView(getIdentity(request), id);
+    await deleteSavedView(await getIdentity(request), id);
     return json({ ok: true }, {}, correlation);
   } catch (error) {
     return apiError(error, correlation);

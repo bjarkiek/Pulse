@@ -1,20 +1,39 @@
-import { getIdentity } from "@/lib/server/auth";
+import { getCurrentUser } from "@/lib/server/current-user";
 import { apiError, correlationId, json } from "@/lib/server/http";
-import { getIdentityContext } from "@/lib/server/identity-repository";
 
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    const context = await getIdentityContext(getIdentity(request));
-    const response = json(context, {}, id);
-    if (context.activeOrganizationId)
-      response.cookies.set("pulse-organization", context.activeOrganizationId, {
+    const current = await getCurrentUser(request);
+    const response = json(
+      {
+        user: {
+          id: current.userId,
+          email: current.email,
+          name: current.name,
+        },
+        organizations: current.memberships,
+        activeOrganizationId: current.activeOrganizationId,
+        authMethod: current.authMethod,
+        dcEmbed: current.dcEmbed,
+        isVerified: current.isVerified,
+      },
+      {},
+      id,
+    );
+    if (current.activeOrganizationId) {
+      const prod = process.env.NODE_ENV === "production";
+      response.cookies.set("pulse-organization", current.activeOrganizationId, {
         httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production",
         path: "/",
         maxAge: 60 * 60 * 24 * 30,
+        // Lax cookies are withheld inside a cross-site DataCentral iframe in
+        // production, so switch to the CHIPS-partitioned None/Secure form there.
+        ...(prod
+          ? { sameSite: "none" as const, secure: true, partitioned: true }
+          : { sameSite: "lax" as const, secure: false }),
       });
+    }
     return response;
   } catch (error) {
     return apiError(error, id);

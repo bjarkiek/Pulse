@@ -6,7 +6,7 @@ import { listRequests } from "@/lib/server/request-repository";
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     await requireInternalRole(identity);
     return json({ items: await listRequests(identity) }, {}, id);
   } catch (error) {

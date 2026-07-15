@@ -10,7 +10,7 @@ export async function PATCH(
     const { id } = await context.params;
     return json(
       {
-        item: await updateIdea(getIdentity(request), id, await request.json()),
+        item: await updateIdea(await getIdentity(request), id, await request.json()),
       },
       {},
       correlation,

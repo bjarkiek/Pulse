@@ -14,7 +14,7 @@ export async function GET(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     return json(
       {
         item: await getRequest(identity, id),
@@ -36,7 +36,7 @@ export async function PATCH(
   try {
     const { id } = await context.params;
     const body = await request.json();
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const item = body.status
       ? await updateRequestStatus(identity, id, body.status, {
           explanation: body.explanation,

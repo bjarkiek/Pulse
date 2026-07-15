@@ -10,7 +10,7 @@ export async function GET(request: Request) {
   const id = correlationId(request);
   try {
     return json(
-      { items: await listWebhookSubscriptions(getIdentity(request)) },
+      { items: await listWebhookSubscriptions(await getIdentity(request)) },
       {},
       id,
     );
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const id = correlationId(request);
   try {
-    const identity = getIdentity(request);
+    const identity = await getIdentity(request);
     const result = await executeIdempotent(
       request,
       identity,

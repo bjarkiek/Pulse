@@ -47,4 +47,7 @@ export type PulseIdentity = {
   organizationId: string;
   role: string;
   isInternal: boolean;
+  dcEmbed?: boolean;
+  authMethod?: "entra" | "dc-hmac" | "dc-graph" | "easyauth" | "dev";
+  isVerified?: boolean;
 };

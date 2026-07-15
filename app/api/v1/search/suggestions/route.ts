@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     return json(
       {
         items: await searchSuggestions(
-          getIdentity(request),
+          await getIdentity(request),
           url.searchParams.get("q") || "",
           url.searchParams.get("area") || undefined,
         ),

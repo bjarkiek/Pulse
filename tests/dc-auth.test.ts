@@ -7,6 +7,7 @@ import {
 import { verifyDcLaunch } from "../lib/server/datacentral";
 import { resolveUserForDcLaunch, resolveUserForEntra } from "../lib/server/user-directory";
 import { listUsers } from "../lib/server/admin-repository";
+import { getIdentity } from "../lib/server/auth";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
 import { GET as dcEmbedGet } from "../app/dc-embed/route";
 import { isEmbedRequest, proxy } from "../proxy";
@@ -48,6 +49,23 @@ test("tampered session token is rejected", async () => {
 test("missing cookie yields null", async () => {
   const claims = await readSession(new Request("http://localhost/"));
   assert.equal(claims, null);
+});
+
+test("getIdentity resolves a session cookie to the session user", async () => {
+  const token = await createSessionToken({
+    sub: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
+    name: "Bjarki", ext: "dev:local", amr: "entra",
+  });
+  const identity = await getIdentity(requestWithCookie(token));
+  assert.equal(identity.id, "11111111-1111-4111-8111-111111111111");
+  assert.equal(identity.authMethod, "entra");
+  assert.equal(identity.isVerified, true);
+});
+
+test("getIdentity falls back to demo identity outside production", async () => {
+  const identity = await getIdentity(new Request("http://localhost/api/v1/me"));
+  assert.equal(identity.authMethod, "dev");
+  assert.equal(identity.isVerified, false);
 });
 
 test("set-cookie strings carry the right attributes", () => {

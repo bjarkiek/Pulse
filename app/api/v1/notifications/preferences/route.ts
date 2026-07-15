@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const id = correlationId(request);
   try {
     return json(
-      { items: await listNotificationPreferences(getIdentity(request)) },
+      { items: await listNotificationPreferences(await getIdentity(request)) },
       {},
       id,
     );
@@ -24,7 +24,7 @@ export async function PATCH(request: Request) {
     const body = await request.json();
     return json(
       await saveNotificationPreference(
-        getIdentity(request),
+        await getIdentity(request),
         String(body.eventType || ""),
         String(body.cadence || ""),
       ),

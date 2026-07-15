@@ -12,7 +12,7 @@ export async function PATCH(
     const body = await request.json();
     return json(
       await setWebhookSubscriptionState(
-        getIdentity(request),
+        await getIdentity(request),
         id,
         body.active === true,
       ),

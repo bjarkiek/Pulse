@@ -5,7 +5,7 @@ import { getSettings, saveSettings } from "@/lib/server/settings-repository";
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    return json({ item: await getSettings(getIdentity(request)) }, {}, id);
+    return json({ item: await getSettings(await getIdentity(request)) }, {}, id);
   } catch (error) {
     return apiError(error, id);
   }
@@ -16,7 +16,7 @@ export async function PATCH(request: Request) {
   try {
     return json(
       {
-        item: await saveSettings(getIdentity(request), await request.json()),
+        item: await saveSettings(await getIdentity(request), await request.json()),
       },
       {},
       id,

@@ -9,7 +9,7 @@ import { apiError, correlationId, json } from "@/lib/server/http";
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    return json({ item: await getRequestDraft(getIdentity(request)) }, {}, id);
+    return json({ item: await getRequestDraft(await getIdentity(request)) }, {}, id);
   } catch (error) {
     return apiError(error, id);
   }
@@ -20,7 +20,7 @@ export async function PUT(request: Request) {
   try {
     const body = await request.json();
     return json(
-      { item: await saveRequestDraft(getIdentity(request), body) },
+      { item: await saveRequestDraft(await getIdentity(request), body) },
       {},
       id,
     );
@@ -32,7 +32,7 @@ export async function PUT(request: Request) {
 export async function DELETE(request: Request) {
   const id = correlationId(request);
   try {
-    await deleteRequestDraft(getIdentity(request));
+    await deleteRequestDraft(await getIdentity(request));
     return json({ ok: true }, {}, id);
   } catch (error) {
     return apiError(error, id);

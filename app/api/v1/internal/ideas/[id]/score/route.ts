@@ -9,7 +9,7 @@ export async function POST(
   try {
     const { id } = await context.params;
     return json(
-      await scoreIdea(getIdentity(request), id, await request.json()),
+      await scoreIdea(await getIdentity(request), id, await request.json()),
       {},
       correlation,
     );
