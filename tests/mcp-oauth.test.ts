@@ -16,6 +16,8 @@ import { putOnce, takeOnce, CODE_TTL_MS } from "../lib/server/mcp/code-cache";
 import { GET as asMetadata } from "../app/.well-known/oauth-authorization-server/route";
 import { POST as register } from "../app/oauth/register/route";
 import { POST as token } from "../app/oauth/token/route";
+import { GET as authorize } from "../app/oauth/authorize/route";
+import { POST as decision } from "../app/oauth/authorize/decision/route";
 
 beforeEach(() => {
   globalThis.pulseMemoryMcpRefreshTokens = undefined;
@@ -240,4 +242,47 @@ test("authorization-server metadata advertises PKCE S256 and no client secrets",
   assert.deepEqual(body.code_challenge_methods_supported, ["S256"]);
   assert.deepEqual(body.token_endpoint_auth_methods_supported, ["none"]);
   assert.ok(res.headers.get("access-control-allow-origin"));
+});
+
+test("authorize renders consent for a registered client (dev identity)", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz`));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(html.includes("Allow"));
+  const nonce = html.match(/name="nonce" value="([^"]+)"/)?.[1];
+  assert.ok(nonce);
+
+  const dec = await decision(new Request("http://localhost/oauth/authorize/decision", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "http://localhost" },
+    body: new URLSearchParams({ nonce: nonce!, action: "allow" }).toString(),
+  }));
+  assert.equal(dec.status, 302);
+  const location = dec.headers.get("location")!;
+  assert.match(location, /^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?code=.+&state=xyz$/);
+
+  // replayed nonce is burned
+  const replay = await decision(new Request("http://localhost/oauth/authorize/decision", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", origin: "http://localhost" },
+    body: new URLSearchParams({ nonce: nonce!, action: "allow" }).toString(),
+  }));
+  assert.equal(replay.status, 400);
+});
+
+test("authorize with unregistered redirect_uri is a 400, not a redirect", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://evil.example/cb")}&response_type=code&code_challenge=x&code_challenge_method=S256`));
+  assert.equal(res.status, 400);
 });
