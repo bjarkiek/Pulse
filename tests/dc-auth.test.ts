@@ -8,6 +8,7 @@ import { verifyDcLaunch } from "../lib/server/datacentral";
 import { resolveUserForDcLaunch, resolveUserForEntra } from "../lib/server/user-directory";
 import { listUsers } from "../lib/server/admin-repository";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
+import { GET as dcEmbedGet } from "../app/dc-embed/route";
 
 function requestWithCookie(token: string): Request {
   return new Request("http://localhost/api/v1/me", {
@@ -189,4 +190,32 @@ test("dc-auth signed payload for unknown user returns 403 not_provisioned", asyn
   const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: sign(dcdata) }));
   assert.equal(res.status, 403);
   assert.equal((await res.json()).error, "not_provisioned");
+});
+
+test("dc-embed page contains both AppReady spellings, forwarding, and _top fallback", async () => {
+  const res = await dcEmbedGet(new Request("http://localhost/dc-embed?returnUrl=%2F%3Fdcdata%3Dabc%26dcsig%3Ddef"));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(html.includes('{ type: "AppReady " }'), "AppReady WITH trailing space");
+  assert.ok(html.includes('{ type: "AppReady"  }') || html.includes('{ type: "AppReady" }'), "AppReady without space");
+  assert.ok(html.includes("/dc-auth"));
+  assert.ok(html.includes('target="_top"'));
+  assert.ok(html.includes("dcdata"));
+  assert.ok(html.includes("String.fromCharCode(10)"), "diagnostic join must not use a raw newline");
+});
+
+test("dc-embed rejects non-local returnUrl (open redirect guard)", async () => {
+  const res = await dcEmbedGet(new Request("http://localhost/dc-embed?returnUrl=" + encodeURIComponent("https://evil.example/steal")));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(html.includes('RETURN = "/"'), "non-local returnUrl must be coerced to /");
+});
+
+test("dc-embed escapes a script-breaking returnUrl instead of injecting raw markup", async () => {
+  const malicious = "/</script><script>alert(1)</script>";
+  const res = await dcEmbedGet(new Request("http://localhost/dc-embed?returnUrl=" + encodeURIComponent(malicious)));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.ok(!html.includes("<script>alert(1)</script>"), "raw malicious markup must not appear unescaped");
+  assert.ok(html.includes("\\u003c/script\\u003e"), "the < and > around the injected tag must be escaped");
 });
