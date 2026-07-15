@@ -12,12 +12,15 @@ import {
   MCP_AUDIENCE,
 } from "../lib/server/mcp/tokens";
 import { isAllowedRedirectUri } from "../lib/server/mcp/client-store";
+import { putOnce, takeOnce, CODE_TTL_MS } from "../lib/server/mcp/code-cache";
+import { GET as asMetadata } from "../app/.well-known/oauth-authorization-server/route";
 
 beforeEach(() => {
   globalThis.pulseMemoryMcpRefreshTokens = undefined;
   globalThis.pulseMemoryMcpClients = undefined;
   globalThis.pulseMcpEphemeralKey = undefined;
   globalThis.pulseMemoryUsers = undefined;
+  globalThis.pulseMcpCodeCache = undefined;
 });
 
 const mcpTestUser = { id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com", name: "Bjarki" };
@@ -130,4 +133,19 @@ test("verifyCodeChallenge rejects wrong verifier and out-of-bounds lengths", () 
 test("randomToken is url-safe without padding", () => {
   const t = randomToken();
   assert.match(t, /^[A-Za-z0-9_-]+$/);
+});
+
+test("takeOnce returns the value exactly once", () => {
+  globalThis.pulseMcpCodeCache = undefined;
+  putOnce("code", "k1", { a: 1 }, CODE_TTL_MS);
+  assert.deepEqual(takeOnce("code", "k1"), { a: 1 });
+  assert.equal(takeOnce("code", "k1"), null);
+});
+
+test("authorization-server metadata advertises PKCE S256 and no client secrets", async () => {
+  const res = await asMetadata(new Request("http://localhost/.well-known/oauth-authorization-server"));
+  const body = await res.json();
+  assert.deepEqual(body.code_challenge_methods_supported, ["S256"]);
+  assert.deepEqual(body.token_endpoint_auth_methods_supported, ["none"]);
+  assert.ok(res.headers.get("access-control-allow-origin"));
 });

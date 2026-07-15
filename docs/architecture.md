@@ -24,3 +24,7 @@ When `AZURE_SQL_CONNECTION_STRING` is absent, a process-local seeded adapter is 
 ## Remaining production operations
 
 The repository is deployable, but the following environment/organizational launch gates cannot be completed in source code alone: External ID tenant and user-flow creation, outbound email provider/domain approval, Defender event wiring, private networking policy, backup-restore drills, penetration testing, WCAG audit, Icelandic copy review, and load testing against the expected tenant/data volume.
+
+## MCP OAuth code cache and proxy rate limits
+
+The MCP authorization-code/consent cache (`lib/server/mcp/code-cache.ts`) and the DataCentral proxy's rate limiter both keep their state in an in-memory `globalThis` map, which is correct only because Pulse runs as a single-instance App Service (P1v3, capacity 1, alwaysOn). If the app is ever scaled out to multiple instances, both of these must move to a shared store (e.g. Azure SQL or Redis) — a load-balanced deployment would let requests land on different instances and see inconsistent cache/rate-limit state.
