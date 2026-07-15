@@ -18,6 +18,15 @@ param scanWebhookSecret string
 param notificationJobSecret string
 @secure()
 param webhookSigningSecret string
+@description('Signs and verifies the app-level Pulse session cookie (replaces Easy Auth token store).')
+@secure()
+param sessionSecret string
+@description('Microsoft Entra confidential-client secret for the AUTH_ENTRA_* OIDC login/callback flow.')
+@secure()
+param entraClientSecret string
+@description('Shared HMAC secret validating signed DataCentral iframe launch (dcdata/dcsig) requests.')
+@secure()
+param dcAppSecret string
 @description('Azure Communication Services endpoint. The verified sender domain is configured outside this template.')
 param communicationEmailEndpoint string = ''
 @description('Verified MailFrom address in Azure Communication Services Email.')
@@ -73,6 +82,24 @@ resource webhookSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'webhook-signing-secret'
   properties: { value: webhookSigningSecret }
+}
+
+resource pulseSessionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'pulse-session-secret'
+  properties: { value: sessionSecret }
+}
+
+resource entraClientSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'entra-client-secret'
+  properties: { value: entraClientSecret }
+}
+
+resource dcAppSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'dc-app-secret'
+  properties: { value: dcAppSecret }
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -175,6 +202,17 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'AZURE_COMMUNICATION_EMAIL_SENDER', value: communicationEmailSender }
         { name: 'PULSE_PUBLIC_URL', value: 'https://${namePrefix}-app.azurewebsites.net' }
         { name: 'PULSE_ALLOW_DEMO_IDENTITY', value: 'false' }
+        { name: 'PULSE_SESSION_SECRET', value: '@Microsoft.KeyVault(SecretUri=${pulseSessionSecret.properties.secretUriWithVersion})' }
+        { name: 'AUTH_ENTRA_TENANT_ID', value: entraTenantId }
+        { name: 'AUTH_ENTRA_CLIENT_ID', value: entraClientId }
+        { name: 'AUTH_ENTRA_CLIENT_SECRET', value: '@Microsoft.KeyVault(SecretUri=${entraClientSecretResource.properties.secretUriWithVersion})' }
+        { name: 'DC_APP_SECRET', value: '@Microsoft.KeyVault(SecretUri=${dcAppSecretResource.properties.secretUriWithVersion})' }
+        { name: 'DC_ALLOWED_PARENT_ORIGINS', value: 'https://app.datacentral.ai' }
+        { name: 'DC_FRAME_ANCESTORS', value: '\'self\' https://*.datacentral.ai' }
+        { name: 'DC_SESSION_CHECK', value: 'when-available' }
+        // App-level session auth (below) is now authoritative; Easy Auth headers are
+        // not trusted for identity unless explicitly re-enabled during migration.
+        { name: 'PULSE_TRUST_EASYAUTH_HEADERS', value: 'false' }
       ]
     }
   }
@@ -187,7 +225,16 @@ resource authentication 'Microsoft.Web/sites/config@2024-04-01' = if (!empty(ent
     platform: { enabled: true, runtimeVersion: '~1' }
     globalValidation: {
       requireAuthentication: true
-      unauthenticatedClientAction: 'RedirectToLoginPage'
+      // App-level session auth (PULSE_SESSION_SECRET / AUTH_ENTRA_* / DC_APP_SECRET
+      // above) is now authoritative for authorization; Easy Auth's own top-level
+      // redirect breaks when the app is framed inside the DataCentral iframe, so
+      // it must not gate requests. AllowAnonymous lets every request through to
+      // the app, which then enforces its own session/DataCentral checks.
+      // NOTE: this is an explicit operational step on an already-deployed
+      // authsettingsV2 resource — flipping this value in the template does not
+      // retroactively change a site that was deployed with the old value until
+      // this template is redeployed to it.
+      unauthenticatedClientAction: 'AllowAnonymous'
       redirectToProvider: 'azureactivedirectory'
       excludedPaths: [
         '/api/health'

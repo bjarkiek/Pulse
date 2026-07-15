@@ -754,6 +754,9 @@ function AppShell() {
   const [organizationContexts, setOrganizationContexts] = useState<
     OrganizationContext[]
   >([]);
+  // Set from /api/v1/me when this session was launched from inside the
+  // DataCentral iframe. Cosmetic only — server authorization is unchanged.
+  const [dcEmbed, setDcEmbed] = useState(false);
 
   function openRequest(item: RequestItem) {
     setDetailRequest(item);
@@ -772,11 +775,30 @@ function AppShell() {
   useEffect(() => {
     fetch("/api/v1/me")
       .then(async (response) => {
+        if (response.status === 401) {
+          // Session missing/expired. Top-level: send the browser through the
+          // login flow. Framed inside DataCentral: a top-level redirect would
+          // just break the iframe, so reload and let the proxy route to
+          // /dc-embed instead.
+          if (window.self === window.top) {
+            window.location.assign(
+              "/auth/login?returnUrl=" +
+                encodeURIComponent(
+                  window.location.pathname + window.location.search,
+                ),
+            );
+          } else {
+            window.location.reload();
+          }
+          return null;
+        }
         if (!response.ok) throw new Error("identity failed");
         return response.json();
       })
       .then(async (context) => {
+        if (!context) return;
         setOrganizationContexts(context.organizations || []);
+        setDcEmbed(Boolean(context.dcEmbed));
         const requested = new URLSearchParams(window.location.search).get(
           "organization",
         );
@@ -1086,14 +1108,16 @@ function AppShell() {
             <span>Audit log</span>
           </button>
         </nav>
-        <div className="sidebar-profile">
-          <div className="avatar">BK</div>
-          <div className="profile-copy">
-            <strong>Bjarki Kristjánsson</strong>
-            <span>Origo · Customer admin</span>
+        {!dcEmbed && (
+          <div className="sidebar-profile">
+            <div className="avatar">BK</div>
+            <div className="profile-copy">
+              <strong>Bjarki Kristjánsson</strong>
+              <span>Origo · Customer admin</span>
+            </div>
+            <Icon name="chevron" size={15} />
           </div>
-          <Icon name="chevron" size={15} />
-        </div>
+        )}
       </aside>
 
       {menuOpen && (
