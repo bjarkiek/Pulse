@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dev Server (next dev)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev -- --port 5199",
+      "cwd": "${workspaceFolder}",
+      "serverReadyAction": {
+        "pattern": "Local:\\s+(https?://\\S+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      }
+    },
+    {
+      "name": "Client (Edge)",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:5199",
+      "webRoot": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack (Server + Edge)",
+      "configurations": ["Dev Server (next dev)", "Client (Edge)"],
+      "stopAll": true
+    }
+  ]
+}

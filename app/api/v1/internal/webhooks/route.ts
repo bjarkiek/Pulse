@@ -1,0 +1,38 @@
+import { getIdentity } from "@/lib/server/auth";
+import { apiError, correlationId, json } from "@/lib/server/http";
+import { executeIdempotent } from "@/lib/server/idempotency";
+import {
+  createWebhookSubscription,
+  listWebhookSubscriptions,
+} from "@/lib/server/webhook-repository";
+
+export async function GET(request: Request) {
+  const id = correlationId(request);
+  try {
+    return json(
+      { items: await listWebhookSubscriptions(getIdentity(request)) },
+      {},
+      id,
+    );
+  } catch (error) {
+    return apiError(error, id);
+  }
+}
+
+export async function POST(request: Request) {
+  const id = correlationId(request);
+  try {
+    const identity = getIdentity(request);
+    const result = await executeIdempotent(
+      request,
+      identity,
+      "webhook-subscription.create",
+      201,
+      async () =>
+        createWebhookSubscription(identity, await request.json()),
+    );
+    return json(result.body, { status: result.status }, id);
+  } catch (error) {
+    return apiError(error, id);
+  }
+}

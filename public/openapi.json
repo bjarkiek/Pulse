@@ -1,0 +1,505 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DataCentral Pulse API",
+    "version": "1.0.0",
+    "description": "Authenticated, organization-scoped API for customer feedback and product workflow. Mutation operations documented with Idempotency-Key replay their original response."
+  },
+  "servers": [{ "url": "/" }],
+  "security": [{ "appServiceIdentity": [] }],
+  "paths": {
+    "/api/v1/openapi": {
+      "get": {
+        "operationId": "getOpenApiSpecification",
+        "security": [],
+        "responses": { "200": { "description": "OpenAPI 3.1 document" } }
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "getMe",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/me/context": {
+      "post": {
+        "operationId": "setActiveOrganization",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/requests": {
+      "get": {
+        "operationId": "listRequests",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createRequest",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": {
+          "201": { "$ref": "#/components/responses/Ok" },
+          "400": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/requests/draft": {
+      "get": {
+        "operationId": "getRequestDraft",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "put": {
+        "operationId": "saveRequestDraft",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "delete": {
+        "operationId": "deleteRequestDraft",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/requests/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+      "get": {
+        "operationId": "getRequest",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "operationId": "updateRequest",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/attachments": {
+      "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+      "get": {
+        "operationId": "listRequestAttachments",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "initiateAttachmentUpload",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/requests/{id}/comments": {
+      "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+      "get": {
+        "operationId": "listRequestComments",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createRequestComment",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/requests/{id}/comments/{commentId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/PublicId" },
+        {
+          "name": "commentId",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "patch": {
+        "operationId": "editRequestComment",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "delete": {
+        "operationId": "removeRequestComment",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/attachments/{id}/complete": {
+      "post": {
+        "operationId": "completeAttachmentUpload",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/attachments/{id}/content": {
+      "get": {
+        "operationId": "downloadAttachment",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": {
+          "200": { "description": "Clean attachment content" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/attachments/{id}/scan-result": {
+      "post": {
+        "operationId": "recordAttachmentScan",
+        "security": [{ "scanWebhookSecret": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/ideas": {
+      "get": {
+        "operationId": "listPublishedIdeas",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/search/suggestions": {
+      "get": {
+        "operationId": "searchDuplicateSuggestions",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/search/suggestions/dismiss": {
+      "post": {
+        "operationId": "dismissDuplicateSuggestions",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/ideas/{id}": {
+      "get": {
+        "operationId": "getPublishedIdea",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/ideas/{id}/follow": {
+      "post": {
+        "operationId": "setIdeaFollow",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/releases": {
+      "get": {
+        "operationId": "listPublishedReleases",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "listNotifications",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/notifications/preferences": {
+      "get": {
+        "operationId": "listNotificationPreferences",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "patch": {
+        "operationId": "updateNotificationPreference",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/notifications/{id}/read": {
+      "post": {
+        "operationId": "markNotificationRead",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas": {
+      "get": {
+        "operationId": "listInternalIdeas",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createIdea",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/triage": {
+      "get": {
+        "operationId": "listTriageQueue",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/triage/bulk": {
+      "post": {
+        "operationId": "bulkUpdateTriage",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/jobs/retention": {
+      "post": {
+        "operationId": "runRetentionBatch",
+        "security": [{ "jobSecret": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/analytics/summary": {
+      "get": {
+        "operationId": "getAnalyticsSummary",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/jobs/webhooks": {
+      "post": {
+        "operationId": "deliverOutboundWebhooks",
+        "security": [{ "jobSecret": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/webhooks": {
+      "get": {
+        "operationId": "listWebhookSubscriptions",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createWebhookSubscription",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}": {
+      "patch": {
+        "operationId": "updateIdea",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/publish": {
+      "post": {
+        "operationId": "publishIdea",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/links": {
+      "post": {
+        "operationId": "linkRequestToIdea",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      },
+      "patch": {
+        "operationId": "moveRequestIdeaLink",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/external-links": {
+      "get": {
+        "operationId": "listIdeaExternalLinks",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createIdeaExternalLink",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/merge": {
+      "post": {
+        "operationId": "mergeIdeas",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/score": {
+      "post": {
+        "operationId": "scoreIdea",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/roadmap": {
+      "post": {
+        "operationId": "placeIdeaOnRoadmap",
+        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/releases": {
+      "get": {
+        "operationId": "listInternalReleases",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createRelease",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/releases/{id}/publish": {
+      "post": {
+        "operationId": "publishRelease",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/audit": {
+      "get": {
+        "operationId": "listAudit",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/analytics/requests.csv": {
+      "get": {
+        "operationId": "exportAuthorizedRequestsCsv",
+        "responses": { "200": { "description": "Authorized CSV result set" } }
+      }
+    },
+    "/api/v1/internal/saved-views": {
+      "get": {
+        "operationId": "listSavedViews",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createSavedView",
+        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/saved-views/{id}": {
+      "delete": {
+        "operationId": "deleteSavedView",
+        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/jobs/notifications": {
+      "post": {
+        "operationId": "processNotificationOutbox",
+        "security": [{ "notificationJobSecret": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/admin/organizations": {
+      "get": {
+        "operationId": "listOrganizations",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "saveOrganization",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "listUsers",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "saveUser",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/admin/settings": {
+      "get": {
+        "operationId": "getSettings",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "patch": {
+        "operationId": "saveSettings",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "appServiceIdentity": {
+        "type": "openIdConnect",
+        "openIdConnectUrl": "/.auth/me"
+      },
+      "scanWebhookSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-pulse-scan-secret"
+      },
+      "notificationJobSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-pulse-job-secret"
+      }
+    },
+    "/api/v1/admin/taxonomy": {
+      "get": {
+        "operationId": "listTaxonomy",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "saveTaxonomy",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "parameters": {
+      "Id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "PublicId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 8, "maxLength": 100 }
+      }
+    },
+    "responses": {
+      "Ok": {
+        "description": "Successful organization-scoped response",
+        "headers": {
+          "x-correlation-id": {
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        }
+      },
+      "Error": {
+        "description": "Machine-readable, user-safe error response",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ApiError" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message", "correlationId"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "correlationId": { "type": "string", "format": "uuid" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
