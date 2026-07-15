@@ -615,7 +615,17 @@ export const internalTools: ChatTool[] = [
       "System admin only. Returns at most 100 matching events, most recent first.",
     inputSchema: {
       query: z.string().optional().describe("Substring to match against action, entity type, or actor name"),
-      limit: z.number().int().positive().max(500).optional(),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(500)
+        .optional()
+        .describe(
+          "How many recent events to fetch before filtering (up to 500, default 100). The formatted output " +
+            "is still capped at ~100 entries even if a higher limit is passed — raise this to widen the " +
+            "search window, not to get more than ~100 results back.",
+        ),
       organization_id: orgIdParam,
     },
     readOnly: true,

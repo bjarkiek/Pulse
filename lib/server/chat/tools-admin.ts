@@ -114,8 +114,10 @@ export const adminTools: ChatTool[] = [
     title: "Save user",
     description:
       "Create or update a user and their organization memberships. Pass an existing user id to update, or " +
-      "omit id to create a new user. At least one membership is required. System admin only. " +
-      "Do not retry on timeout.",
+      "omit id to create a new user. At least one membership is required. WARNING: the `memberships` array " +
+      "REPLACES the user's full membership set — any existing membership you omit will be deactivated. " +
+      "Always call list_users first and round-trip the user's existing memberships, adding/changing only " +
+      "what the user asked. System admin only. Do not retry on timeout.",
     inputSchema: {
       id: z.string().optional().describe("User id (uuid); omit to create a new user"),
       name: z.string().max(200),
@@ -129,7 +131,11 @@ export const adminTools: ChatTool[] = [
             role: z.enum(["Company admin", "Requester", "Viewer", "Product manager"]),
           }),
         )
-        .min(1),
+        .min(1)
+        .describe(
+          "FULL REPLACEMENT of the user's memberships, not a delta — omitted existing memberships are " +
+            "deactivated. Fetch the current list via list_users and include all memberships you want to keep.",
+        ),
       organization_id: orgIdParam,
     },
     readOnly: false,
