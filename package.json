@@ -12,12 +12,13 @@
     "build:sites": "bash scripts/build-verified.sh",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && node --import tsx --test --test-concurrency=1 tests/domain.test.mjs tests/openapi.test.mjs tests/workflow.test.ts tests/dc-auth.test.ts",
+    "test": "npm run typecheck && node --import tsx --test --test-concurrency=1 tests/domain.test.mjs tests/openapi.test.mjs tests/workflow.test.ts tests/dc-auth.test.ts tests/chat.test.ts",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "eslint app lib --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@azure/communication-email": "^1.1.0",
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
@@ -28,7 +29,8 @@
     "openid-client": "^6.8.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
