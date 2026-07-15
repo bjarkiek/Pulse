@@ -89,10 +89,16 @@ az deployment group create \
                notificationJobSecret=<different-strong-secret> \
                webhookSigningSecret=<webhook-hmac-secret> \
                communicationEmailEndpoint=<acs-endpoint> \
-               communicationEmailSender=<verified-mail-from-address>
+               communicationEmailSender=<verified-mail-from-address> \
+               sessionSecret=<32-plus-char-secret> \
+               entraClientSecret=<entra-app-client-secret> \
+               dcAppSecret=<datacentral-tool-shared-secret> \
+               mcpTokenSigningKey=<base64-64-plus-byte-key>
 ```
 
 Supplying `entraClientId` enables App Service Authentication and requires sign-in on every route except health and the separately secret-authenticated scan callback. Configure the External ID application for email one-time passcode and Entra federation before customer onboarding.
+
+`sessionSecret`, `entraClientSecret`, `dcAppSecret`, and `mcpTokenSigningKey` are `@secure()` Bicep parameters with no default — the deployment fails without them. They back the app-level session/auth layer, MCP OAuth server, and DataCentral embed described in [configInfo.md](configInfo.md); `anthropicApiKey`, `anthropicModel`, `slackBotToken`, and `slackAppToken` are optional siblings for the AI assistant and Slack bot, also covered there.
 
 Before a production launch, replace the `AllowAzureServices` SQL firewall rule with private endpoint/VNet integration where required by the organization’s network policy, wire Defender for Storage events to the scan-result endpoint, and complete the backup-restore, accessibility, penetration, and load-test gates described in the PRD.
 
@@ -102,14 +108,22 @@ In-app and email notifications are inserted transactionally with the change that
 
 The same scheduler identity should invoke `POST /api/v1/internal/jobs/webhooks` every minute and `POST /api/v1/internal/jobs/retention` daily. Webhook deliveries use an HMAC-SHA256 signature over `<timestamp>.<raw-body>`, reject private-network destinations, retry with backoff, and expose no customer text in the event envelope. Retention first removes eligible private blobs, then hard-deletes expired soft-deleted records using the administrator-configured retention period.
 
-## AI assistant + Slack
+## AI assistant, Slack, MCP, and DataCentral embedding
 
-Pulse includes an optional AI assistant (in-app chat panel, plus a Slack bot for DMs and `@mentions`) built on the Anthropic API. Both surfaces share the same identity, tool permissions, and conversation history.
+On top of the core app above, Pulse adds three connected capabilities: an
+in-app AI assistant (plus a Slack bot front-end), a remote MCP server with a
+self-hosted OAuth 2.1 authorization server so any MCP client can act as the
+signed-in user, and DataCentral iframe-embed authentication with standalone
+Entra ID login (replacing App Service Easy Auth as the source of truth for
+identity). All three are optional to configure in isolation — each degrades
+gracefully when unset — but are designed to be run together in production.
 
-- Set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`) to enable the assistant. Without it, the chat panel reports itself as unconfigured and the Slack integration never starts.
-- Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to additionally enable the Slack bot over Socket Mode. See [`docs/slack-setup.md`](docs/slack-setup.md) for the full walkthrough: creating the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml), generating tokens, the Slack-email-to-`dbo.Users.email` identity prerequisite, and verification steps.
-- Slack Socket Mode and the assistant's in-memory caches require running a single App Service instance — see the comment on the plan/SKU in [`infra/main.bicep`](infra/main.bicep).
-- Full environment variable and infrastructure parameter reference is (or will be) in `configInfo.md`.
+- The AI assistant (in-app chat panel + Slack) is built on the Anthropic API. Set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`) to enable it; without it, the chat panel reports itself as unconfigured and Slack never starts.
+- Slack is a second front-end for the same assistant — DMs and `@mentions`, over Socket Mode (no inbound webhook). Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to enable it. See [`docs/slack-setup.md`](docs/slack-setup.md) for the full walkthrough: creating the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml), generating tokens, the Slack-email-to-`dbo.Users.email` identity prerequisite, and verification steps.
+- The MCP server (`/mcp`, `/oauth/*`, `/.well-known/oauth-*`) exposes the same tool registry as the chat assistant to any MCP client (e.g. `claude mcp add --transport http pulse https://{host}/mcp`), authorizing per-request against the caller's own Pulse identity. It needs `MCP_TOKEN_SIGNING_KEY` for tokens to survive a restart.
+- DataCentral embedding (`/dc-embed`, `/dc-auth`) and standalone Entra login (`/auth/login`, `/auth/callback`) both feed a shared, jose-signed `pulse-session` cookie. They need `DC_APP_SECRET` / `AUTH_ENTRA_*` / `PULSE_SESSION_SECRET` respectively.
+- Slack Socket Mode, the MCP OAuth cache, and the proxy's rate limiter all keep state in process memory, so **running more than one App Service instance is not supported while these are configured** — see the comment on the plan/SKU in [`infra/main.bicep`](infra/main.bicep) and the single-instance section of [`docs/architecture.md`](docs/architecture.md).
+- Full environment variable, Bicep parameter, and verification reference is in [`configInfo.md`](configInfo.md). Design background is in [`docs/superpowers/plans/2026-07-15-ai-chat-mcp-datacentral-embed.md`](docs/superpowers/plans/2026-07-15-ai-chat-mcp-datacentral-embed.md).
 
 ## Validation
 
