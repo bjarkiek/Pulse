@@ -8,6 +8,8 @@ import {
 } from "../lib/server/chat/tool-registry";
 import { isAssistantConfigured, sendChat } from "../lib/server/chat/assistant-service";
 import { todayLine } from "../lib/server/chat/system-prompt";
+import { GET as chatGet, POST as chatPost, DELETE as chatDelete } from "../app/api/v1/chat/messages/route";
+import { POST as transcriptPost } from "../app/api/v1/chat/transcript/route";
 
 const identity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -244,4 +246,74 @@ test("unconfigured assistant returns a friendly notice and never throws", async 
   const result = await sendChat(identity, "hello");
   assert.match(result.reply, /ANTHROPIC_API_KEY/);
   assert.equal(result.dataChanged, false);
+});
+
+test("chat GET reports configured=false without a key and returns history", async () => {
+  delete process.env.ANTHROPIC_API_KEY;
+  const res = await chatGet(new Request("http://localhost/api/v1/chat/messages"));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.configured, false);
+  assert.ok(Array.isArray(body.messages));
+});
+
+test("chat GET reflects history persisted for the resolved identity", async () => {
+  await appendChatMessage(identity, "user", "hello there");
+  await appendChatMessage(identity, "assistant", "hi!");
+  const res = await chatGet(new Request("http://localhost/api/v1/chat/messages"));
+  const messages = (await res.json()).messages;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, "user");
+  assert.equal(messages[0].content, "hello there");
+  assert.equal(messages[1].role, "assistant");
+});
+
+test("chat POST validates empty text", async () => {
+  const res = await chatPost(new Request("http://localhost/api/v1/chat/messages", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "" }),
+  }));
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error.code, "INVALID_CHAT_TEXT");
+});
+
+test("chat POST validates oversized text", async () => {
+  const res = await chatPost(new Request("http://localhost/api/v1/chat/messages", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "x".repeat(4001) }),
+  }));
+  assert.equal(res.status, 400);
+});
+
+test("chat POST returns the unconfigured notice without making a network call", async () => {
+  delete process.env.ANTHROPIC_API_KEY;
+  const res = await chatPost(new Request("http://localhost/api/v1/chat/messages", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hello" }),
+  }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.match(body.reply, /ANTHROPIC_API_KEY/);
+  assert.equal(body.dataChanged, false);
+});
+
+test("chat DELETE clears only the caller's history", async () => {
+  await appendChatMessage(identity, "user", "mine");
+  const res = await chatDelete(new Request("http://localhost/api/v1/chat/messages", { method: "DELETE" }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.cleared, true);
+  assert.equal((await getChatHistory(identity)).length, 0);
+});
+
+test("transcript POST returns the raw text unmodified when the assistant is unconfigured", async () => {
+  delete process.env.ANTHROPIC_API_KEY;
+  const res = await transcriptPost(new Request("http://localhost/api/v1/chat/transcript", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ transcript: "so, um, the the request is broken" }),
+  }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.text, "so, um, the the request is broken");
 });
