@@ -1,0 +1,1131 @@
+<style>
+/* ============================================================
+   DataCentral Pulse — User Guide
+   Design system: violet (DataCentral / internal) + teal (Customer),
+   violet-biased neutrals, system-sans hierarchy + monospace data face.
+   ============================================================ */
+
+:root{
+  /* neutrals — biased toward the violet accent, not pure grey */
+  --paper:#FBFAFE;
+  --paper-2:#F4F1FB;
+  --surface:#FFFFFF;
+  --ink:#191426;
+  --ink-2:#4B4460;
+  --ink-3:#7B7392;
+  --line:#E8E3F3;
+  --line-2:#D9D2EC;
+
+  /* accent = the product violet */
+  --accent:#6D3FF3;
+  --accent-deep:#4B23BC;
+  --accent-wash:#F1ECFE;
+
+  /* personas (also used as semantic wayfinding throughout) */
+  --dc:#6D3FF3;          /* DataCentral / internal — sees everything */
+  --dc-deep:#4B23BC;
+  --dc-wash:#F1ECFE;
+  --cust:#0E8C81;        /* Customer — sees what they're allowed to */
+  --cust-deep:#0A6A62;
+  --cust-wash:#E4F5F2;
+
+  /* semantic states (separate from accent) */
+  --ok:#1C9A55;      --ok-wash:#E4F6EC;   --ok-deep:#127A40;
+  --warn:#B67A0B;    --warn-wash:#FBF0DA; --warn-deep:#8A5B06;
+  --info:#2F6BD1;    --info-wash:#E8F0FC;
+  --mute:#6B6580;    --mute-wash:#EFEDF5;
+  --danger:#C23A54;  --danger-wash:#FCE9ED;
+
+  --radius:14px;
+  --radius-sm:9px;
+  --shadow:0 1px 2px rgba(25,20,38,.04), 0 10px 30px -18px rgba(25,20,38,.22);
+  --shadow-lift:0 2px 6px rgba(25,20,38,.06), 0 24px 48px -26px rgba(75,35,188,.35);
+
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"Cascadia Code","SF Mono","Segoe UI Mono","Roboto Mono",Menlo,Consolas,monospace;
+
+  --maxw:1200px;
+  --read:70ch;
+}
+
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#100D18;
+    --paper-2:#171326;
+    --surface:#1B1728;
+    --ink:#F1EEF9;
+    --ink-2:#B7AFCC;
+    --ink-3:#847B9E;
+    --line:#2A2440;
+    --line-2:#372F52;
+    --accent:#9B78FF;
+    --accent-deep:#B79BFF;
+    --accent-wash:#211A3B;
+    --dc:#9B78FF; --dc-deep:#B79BFF; --dc-wash:#211A3B;
+    --cust:#3FC7B7; --cust-deep:#6FD9CC; --cust-wash:#0E2A28;
+    --ok:#4Fc07f; --ok-wash:#122a1d; --ok-deep:#6FD79A;
+    --warn:#D6A23C; --warn-wash:#2c2312; --warn-deep:#E7BE6A;
+    --info:#6AA0F0; --info-wash:#132139;
+    --mute:#9A93B0; --mute-wash:#221E32;
+    --danger:#E7728A; --danger-wash:#2e1620;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 34px -18px rgba(0,0,0,.7);
+    --shadow-lift:0 2px 8px rgba(0,0,0,.5), 0 26px 54px -26px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="light"]{
+  --paper:#FBFAFE; --paper-2:#F4F1FB; --surface:#FFFFFF;
+  --ink:#191426; --ink-2:#4B4460; --ink-3:#7B7392; --line:#E8E3F3; --line-2:#D9D2EC;
+  --accent:#6D3FF3; --accent-deep:#4B23BC; --accent-wash:#F1ECFE;
+  --dc:#6D3FF3; --dc-deep:#4B23BC; --dc-wash:#F1ECFE;
+  --cust:#0E8C81; --cust-deep:#0A6A62; --cust-wash:#E4F5F2;
+  --ok:#1C9A55; --ok-wash:#E4F6EC; --ok-deep:#127A40; --warn:#B67A0B; --warn-wash:#FBF0DA; --warn-deep:#8A5B06;
+  --info:#2F6BD1; --info-wash:#E8F0FC; --mute:#6B6580; --mute-wash:#EFEDF5;
+  --danger:#C23A54; --danger-wash:#FCE9ED;
+  --shadow:0 1px 2px rgba(25,20,38,.04), 0 10px 30px -18px rgba(25,20,38,.22);
+  --shadow-lift:0 2px 6px rgba(25,20,38,.06), 0 24px 48px -26px rgba(75,35,188,.35);
+}
+:root[data-theme="dark"]{
+  --paper:#100D18; --paper-2:#171326; --surface:#1B1728;
+  --ink:#F1EEF9; --ink-2:#B7AFCC; --ink-3:#847B9E; --line:#2A2440; --line-2:#372F52;
+  --accent:#9B78FF; --accent-deep:#B79BFF; --accent-wash:#211A3B;
+  --dc:#9B78FF; --dc-deep:#B79BFF; --dc-wash:#211A3B;
+  --cust:#3FC7B7; --cust-deep:#6FD9CC; --cust-wash:#0E2A28;
+  --ok:#4FC07F; --ok-wash:#122A1D; --ok-deep:#6FD79A; --warn:#D6A23C; --warn-wash:#2C2312; --warn-deep:#E7BE6A;
+  --info:#6AA0F0; --info-wash:#132139; --mute:#9A93B0; --mute-wash:#221E32;
+  --danger:#E7728A; --danger-wash:#2E1620;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 34px -18px rgba(0,0,0,.7);
+  --shadow-lift:0 2px 8px rgba(0,0,0,.5), 0 26px 54px -26px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--font);font-size:17px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+img{max-width:100%;display:block}
+a{color:var(--accent-deep);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2.5px solid var(--accent);outline-offset:3px}
+p,li,dd,dt,h1,h2,h3,h4,figcaption,.box .d,.card p,td,.persona-card p{overflow-wrap:break-word}
+
+/* ---------- layout shell ---------- */
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.layout{max-width:var(--maxw);margin:0 auto;padding:0 24px;display:grid;gap:48px;grid-template-columns:1fr;align-items:start}
+@media(min-width:1040px){.layout{grid-template-columns:248px minmax(0,1fr);gap:56px}}
+
+/* ---------- table of contents ---------- */
+.toc{display:none}
+@media(min-width:1040px){
+  .toc{display:block;position:sticky;top:0;max-height:100vh;overflow-y:auto;padding:40px 0 40px;font-size:14px}
+}
+.toc-brand{display:flex;align-items:center;gap:9px;margin-bottom:22px;font-weight:800;letter-spacing:-.02em}
+.toc-mark{flex:none}
+.toc h4{margin:20px 0 8px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.toc h4.dc{color:var(--dc)}
+.toc h4.cust{color:var(--cust)}
+.toc a{display:block;color:var(--ink-2);padding:5px 12px;border-left:2px solid var(--line);line-height:1.35;margin-left:2px}
+.toc a:hover{color:var(--ink);border-color:var(--line-2);text-decoration:none;background:var(--paper-2)}
+.toc a.dc:hover{color:var(--dc)}
+.toc a.cust:hover{color:var(--cust)}
+
+/* ---------- typography ---------- */
+.content{min-width:0;padding-bottom:96px}
+section{scroll-margin-top:24px;padding:40px 0;border-top:1px solid var(--line)}
+section:first-of-type{border-top:none}
+h1{font-size:clamp(2.4rem,5vw,3.5rem);line-height:1.02;letter-spacing:-.035em;font-weight:850;margin:0 0 .3em;text-wrap:balance}
+h2{font-size:clamp(1.6rem,3vw,2.1rem);line-height:1.1;letter-spacing:-.028em;font-weight:800;margin:0 0 .5em;text-wrap:balance}
+h3{font-size:1.28rem;letter-spacing:-.02em;font-weight:750;margin:1.9em 0 .5em;text-wrap:balance}
+h4{font-size:1.02rem;font-weight:750;letter-spacing:-.01em;margin:1.5em 0 .4em}
+p{margin:0 0 1em;max-width:var(--read)}
+.lead{font-size:1.2rem;line-height:1.55;color:var(--ink-2);max-width:60ch}
+ul,ol{max-width:var(--read);padding-left:1.3em;margin:0 0 1.1em}
+li{margin:.3em 0}
+strong{font-weight:700}
+.eyebrow{display:inline-block;font-size:12px;font-weight:750;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+.eyebrow.dc{color:var(--dc)} .eyebrow.cust{color:var(--cust)}
+.small{font-size:14.5px;color:var(--ink-2)}
+.muted{color:var(--ink-2)}
+
+/* mono data bits */
+code,.mono{font-family:var(--mono);font-size:.87em}
+.chip{font-family:var(--mono);font-size:.82em;font-weight:600;background:var(--paper-2);border:1px solid var(--line-2);color:var(--ink-2);padding:.12em .5em;border-radius:6px;white-space:nowrap}
+.chip.dc{background:var(--dc-wash);border-color:color-mix(in srgb,var(--dc) 30%,transparent);color:var(--dc-deep)}
+.chip.cust{background:var(--cust-wash);border-color:color-mix(in srgb,var(--cust) 30%,transparent);color:var(--cust-deep)}
+p code,li code{background:var(--paper-2);border:1px solid var(--line);padding:.08em .38em;border-radius:5px;color:var(--accent-deep)}
+
+/* ---------- hero ---------- */
+.hero{padding:56px 0 20px;border-top:none}
+.brandrow{display:flex;align-items:center;gap:12px;margin-bottom:30px}
+.logo-mark{width:34px;height:34px;border-radius:8px;overflow:hidden;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;flex:none;box-shadow:var(--shadow)}
+.logo-mark span{display:block}
+.brandrow .name{font-weight:800;letter-spacing:-.02em;font-size:18px}
+.brandrow .name b{color:var(--ink)}
+.brandrow .name em{font-style:normal;color:var(--ink-3);font-weight:600}
+.hero .kicker{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink-2);background:var(--surface);border:1px solid var(--line);padding:6px 13px;border-radius:100px;margin-bottom:22px;box-shadow:var(--shadow)}
+.hero .kicker b{color:var(--accent-deep);font-weight:750}
+.metastrip{display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:26px;font-size:13.5px;color:var(--ink-2)}
+.metastrip b{color:var(--ink);font-weight:650}
+
+/* persona split in hero */
+.persona-split{display:grid;gap:16px;margin-top:38px;grid-template-columns:1fr}
+@media(min-width:640px){.persona-split{grid-template-columns:1fr 1fr}}
+.persona-card{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:24px 24px 22px;box-shadow:var(--shadow);overflow:hidden}
+.persona-card::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--persona)}
+.persona-card.dc{--persona:var(--dc)}
+.persona-card.cust{--persona:var(--cust)}
+.persona-card .tag{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:var(--persona)}
+.persona-card h3{margin:.5em 0 .25em;font-size:1.25rem}
+.persona-card p{font-size:15px;color:var(--ink-2);margin:0 0 14px;max-width:none}
+.persona-card .who{font-size:13px;color:var(--ink-3)}
+.persona-dot{width:9px;height:9px;border-radius:50%;background:var(--persona);flex:none}
+
+/* ---------- generic components ---------- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;box-shadow:var(--shadow)}
+.grid2{display:grid;gap:18px;grid-template-columns:1fr}
+@media(min-width:720px){.grid2{grid-template-columns:1fr 1fr}}
+.grid3{display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:720px){.grid3{grid-template-columns:repeat(3,1fr)}}
+.grid2>*,.grid3>*{min-width:0}
+
+/* status pills */
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:650;padding:3px 10px;border-radius:100px;line-height:1.5;white-space:nowrap;border:1px solid transparent}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.9}
+.pill.ok{background:var(--ok-wash);color:var(--ok-deep);border-color:color-mix(in srgb,var(--ok) 26%,transparent)}
+.pill.warn{background:var(--warn-wash);color:var(--warn-deep);border-color:color-mix(in srgb,var(--warn) 26%,transparent)}
+.pill.info{background:var(--info-wash);color:var(--info);border-color:color-mix(in srgb,var(--info) 26%,transparent)}
+.pill.violet{background:var(--dc-wash);color:var(--dc-deep);border-color:color-mix(in srgb,var(--dc) 26%,transparent)}
+.pill.mute{background:var(--mute-wash);color:var(--mute);border-color:color-mix(in srgb,var(--mute) 22%,transparent)}
+.pill.danger{background:var(--danger-wash);color:var(--danger);border-color:color-mix(in srgb,var(--danger) 26%,transparent)}
+.pillrow{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+
+/* callouts */
+.callout{display:grid;grid-template-columns:auto 1fr;gap:14px;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:var(--radius-sm);padding:16px 18px;margin:20px 0;box-shadow:var(--shadow)}
+.callout .ic{width:26px;height:26px;flex:none;color:var(--accent)}
+.callout p{margin:0;max-width:none;font-size:15px}
+.callout p+p{margin-top:.5em}
+.callout.key{border-left-color:var(--accent)}
+.callout.warn{border-left-color:var(--warn)} .callout.warn .ic{color:var(--warn)}
+.callout.secure{border-left-color:var(--ok)} .callout.secure .ic{color:var(--ok)}
+.callout.dc{border-left-color:var(--dc)} .callout.dc .ic{color:var(--dc)}
+.callout.cust{border-left-color:var(--cust)} .callout.cust .ic{color:var(--cust)}
+.callout b{color:var(--ink)}
+
+/* browser-frame screenshot */
+figure{margin:26px 0}
+.frame{border:1px solid var(--line-2);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-lift);background:var(--surface)}
+.frame .bar{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--paper-2);border-bottom:1px solid var(--line)}
+.frame .dots{display:flex;gap:6px}
+.frame .dots i{width:10px;height:10px;border-radius:50%;background:var(--line-2);display:block}
+.frame .url{font-family:var(--mono);font-size:12px;color:var(--ink-3);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:3px 10px;margin-left:6px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frame .badge{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:5px}
+.frame .badge.dc{background:var(--dc-wash);color:var(--dc-deep)}
+.frame .badge.cust{background:var(--cust-wash);color:var(--cust-deep)}
+.frame img{width:100%;display:block}
+figcaption{font-size:13.5px;color:var(--ink-2);margin-top:10px;padding-left:2px;max-width:64ch}
+figcaption b{color:var(--ink-2);font-weight:650}
+
+/* steps */
+.steps{list-style:none;counter-reset:s;padding:0;margin:22px 0;max-width:none}
+.steps>li{counter-increment:s;position:relative;padding:2px 0 22px 52px;margin:0}
+.steps>li::before{content:counter(s);position:absolute;left:0;top:-2px;width:34px;height:34px;border-radius:50%;background:var(--persona,var(--accent));color:#fff;font-weight:750;font-size:15px;display:grid;place-items:center;font-family:var(--font);box-shadow:0 2px 8px -2px color-mix(in srgb,var(--persona,var(--accent)) 60%,transparent)}
+.steps>li:not(:last-child)::after{content:"";position:absolute;left:16px;top:36px;bottom:2px;width:2px;background:linear-gradient(var(--line-2),transparent)}
+.steps>li h4{margin:.1em 0 .3em}
+.steps>li p{margin:0 0 .4em;font-size:15.5px;color:var(--ink-2);max-width:64ch}
+.track-dc{--persona:var(--dc)} .track-cust{--persona:var(--cust-deep)}
+
+/* persona section header */
+.sec-head{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.sec-head .rail-tag{font-size:12px;font-weight:750;letter-spacing:.09em;text-transform:uppercase;padding:5px 12px;border-radius:100px;color:#fff}
+.sec-head .rail-tag.dc{background:var(--dc)} .sec-head .rail-tag.cust{background:var(--cust-deep)}
+
+/* lifecycle strip */
+.flow{display:grid;gap:10px;margin:26px 0;grid-template-columns:1fr}
+@media(min-width:760px){.flow{grid-template-columns:repeat(5,1fr);gap:8px}}
+.flow .node{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:15px 15px 14px;position:relative;box-shadow:var(--shadow)}
+.flow .node .n{font-family:var(--mono);font-size:11px;color:var(--ink-3);font-weight:600}
+.flow .node h5{margin:6px 0 4px;font-size:15px;font-weight:750}
+.flow .node p{margin:0;font-size:12.5px;color:var(--ink-2);max-width:none;line-height:1.45}
+.flow .node::after{content:"→";position:absolute;right:-14px;top:50%;transform:translateY(-50%);color:var(--line-2);font-size:18px;z-index:2}
+@media(min-width:760px){.flow .node:last-child::after{display:none}}
+@media(max-width:759px){.flow .node::after{content:"↓";right:auto;left:50%;top:auto;bottom:-15px;transform:translateX(-50%)}.flow .node:last-child::after{display:none}}
+
+/* architecture diagram (hand-built, theme-aware) */
+.arch{background:linear-gradient(180deg,var(--paper-2),var(--surface));border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin:26px 0;box-shadow:var(--shadow);overflow-x:auto}
+.arch-inner{min-width:660px;display:flex;flex-direction:column;gap:14px}
+.arch-lane{display:grid;grid-template-columns:130px 1fr;gap:14px;align-items:stretch}
+.arch-lane .lbl{display:flex;align-items:center;font-size:11px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);border-right:2px dashed var(--line-2);padding-right:8px}
+.arch-row{display:flex;gap:10px;flex-wrap:wrap}
+.box{background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:10px 13px;font-size:13px;font-weight:600;box-shadow:var(--shadow);flex:1;min-width:120px}
+.box .t{font-weight:750;font-size:13.5px;color:var(--ink)}
+.box .d{font-size:11.5px;color:var(--ink-3);font-weight:500;margin-top:2px;line-height:1.35}
+.box.accent{border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:var(--accent-wash)}
+.box.accent .t{color:var(--accent-deep)}
+.box.dc{border-color:color-mix(in srgb,var(--dc) 45%,transparent);background:var(--dc-wash)}.box.dc .t{color:var(--dc-deep)}
+.box.cust{border-color:color-mix(in srgb,var(--cust) 45%,transparent);background:var(--cust-wash)}.box.cust .t{color:var(--cust-deep)}
+.box.ext{border-style:dashed}
+
+/* permission matrix */
+.matrix-wrap{overflow-x:auto;margin:24px 0;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);background:var(--surface)}
+table.matrix{border-collapse:collapse;width:100%;min-width:720px;font-size:14px}
+table.matrix th,table.matrix td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line)}
+table.matrix thead th{background:var(--paper-2);font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-2);font-weight:750;border-bottom:2px solid var(--line-2)}
+table.matrix thead th.g-cust{color:var(--cust-deep)}
+table.matrix thead th.g-dc{color:var(--dc-deep)}
+table.matrix tbody th{font-weight:600;color:var(--ink);font-size:13.5px}
+table.matrix td{text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+table.matrix tbody tr:hover{background:var(--paper-2)}
+table.matrix .grp td{background:var(--paper-2);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:750;text-align:left;padding:8px 12px}
+.yes{color:var(--ok-deep)} .no{color:var(--mute);opacity:.72} .part{color:var(--warn-deep)}
+.mk{display:inline-block;width:1.4em}
+
+/* legend */
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--ink-2);margin:12px 2px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend b{font-weight:800}
+
+/* mermaid container — fixed light ground so it reads in both themes */
+.diagram{background:#FBFAFE;border:1px solid var(--line-2);border-radius:var(--radius);padding:20px;margin:24px 0;box-shadow:var(--shadow);overflow-x:auto}
+.diagram pre.mermaid{background:transparent;margin:0;min-width:560px}
+.diagram .cap{font-size:12.5px;color:#544D68;margin-top:8px;font-family:var(--font)}
+
+/* definition rows */
+.deflist{display:grid;gap:0;margin:18px 0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
+.deflist .row{display:grid;grid-template-columns:170px 1fr;gap:16px;padding:13px 18px;border-bottom:1px solid var(--line)}
+.deflist .row:last-child{border-bottom:none}
+.deflist .row:nth-child(even){background:var(--paper-2)}
+.deflist dt{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--accent-deep);margin:0}
+.deflist dd{margin:0;font-size:14.5px;color:var(--ink-2)}
+@media(max-width:560px){.deflist .row{grid-template-columns:1fr;gap:3px}}
+
+/* two-col comparison */
+.vs{display:grid;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow);margin:24px 0;background:var(--surface)}
+.vs-row{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--line)}
+.vs-row:last-child{border-bottom:none}
+.vs-row>div{padding:14px 18px}
+.vs-row>div:first-child{border-right:1px solid var(--line);background:var(--cust-wash)}
+.vs-row>div:last-child{background:var(--dc-wash)}
+.vs-head>div{font-weight:750;font-size:13px;letter-spacing:.05em;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.vs-head>div:first-child{color:var(--cust-deep)}
+.vs-head>div:last-child{color:var(--dc-deep)}
+.vs-row .k{grid-column:1/-1;background:var(--paper-2)!important;border-right:none!important;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:750;padding:8px 18px}
+.vs-row p{margin:0;font-size:14px;color:var(--ink-2);max-width:none}
+@media(max-width:620px){.vs-row{grid-template-columns:1fr}.vs-row>div:first-child{border-right:none;border-bottom:1px solid var(--line)}}
+
+/* tool tables (reference) */
+details.tools{margin:16px 0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface);box-shadow:var(--shadow)}
+details.tools>summary{cursor:pointer;padding:15px 20px;font-weight:750;font-size:15px;display:flex;align-items:center;gap:10px;list-style:none}
+details.tools>summary::-webkit-details-marker{display:none}
+details.tools>summary::before{content:"▸";color:var(--accent);font-size:13px;transition:transform .2s}
+details.tools[open]>summary::before{transform:rotate(90deg)}
+details.tools>summary .count{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:500}
+.tooltable{overflow-x:auto;border-top:1px solid var(--line)}
+.tooltable table{border-collapse:collapse;width:100%;min-width:560px;font-size:13.5px}
+.tooltable td{padding:9px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.tooltable tr:last-child td{border-bottom:none}
+.tooltable td:first-child{font-family:var(--mono);font-size:12.5px;color:var(--accent-deep);white-space:nowrap;font-weight:600}
+.tooltable td:nth-child(2){white-space:nowrap}
+.tooltable .rw{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.tooltable .rw.w{color:var(--warn-deep)}
+.tooltable .rw.cf{color:var(--danger)}
+
+/* footer */
+.foot{border-top:1px solid var(--line);padding:34px 0 60px;color:var(--ink-3);font-size:13.5px}
+.foot .wrap{display:flex;flex-wrap:wrap;gap:8px 24px;align-items:center;justify-content:space-between}
+
+/* utility */
+.spacer{height:8px}
+.nowrap{white-space:nowrap}
+hr.soft{border:none;border-top:1px solid var(--line);margin:30px 0}
+.tint{background:var(--paper-2);border-radius:var(--radius);padding:2px 20px;border:1px solid var(--line)}
+</style>
+
+<div class="layout">
+
+  <!-- ======================= TABLE OF CONTENTS ======================= -->
+  <nav class="toc" aria-label="Contents">
+    <div class="toc-brand">
+      <span class="logo-mark toc-mark" aria-hidden="true">
+        <span style="background:#E5484D"></span><span style="background:#F5C518"></span>
+        <span style="background:#2B2540"></span><span style="background:#1FA971"></span>
+      </span>
+      Pulse Guide
+    </div>
+    <a href="#overview">Overview</a>
+    <a href="#lifecycle">How feedback flows</a>
+    <a href="#roles">The two roles</a>
+    <a href="#access">How access works</a>
+    <a href="#signin">Signing in</a>
+
+    <h4 class="cust">For customers</h4>
+    <a class="cust" href="#c-home">Home &amp; navigation</a>
+    <a class="cust" href="#c-submit">Submit a request</a>
+    <a class="cust" href="#c-track">Track your requests</a>
+    <a class="cust" href="#c-ideas">Browse ideas &amp; roadmap</a>
+
+    <h4 class="dc">For DataCentral</h4>
+    <a class="dc" href="#d-home">Full navigation</a>
+    <a class="dc" href="#d-triage">Triage inbox</a>
+    <a class="dc" href="#d-ideas">Product ideas</a>
+    <a class="dc" href="#d-release">Roadmap &amp; releases</a>
+    <a class="dc" href="#d-admin">Analytics &amp; admin</a>
+
+    <h4>Everyone</h4>
+    <a href="#assistant">AI assistant</a>
+    <a href="#architecture">System architecture</a>
+    <a href="#reference">Reference</a>
+  </nav>
+
+  <!-- ======================= CONTENT ======================= -->
+  <main class="content">
+
+    <!-- HERO -->
+    <section class="hero" id="top">
+      <div class="brandrow">
+        <span class="logo-mark" aria-hidden="true">
+          <span style="background:#E5484D"></span><span style="background:#F5C518"></span>
+          <span style="background:#2B2540"></span><span style="background:#1FA971"></span>
+        </span>
+        <span class="name"><b>DataCentral</b> <em>Pulse</em></span>
+      </div>
+      <span class="kicker">User guide · <b>two roles, one platform</b></span>
+      <h1>Everything you need to use DataCentral Pulse.</h1>
+      <p class="lead">Pulse is where customers tell DataCentral what to build next — and where the DataCentral team turns that feedback into a roadmap. This guide walks through both sides: the <span style="color:var(--cust);font-weight:650">customer</span> who sees their own organization, and the <span style="color:var(--dc);font-weight:650">DataCentral team member</span> who sees across the whole operation.</p>
+
+      <div class="persona-split">
+        <div class="persona-card cust">
+          <span class="tag"><span class="persona-dot"></span>Customer</span>
+          <h3>Sees what they're allowed to</h3>
+          <p>Submit requests, follow ideas, watch the roadmap, and track everything your organization has asked for — scoped to your company only.</p>
+          <div class="who">Roles: Company admin · Requester · Viewer</div>
+        </div>
+        <div class="persona-card dc">
+          <span class="tag"><span class="persona-dot"></span>DataCentral team</span>
+          <h3>Sees the whole operation</h3>
+          <p>Triage incoming requests, consolidate them into product ideas, score and publish to the roadmap, ship releases, and administer the platform — across every customer organization they're assigned to.</p>
+          <div class="who">Roles: Internal contributor · Product manager · System admin</div>
+        </div>
+      </div>
+
+      <div class="metastrip">
+        <span><b>Applies to</b> DataCentral Pulse (web, Slack &amp; MCP)</span>
+        <span><b>Audience</b> Customers &amp; DataCentral staff</span>
+        <span><b>Screens</b> from the live application</span>
+      </div>
+    </section>
+
+    <!-- OVERVIEW -->
+    <section id="overview">
+      <span class="eyebrow">Overview</span>
+      <h2>What Pulse is for</h2>
+      <p>DataCentral Pulse is a shared workspace for customer feedback and product planning. Customers describe the outcomes they need; DataCentral reviews that evidence, consolidates related requests into <strong>product ideas</strong>, and communicates decisions back through a public <strong>roadmap</strong> and <strong>release notes</strong>. Every request keeps its original context and a full status history, and nothing a customer writes is ever shared with another customer.</p>
+      <p>The same platform serves two very different jobs, which is why this guide is organized around the two roles. If you're a customer, you can skip straight to <a href="#c-home">Home &amp; navigation for customers</a>. If you're on the DataCentral team, jump to <a href="#d-home">the full navigation</a>. The <a href="#access">access model</a> and <a href="#assistant">AI assistant</a> sections apply to everyone.</p>
+
+      <div class="grid3">
+        <div class="card">
+          <span class="eyebrow cust" style="margin-bottom:8px">Customers get</span>
+          <p class="small" style="margin:0">A clear channel to ask for what they need, visibility into what's planned, and honest status on everything their organization has submitted.</p>
+        </div>
+        <div class="card">
+          <span class="eyebrow dc" style="margin-bottom:8px">DataCentral gets</span>
+          <p class="small" style="margin:0">One triage queue, evidence-linked product ideas, scoring, a governed roadmap, and release communication — all in one place.</p>
+        </div>
+        <div class="card">
+          <span class="eyebrow" style="margin-bottom:8px">Everyone gets</span>
+          <p class="small" style="margin:0">An AI assistant (in-app, in Slack, or over MCP) that can do anything you're allowed to do — and politely refuses anything you're not.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIFECYCLE -->
+    <section id="lifecycle">
+      <span class="eyebrow">The big picture</span>
+      <h2>How a piece of feedback travels</h2>
+      <p>A request doesn't disappear into a black box. It moves through a defined lifecycle, and both roles can see the parts of that journey relevant to them. Customers see the request-level status; DataCentral sees — and drives — every stage.</p>
+
+      <div class="flow" role="list">
+        <div class="node" role="listitem"><div class="n">01</div><h5>Submit</h5><p>A customer describes a problem or outcome. It becomes a request with an id like <span class="chip cust">DCI-1042</span>.</p></div>
+        <div class="node" role="listitem"><div class="n">02</div><h5>Triage</h5><p>DataCentral classifies it: start discovery, link to an idea, ask for information, route to support, or close.</p></div>
+        <div class="node" role="listitem"><div class="n">03</div><h5>Consolidate</h5><p>Related requests across customers become one <strong>product idea</strong> <span class="chip dc">IDEA-318</span>, keeping each customer's context private.</p></div>
+        <div class="node" role="listitem"><div class="n">04</div><h5>Plan</h5><p>Product managers score the idea and place it on the roadmap at a horizon: <em>Now</em>, <em>Next</em>, or <em>Later</em>.</p></div>
+        <div class="node" role="listitem"><div class="n">05</div><h5>Release</h5><p>When shipped, a <strong>release</strong> <span class="chip">REL-###</span> moves ideas to <em>Released</em> and notifies the customers who followed them.</p></div>
+      </div>
+      <p class="small muted">Throughout, ids are meaningful: <span class="chip">DCI-####</span> is a customer request, <span class="chip">IDEA-###</span> is a product idea, <span class="chip">REL-###</span> is a release. You'll see these everywhere, including in the assistant.</p>
+    </section>
+
+    <!-- ROLES -->
+    <section id="roles">
+      <span class="eyebrow">The two roles at a glance</span>
+      <h2>Who sees what</h2>
+      <p>The single most important thing to understand about Pulse is that <strong>the same screens serve both roles, but the data behind them is scoped to who you are.</strong> A customer and a DataCentral admin can both open “Product ideas”, but the customer sees an empty, access-controlled shell while the admin sees the internal workspace. Access is decided by the server on every request — never by hiding a button.</p>
+
+      <div class="vs">
+        <div class="vs-row vs-head">
+          <div><span class="persona-dot" style="--persona:var(--cust)"></span>Customer</div>
+          <div><span class="persona-dot" style="--persona:var(--dc)"></span>DataCentral team</div>
+        </div>
+        <div class="vs-row"><div class="k">Scope of data</div></div>
+        <div class="vs-row"><div><p>Only their own organization's requests, comments, and drafts.</p></div><div><p>Every organization they're assigned to — internal staff are <em>not</em> global by default.</p></div></div>
+        <div class="vs-row"><div class="k">Requests</div></div>
+        <div class="vs-row"><div><p>Submit, edit (while open), comment, and withdraw their own requests.</p></div><div><p>Triage, reassign, set any status, bulk-update up to 100 at once.</p></div></div>
+        <div class="vs-row"><div class="k">Ideas &amp; roadmap</div></div>
+        <div class="vs-row"><div><p>Browse <em>published</em> ideas, follow them, and view the public roadmap.</p></div><div><p>Create internal ideas, score them, link evidence, and publish to the roadmap.</p></div></div>
+        <div class="vs-row"><div class="k">Releases</div></div>
+        <div class="vs-row"><div><p>Read published release notes.</p></div><div><p>Draft, bundle ideas, and publish releases that notify followers.</p></div></div>
+        <div class="vs-row"><div class="k">Administration</div></div>
+        <div class="vs-row"><div><p>None.</p></div><div><p>System admins manage users, organizations, taxonomy, settings, and the audit log.</p></div></div>
+      </div>
+
+      <div class="callout key">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>
+        <p><b>Roles live on memberships, not on people.</b> One person has a single identity and any number of company memberships, each with its own role. The same person can be a <em>Company admin</em> at one organization and a <em>Viewer</em> at another — and their access is evaluated separately in each. See <a href="#access">How access works</a>.</p>
+      </div>
+    </section>
+
+    <!-- ACCESS MODEL -->
+    <section id="access">
+      <span class="eyebrow">The access model</span>
+      <h2>How “sees what they're allowed to” actually works</h2>
+      <p>Pulse enforces permissions at the server, on every request, by re-checking your membership and role in the target organization. The navigation you see is the same for everyone; what differs is what the server is willing to return. This section is the reference for exactly who can do what.</p>
+
+      <h3>The permission tiers</h3>
+      <p>There are six role names, but they form <strong>five access tiers</strong>: <em>Requester</em> and <em>Viewer</em> behave identically today, so the matrix below groups them into one column.</p>
+      <div class="grid2">
+        <div class="card" style="border-left:4px solid var(--cust)">
+          <h4 style="margin-top:0">Customer roles</h4>
+          <div class="pillrow">
+            <span class="pill info">Company admin</span>
+            <span class="pill mute">Requester</span>
+            <span class="pill mute">Viewer</span>
+          </div>
+          <p class="small" style="margin:0">All three can submit and follow. Only a <strong>Company admin</strong> can edit or withdraw <em>other people's</em> requests inside their organization. Requester and Viewer behave identically today.</p>
+        </div>
+        <div class="card" style="border-left:4px solid var(--dc)">
+          <h4 style="margin-top:0">DataCentral roles</h4>
+          <div class="pillrow">
+            <span class="pill violet">Internal contributor</span>
+            <span class="pill violet">Product manager</span>
+            <span class="pill violet">System admin</span>
+          </div>
+          <p class="small" style="margin:0"><strong>Contributors</strong> read internal work and triage queues. <strong>Product managers</strong> add publishing power — status changes, scoring, ideas, releases. <strong>System admins</strong> add user, organization &amp; platform administration.</p>
+        </div>
+      </div>
+
+      <h3>Permission matrix</h3>
+      <p>The columns are the five tiers; a check means “allowed”. Internal columns assume the staff member also holds a membership in the relevant customer organization — there is no internal bypass for organization-scoped data.</p>
+
+      <div class="matrix-wrap">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th style="min-width:220px">Capability</th>
+              <th class="g-cust">Requester&nbsp;/ Viewer</th>
+              <th class="g-cust">Company&nbsp;admin</th>
+              <th class="g-dc">Contributor</th>
+              <th class="g-dc">Product&nbsp;mgr</th>
+              <th class="g-dc">System&nbsp;admin</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="grp"><td colspan="6">Requests</td></tr>
+            <tr><th>View own org's requests</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Submit a request</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Edit / withdraw own request</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Edit / withdraw anyone's in-org request</th><td class="no">—</td><td class="yes">✓</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Comment (customer-visible)</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>See &amp; write internal notes</th><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr class="grp"><td colspan="6">Triage &amp; ideas</td></tr>
+            <tr><th>View triage queue</th><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Change statuses · bulk triage</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>View internal ideas (unpublished)</th><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Create / score / merge ideas</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Publish idea to roadmap</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr class="grp"><td colspan="6">Releases &amp; insight</td></tr>
+            <tr><th>View published releases</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Create / publish release</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Analytics &amp; CSV export</th><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>View audit log</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+            <tr class="grp"><td colspan="6">Administration</td></tr>
+            <tr><th>Manage users &amp; organizations</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+            <tr><th>Taxonomy · settings · webhooks</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+            <tr class="grp"><td colspan="6">Assistant</td></tr>
+            <tr><th>Use the AI assistant &amp; connect via MCP</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><th>Assistant admin tools</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="legend">
+        <span><b class="yes">✓</b> Allowed</span>
+        <span><b class="no">—</b> Not allowed (returns “not found”)</span>
+        <span>Internal columns require a membership in the target org</span>
+      </div>
+
+      <h3>The anti-enumeration principle</h3>
+      <p>When you're not allowed to see something, Pulse doesn't say “access denied” — it says <strong>“not found.”</strong> Forbidden and non-existent both return the same result, which means you can't probe for records that exist but aren't yours. This is deliberate, and it has two consequences worth remembering:</p>
+      <div class="grid2">
+        <div class="callout secure" style="margin:8px 0">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <p><b>Ids can't be guessed.</b> Asking for a <span class="chip">DCI-####</span> or <span class="chip">IDEA-###</span> outside your access returns the same response as an id that never existed.</p>
+        </div>
+        <div class="callout secure" style="margin:8px 0">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+          <p><b>The assistant answers the same way.</b> Ask about an item you can't access and it replies: <em>“That item doesn't exist or you don't have access to it.”</em> — which can mean either.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SIGN IN -->
+    <section id="signin">
+      <span class="eyebrow">Getting in</span>
+      <h2>How you sign in</h2>
+      <p>Pulse supports three ways in, and which one you use depends on how you reached it. In every case, the app converts your sign-in into a short-lived <strong>session that lasts 12 hours</strong>; when it expires, an embedded session re-handshakes silently and a standalone session sends you back through your identity provider.</p>
+
+      <div class="grid3">
+        <div class="card">
+          <span class="pill cust" style="background:var(--cust-wash);color:var(--cust-deep);border-color:color-mix(in srgb,var(--cust) 26%,transparent)">Most customers</span>
+          <h4>Inside DataCentral</h4>
+          <p class="small" style="margin:0">Open Pulse from the DataCentral apps &amp; tools menu; it loads as a panel and performs a signed handshake with the host. You're already who DataCentral says you are, so there's nothing to log into.</p>
+        </div>
+        <div class="card">
+          <span class="pill violet">Standalone</span>
+          <h4>With your Microsoft account</h4>
+          <p class="small" style="margin:0">Opening Pulse directly sends you through Microsoft Entra ID (single sign-on) and back. Your email must already be provisioned as a Pulse user.</p>
+        </div>
+        <div class="card">
+          <span class="pill mute">Developers</span>
+          <h4>Local demo mode</h4>
+          <p class="small" style="margin:0">On a developer's machine with no database configured, Pulse signs in a demo administrator automatically — never available in production.</p>
+        </div>
+      </div>
+
+      <div class="diagram">
+        <pre class="mermaid">
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    autonumber
+    participant U as You
+    participant DC as DataCentral host
+    participant P as Pulse (iframe)
+    participant API as Pulse server
+    U->>DC: Open the Pulse tool
+    DC->>P: Load Pulse in an iframe
+    P->>DC: “AppReady” handshake
+    DC-->>P: Signed launch payload (dcData + dcSig)
+    P->>API: POST /dc-auth  (verify signature)
+    API-->>P: 12-hour session cookie
+    P-->>U: Your workspace, scoped to your org
+        </pre>
+        <div class="cap">The embedded sign-in path. The signature (an HMAC the host and Pulse both know) proves the launch is genuine; Pulse never redirects an iframe to a Microsoft login screen.</div>
+      </div>
+      <div class="callout">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <p><b>Users are provisioned in advance.</b> Whether you arrive through DataCentral or Microsoft sign-in, your email must already exist as a Pulse user with at least one organization membership. If it doesn't, Pulse says your account isn't linked yet — ask your DataCentral contact, and a System admin adds you on the <a href="#d-admin">Users</a> screen.</p>
+      </div>
+    </section>
+
+    <!-- ============================ CUSTOMER TRACK ============================ -->
+    <section id="c-home" class="track-cust">
+      <div class="sec-head"><span class="rail-tag cust">For customers</span></div>
+      <span class="eyebrow cust">Customer walkthrough · 1</span>
+      <h2>Home &amp; navigation</h2>
+      <p>When you open Pulse, Home is your dashboard: a quick summary of what's active, what needs your input, and what's shipped recently, plus a prominent box to describe something new. The left sidebar is how you move around.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Home</span><span class="badge cust">Customer view</span></div>
+          <img src="{{IMG:customer-01-home}}" alt="The customer Home dashboard showing active requests, items needing input, recently released work, and a list of the organization's latest requests." loading="lazy">
+        </div>
+        <figcaption>The customer <b>Home</b>. Because this session was launched from DataCentral, the personal greeting and workspace switcher are hidden — the panel is meant to sit inside the host's chrome. Three summary cards (<b>Active</b>, <b>Needs your input</b>, <b>Recently released</b>) sit above your organization's latest requests.</figcaption>
+      </figure>
+
+      <h3>The customer sidebar</h3>
+      <p>Your everyday navigation is five items. (You may also notice a “DataCentral team” section below them — those areas are reserved for staff and return nothing for a customer account; see <a href="#access">the access model</a>.)</p>
+      <div class="deflist">
+        <div class="row"><dt>Home</dt><dd>Your dashboard and the quickest path to submit a request.</dd></div>
+        <div class="row"><dt>Browse ideas</dt><dd>The catalogue of published product ideas you can follow.</dd></div>
+        <div class="row"><dt>Roadmap</dt><dd>What DataCentral is delivering now, next, and later.</dd></div>
+        <div class="row"><dt>My requests</dt><dd>Everything your organization has submitted, with live status.</dd></div>
+        <div class="row"><dt>Updates</dt><dd>Notifications when your requests change or ideas you follow move.</dd></div>
+      </div>
+      <p class="small muted">If you belong to more than one organization, Pulse asks you to pick which one you're working in — your role and access are evaluated separately in each. Inside DataCentral the active organization follows the host; standalone, you choose it on the way in and can switch from the workspace picker.</p>
+    </section>
+
+    <section id="c-submit" class="track-cust">
+      <span class="eyebrow cust">Customer walkthrough · 2</span>
+      <h2>Submit a request</h2>
+      <p>This is the heart of Pulse for a customer. Start with the problem, not a solution — DataCentral will assess the right product response. You can reach the form from the <strong>Submit a request</strong> button in the header, on Home, or by asking the assistant.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · New request</span><span class="badge cust">Customer view</span></div>
+          <img src="{{IMG:customer-04-submit}}" alt="The new customer request form titled Describe the outcome you need, with fields for a short title and the problem or desired outcome, an option to add impact and context, a file upload area, and a visibility selector." loading="lazy">
+        </div>
+        <figcaption>The <b>New customer request</b> form. Raw customer context is never shared with other customers — the visibility selector controls only who <em>inside your own organization</em> can see it.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><h4>Give it a short title</h4><p>Up to 140 characters — a scannable summary like “Scheduled report delivery to SharePoint”.</p></li>
+        <li><h4>Describe the problem or outcome</h4><p>Up to 5,000 characters. Explain what you're trying to achieve, who's affected, and what happens today. Solutions are welcome, but the problem is what matters.</p></li>
+        <li><h4>Add impact and context (optional)</h4><p>Expand this to add the product area and how much this is hurting — it helps triage prioritize.</p></li>
+        <li><h4>Attach screenshots or files (optional)</h4><p>Up to 25&nbsp;MB each, 100&nbsp;MB total. <strong>Never upload credentials, personal data, secrets, or unredacted production data</strong> — the form reminds you of this.</p></li>
+        <li><h4>Set visibility, then submit</h4><p>Choose whether the request is visible to your whole organization or kept private to you, then press <strong>Submit request</strong>. Drafts autosave on your device as you type.</p></li>
+      </ol>
+
+      <div class="callout cust">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m21 11-9-9-9 9M4 10v10h16V10"/><path d="M9 21v-6h6v6"/></svg>
+        <p><b>Check for duplicates first.</b> The assistant automatically searches existing ideas and your organization's requests before it files anything new, so you can add weight to an existing idea instead of creating a duplicate. You can also do this yourself from <a href="#c-ideas">Browse ideas</a>.</p>
+      </div>
+    </section>
+
+    <section id="c-track" class="track-cust">
+      <span class="eyebrow cust">Customer walkthrough · 3</span>
+      <h2>Track your requests</h2>
+      <p><strong>My requests</strong> lists everything your organization has submitted. Each request keeps its original context, its status history, and a link to the product idea it fed into. Tabs across the top let you filter by state, and every request carries a status you can read at a glance.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · My requests</span><span class="badge cust">Customer view</span></div>
+          <img src="{{IMG:customer-02-my-requests}}" alt="The My requests screen listing requests from the Origo organization with columns for request id, product area, submission date, and status pills such as Needs information, Under review, and Planned." loading="lazy">
+        </div>
+        <figcaption><b>Requests from your organization</b>, filterable by All / Active / Needs information / Closed. Each row shows the request id, product area, submission date, and current status.</figcaption>
+      </figure>
+
+      <h3>What the statuses mean</h3>
+      <div class="pillrow">
+        <span class="pill mute">Submitted</span>
+        <span class="pill warn">Needs information</span>
+        <span class="pill violet">Linked</span>
+        <span class="pill info">Routed to support</span>
+        <span class="pill mute">Closed</span>
+        <span class="pill mute">Withdrawn</span>
+      </div>
+      <div class="deflist">
+        <div class="row"><dt>Submitted</dt><dd>Received and waiting to be triaged.</dd></div>
+        <div class="row"><dt>Needs information</dt><dd>DataCentral has asked a question in the discussion — reply there, and you can still edit while it's in this state.</dd></div>
+        <div class="row"><dt>Linked</dt><dd>Consolidated into a product idea. Follow that idea to track it on the roadmap.</dd></div>
+        <div class="row"><dt>Routed to support</dt><dd>Better handled as a support case; the reference is recorded on the request.</dd></div>
+        <div class="row"><dt>Closed</dt><dd>Resolved or declined — always with a customer-safe explanation.</dd></div>
+        <div class="row"><dt>Withdrawn</dt><dd>You closed it yourself — the one status change a customer can make.</dd></div>
+      </div>
+      <p class="small muted">You can edit a request's title and description only while it's <em>Submitted</em> or <em>Needs information</em>; after that, add a comment instead. Only a Company admin can edit or withdraw requests filed by other people in the organization. (The demo data in these screenshots also shows a few roadmap-style labels like “Under review” and “Planned” — those reflect the linked idea's progress.)</p>
+    </section>
+
+    <section id="c-ideas" class="track-cust">
+      <span class="eyebrow cust">Customer walkthrough · 4</span>
+      <h2>Browse ideas &amp; watch the roadmap</h2>
+      <p>Beyond your own requests, you can see where the product is heading. <strong>Browse ideas</strong> is the catalogue of published product ideas; <strong>Roadmap</strong> arranges them by delivery horizon. Following an idea means you'll be notified when it moves — and you can mark that it “solves your need”, which is real signal to DataCentral.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Browse ideas</span><span class="badge cust">Customer view</span></div>
+          <img src="{{IMG:customer-03-browse-ideas}}" alt="The Browse ideas grid showing published product ideas as cards, each with a status, an idea id, a product area, a roadmap horizon tag, the number of organizations interested, and a Follow button." loading="lazy">
+        </div>
+        <figcaption><b>Browse customer-driven ideas.</b> Each card shows the idea's status, the number of organizations interested, and a <b>Follow</b> button. Filter by status to find what's under review, planned, or released.</figcaption>
+      </figure>
+
+      <div class="grid2">
+        <div class="card">
+          <h4 style="margin-top:0">Idea statuses you'll see</h4>
+          <div class="pillrow">
+            <span class="pill info">Under review</span>
+            <span class="pill mute">Considering</span>
+            <span class="pill violet">Planned</span>
+            <span class="pill info">In progress</span>
+            <span class="pill ok">Released</span>
+          </div>
+          <p class="small" style="margin:0">Only <em>published</em> ideas appear to customers. Internal-only ideas in early discovery are never shown.</p>
+        </div>
+        <div class="card">
+          <h4 style="margin-top:0">Roadmap horizons</h4>
+          <div class="pillrow">
+            <span class="pill ok">Now</span>
+            <span class="pill violet">Next</span>
+            <span class="pill mute">Later</span>
+            <span class="pill info">Released</span>
+          </div>
+          <p class="small" style="margin:0">Horizons express current intent and may change as evidence and delivery constraints evolve — the roadmap says so up front.</p>
+        </div>
+      </div>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Roadmap</span><span class="badge cust">Customer &amp; team</span></div>
+          <img src="{{IMG:shared-roadmap}}" alt="The Roadmap screen with Now, Next, and Later columns of idea cards and a Recently delivered strip along the bottom." loading="lazy">
+        </div>
+        <figcaption>The <b>Roadmap</b>, grouped into Now / Next / Later with a “Recently delivered” strip. Roadmap items are built from governed customer evidence while keeping each customer's context private.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============================ DATACENTRAL TRACK ============================ -->
+    <section id="d-home" class="track-dc">
+      <div class="sec-head"><span class="rail-tag dc">For the DataCentral team</span></div>
+      <span class="eyebrow dc">DataCentral walkthrough · 1</span>
+      <h2>The full navigation</h2>
+      <p>A DataCentral team member sees everything a customer sees, plus a second navigation group — <strong>DataCentral team</strong> — that is the actual product-operations workspace. What you can <em>do</em> inside it still depends on your role (contributor, product manager, or system admin).</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Home</span><span class="badge dc">DataCentral view</span></div>
+          <img src="{{IMG:internal-01-home}}" alt="The DataCentral team Home view, identical dashboard to the customer but with an expanded sidebar containing Triage inbox, Product ideas, Releases, Analytics, Companies, Users, Authentication, Settings, and Audit log, plus a signed-in profile at the bottom." loading="lazy">
+        </div>
+        <figcaption>The same Home, but the sidebar now carries the <b>DataCentral team</b> section and the signed-in profile is visible (this is a standalone, non-embedded session). The greeting and organization switcher return because the chrome isn't being hidden by a host.</figcaption>
+      </figure>
+
+      <div class="deflist">
+        <div class="row"><dt>Triage inbox</dt><dd>The queue of incoming customer requests to classify.</dd></div>
+        <div class="row"><dt>Product ideas</dt><dd>The canonical internal workspace for consolidating evidence into ideas.</dd></div>
+        <div class="row"><dt>Releases</dt><dd>Draft and publish releases that bundle shipped ideas.</dd></div>
+        <div class="row"><dt>Analytics</dt><dd>Request volume, service levels, and data-quality gaps.</dd></div>
+        <div class="row"><dt>Companies</dt><dd>The customer organizations Pulse serves.</dd></div>
+        <div class="row"><dt>Users</dt><dd>Identity and access — System admins only.</dd></div>
+        <div class="row"><dt>Authentication</dt><dd>A read-only preview of sign-in methods; the real configuration lives in Azure.</dd></div>
+        <div class="row"><dt>Settings</dt><dd>Taxonomy, scoring, retention, and platform policy — System admins only.</dd></div>
+        <div class="row"><dt>Audit log</dt><dd>A searchable record of every significant action — System admins only.</dd></div>
+      </div>
+    </section>
+
+    <section id="d-triage" class="track-dc">
+      <span class="eyebrow dc">DataCentral walkthrough · 2</span>
+      <h2>Triage inbox</h2>
+      <p>Triage is where raw requests become decisions. The inbox shows untriaged and overdue counts and your median triage time; picking a request opens the customer's problem, suggested related ideas, and a decision panel. Reading the queue is open to any DataCentral contributor; <strong>acting</strong> on it — changing status, assigning owners — requires a Product manager (or System admin).</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Triage inbox</span><span class="badge dc">DataCentral view</span></div>
+          <img src="{{IMG:internal-03-triage}}" alt="The Triage inbox with a queue of untriaged requests on the left, the selected request's customer problem and related product ideas in the center, and a Choose the next step decision panel on the right offering Start discovery, Link to product idea, Request information, Route to support, and Close request." loading="lazy">
+        </div>
+        <figcaption><b>Review customer evidence.</b> The right-hand panel — <b>Choose the next step</b> — is the triage decision. Most options update the customer-visible request and record why; <b>Start discovery</b> stays internal.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><h4>Pick a request from the queue</h4><p>Filter by Untriaged or Assigned to me. Each card shows the id, product area, and current status.</p></li>
+        <li><h4>Read the customer's problem</h4><p>The center pane shows impact, product area, visibility, and owner, plus product ideas suggested from the title and context.</p></li>
+        <li><h4>Add an internal note (optional)</h4><p>Capture evidence, constraints, or a decision rationale. Internal notes are never visible to customers.</p></li>
+        <li><h4>Choose the next step</h4><p><strong>Link to product idea</strong>, <strong>Request information</strong>, <strong>Route to support</strong>, and <strong>Close request</strong> each update the customer-visible status and record the decision. <strong>Start discovery</strong> is internal-only — it signals that work has begun while the customer still sees <em>Submitted</em>.</p></li>
+      </ol>
+
+      <div class="callout dc">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
+        <p><b>Bulk triage handles the backlog.</b> Product managers can update owner, tags, and triage-due date for up to <strong>100 requests at once</strong> — but only for requests in organizations they're a member of. The assistant asks for explicit confirmation before running a bulk action.</p>
+      </div>
+    </section>
+
+    <section id="d-ideas" class="track-dc">
+      <span class="eyebrow dc">DataCentral walkthrough · 3</span>
+      <h2>Product ideas</h2>
+      <p><strong>Product ideas</strong> is the canonical internal workspace: consolidate customer evidence into one idea, score priorities, stage customer-safe wording, and publish deliberate product decisions. The list shows every idea with its internal status, roadmap horizon, evidence count, and score.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Product ideas</span><span class="badge dc">DataCentral view</span></div>
+          <img src="{{IMG:internal-02-product-ideas}}" alt="The internal Product ideas workspace listing canonical product ideas with columns for status, roadmap horizon, evidence, and score, plus counters for active ideas, staged changes, and unlinked evidence, and a Create idea button." loading="lazy">
+        </div>
+        <figcaption><b>Canonical product ideas.</b> Counters at the top track active ideas, staged changes awaiting publication, and unlinked evidence. Every idea has a <b>Manage</b> action; Product managers get <b>Create idea</b>.</figcaption>
+      </figure>
+
+      <h3>Internal idea statuses</h3>
+      <div class="pillrow">
+        <span class="pill info">Discovery</span>
+        <span class="pill mute">Candidate</span>
+        <span class="pill violet">Planned</span>
+        <span class="pill info">In progress</span>
+        <span class="pill ok">Released</span>
+      </div>
+      <p>Editing a <em>published</em> idea automatically demotes it to <strong>Staged</strong> until you deliberately re-publish — so customer-facing wording never changes by accident. Publishing requires the wording to be confirmed customer-safe.</p>
+      <p class="small muted">Once published, the two early stages are renamed for customers: <em>Discovery</em> appears as <strong>Under review</strong> and <em>Candidate</em> as <strong>Considering</strong>. Planned, In progress, and Released keep their names.</p>
+
+      <div class="grid3">
+        <div class="card"><h4 style="margin-top:0">Consolidate</h4><p class="small" style="margin:0">Link customer requests (<span class="chip">DCI-####</span>) to an idea as evidence, or merge duplicate ideas into a survivor.</p></div>
+        <div class="card"><h4 style="margin-top:0">Score</h4><p class="small" style="margin:0">Record an impact/reach/alignment/commercial/urgency snapshot; the score is computed server-side from the configured weights.</p></div>
+        <div class="card"><h4 style="margin-top:0">Publish</h4><p class="small" style="margin:0">Place the idea on the roadmap and publish customer-safe wording — a Product-manager action requiring explicit confirmation.</p></div>
+      </div>
+    </section>
+
+    <section id="d-release" class="track-dc">
+      <span class="eyebrow dc">DataCentral walkthrough · 4</span>
+      <h2>Roadmap &amp; releases</h2>
+      <p>The <strong>Roadmap</strong> is the customer-facing view you place ideas onto; <strong>Releases</strong> is how you communicate what shipped. A release bundles one or more ideas, and publishing it is a high-blast-radius action: it cascades the bundled ideas to <em>Released</em> and notifies every customer who followed them, by email and in-app.</p>
+
+      <div class="grid2">
+        <div class="card" style="border-left:4px solid var(--dc)">
+          <h4 style="margin-top:0">Placing on the roadmap</h4>
+          <p class="small" style="margin:0">Product managers set an idea's horizon — <strong>Now</strong>, <strong>Next</strong>, or <strong>Later</strong> — with an optional target quarter and confidence. Roadmap items combine related requests while keeping each customer's context private.</p>
+        </div>
+        <div class="card" style="border-left:4px solid var(--dc)">
+          <h4 style="margin-top:0">Publishing a release</h4>
+          <p class="small" style="margin:0">Draft with a title, date, summary, and bundled ideas (<span class="chip">REL-###</span>). Publishing notifies followers — so the assistant and the UI both ask you to confirm before it goes out.</p>
+        </div>
+      </div>
+      <div class="callout warn">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <p><b>Publishing is deliberate, not accidental.</b> Four actions require explicit confirmation before they run: <span class="chip">publish_release</span>, <span class="chip">publish_idea</span>, <span class="chip">merge_ideas</span>, and <span class="chip">bulk_triage</span>. In the assistant, that means it explains the effect and waits for your “yes”.</p>
+      </div>
+    </section>
+
+    <section id="d-admin" class="track-dc">
+      <span class="eyebrow dc">DataCentral walkthrough · 5</span>
+      <h2>Analytics &amp; administration</h2>
+      <p>Two more areas round out the DataCentral experience. <strong>Analytics</strong> is available to any contributor; the administration screens — Users, Companies, Settings, and the Audit log — are restricted to <strong>System admins</strong>. (The Authentication screen is an informational configuration preview, not a live control.)</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Analytics</span><span class="badge dc">DataCentral view</span></div>
+          <img src="{{IMG:internal-06-analytics}}" alt="The Analytics screen for the DataCentral team." loading="lazy">
+        </div>
+        <figcaption><b>Analytics</b> summarizes request volume, open counts, area breakdowns, service levels, notification delivery, and data-quality gaps. Any DataCentral contributor can also export the requests they're authorized to see as CSV.</figcaption>
+      </figure>
+
+      <h3>Managing users &amp; access</h3>
+      <p>The <strong>Users</strong> screen is where System admins provision people and grant access. The model is many-to-many: one identity, any number of explicit company memberships, each with its own role. Internal employees are <em>not</em> global — you assign each person only to the customer companies they support.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Users</span><span class="badge dc">System admin</span></div>
+          <img src="{{IMG:internal-04-users}}" alt="The Manage users and company access screen showing a user table with authentication method, company access, and status, plus an Invite user button and a many-to-many access model callout." loading="lazy">
+        </div>
+        <figcaption><b>Manage users and company access.</b> Each row is one identity; “Company access” shows their memberships. <b>Invite user</b> opens an editor where you set the person's authentication method, status, and a role for every company they may enter.</figcaption>
+      </figure>
+
+      <div class="callout warn">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <p><b>Saving a user replaces their entire membership set.</b> The editor sends the complete list of companies you've checked — any membership you leave out is deactivated. When editing over the assistant, always list the user's existing memberships first and round-trip them, so you don't accidentally remove access.</p>
+      </div>
+    </section>
+
+    <!-- ============================ ASSISTANT ============================ -->
+    <section id="assistant">
+      <span class="eyebrow">For everyone</span>
+      <h2>The AI assistant</h2>
+      <p>Every signed-in user has an assistant that can do anything they're allowed to do — file a request, check a status, triage a queue, publish a release — using the exact same permission checks as the rest of the app. It's available in three places. The in-app panel and Slack share one conversation history (kept against your account); an MCP client keeps its own history on its side. All three enforce identical permissions.</p>
+
+      <figure>
+        <div class="frame">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div><span class="url">pulse · Assistant</span><span class="badge dc">Any role</span></div>
+          <img src="{{IMG:internal-05-assistant}}" alt="The Pulse screen with the Assistant panel open in the lower right, showing a notice that the assistant needs an API key to be set by an administrator." loading="lazy">
+        </div>
+        <figcaption>The floating <b>✦ Assistant</b> panel. It opens from the spark button in the corner; here it shows the exact notice you'll see until an administrator configures the assistant's API key.</figcaption>
+      </figure>
+
+      <div class="grid3">
+        <div class="card">
+          <h4 style="margin-top:0">In the app</h4>
+          <p class="small" style="margin:0">A floating panel on every page. Type a message, or use the <strong>🎤</strong> microphone to dictate (in supported browsers). Press <strong>Enter</strong> to send, <strong>Shift+Enter</strong> for a new line; an empty Enter after a question means “yes”.</p>
+        </div>
+        <div class="card">
+          <h4 style="margin-top:0">In Slack</h4>
+          <p class="small" style="margin:0">DM the <strong>pulse</strong> app (it replies inline) or @mention it in a channel (it replies in a thread). It identifies you by your Slack email — which must match your Pulse account — and shows an ⏳ reaction while it works.</p>
+        </div>
+        <div class="card">
+          <h4 style="margin-top:0">Over MCP</h4>
+          <p class="small" style="margin:0">Connect a compatible client (like Claude) to Pulse's MCP endpoint. A one-time browser sign-in authorizes it, then the same tools are available — still scoped to your permissions.</p>
+        </div>
+      </div>
+
+      <h3>What to ask it</h3>
+      <div class="grid2">
+        <div class="card" style="border-left:4px solid var(--cust)">
+          <span class="eyebrow cust" style="margin-bottom:8px">As a customer</span>
+          <ul class="small" style="margin:0;padding-left:1.1em">
+            <li>“Submit a request: exports to Excel time out for large orders”</li>
+            <li>“What's the status of <span class="chip cust">DCI-1051</span>?”</li>
+            <li>“Show me my open requests”</li>
+            <li>“Is there already an idea about export performance?”</li>
+            <li>“Follow <span class="chip cust">IDEA-318</span> and mark it as solving our need”</li>
+            <li>“What's on the roadmap for Next?”</li>
+          </ul>
+        </div>
+        <div class="card" style="border-left:4px solid var(--dc)">
+          <span class="eyebrow dc" style="margin-bottom:8px">As DataCentral staff</span>
+          <ul class="small" style="margin:0;padding-left:1.1em">
+            <li>“Show the triage queue for <span class="chip dc">ORG-014</span>, only Submitted”</li>
+            <li>“Link <span class="chip dc">DCI-1051</span> to <span class="chip dc">IDEA-318</span> as evidence”</li>
+            <li>”Score <span class=”chip dc”>IDEA-318</span>: impact 4, reach 3, urgency 5…”</li>
+            <li>“Merge <span class="chip dc">IDEA-322</span> into <span class="chip dc">IDEA-318</span>”</li>
+            <li>“Publish the customer wording for <span class="chip dc">IDEA-318</span>”</li>
+            <li>“How many open requests do we have, and our average first response?”</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout secure">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6l-8-4Z"/></svg>
+        <p><b>The assistant can't exceed your permissions.</b> In the app it only shows the tools your role allows; over MCP every tool is offered but the server re-checks each call. Either way the boundary is the same — ask it to do something outside your access and it answers exactly as the rest of the app does: <em>”That item doesn't exist or you don't have access to it.”</em> Destructive actions always ask you to confirm first.</p>
+      </div>
+    </section>
+
+    <!-- ============================ ARCHITECTURE ============================ -->
+    <section id="architecture">
+      <span class="eyebrow">Under the hood</span>
+      <h2>System architecture</h2>
+      <p>You don't need this section to use Pulse — but if you're evaluating, deploying, or integrating it, here's how the pieces fit. Pulse is a single Next.js application. One shared tool registry powers all three assistant surfaces, and every data path runs through the same permission layer.</p>
+
+      <div class="arch" aria-label="System architecture diagram">
+        <div class="arch-inner">
+          <div class="arch-lane">
+            <div class="lbl">Who connects</div>
+            <div class="arch-row">
+              <div class="box cust"><div class="t">Customer browser</div><div class="d">Embedded in DataCentral, or standalone</div></div>
+              <div class="box dc"><div class="t">DataCentral staff browser</div><div class="d">Standalone / Entra sign-in</div></div>
+              <div class="box"><div class="t">Slack</div><div class="d">DM &amp; @mention</div></div>
+              <div class="box"><div class="t">MCP client</div><div class="d">e.g. Claude</div></div>
+            </div>
+          </div>
+          <div class="arch-lane">
+            <div class="lbl">Entry &amp; auth</div>
+            <div class="arch-row">
+              <div class="box accent"><div class="t">Edge gate</div><div class="d">Page &amp; embed gate, CSP, CSRF, rate-limit</div></div>
+              <div class="box accent"><div class="t">Session &amp; identity</div><div class="d">12-hour signed cookie · Entra OIDC · DataCentral HMAC</div></div>
+              <div class="box accent"><div class="t">OAuth 2.1 server</div><div class="d">MCP authorization + discovery</div></div>
+            </div>
+          </div>
+          <div class="arch-lane">
+            <div class="lbl">The brain</div>
+            <div class="arch-row">
+              <div class="box"><div class="t">Web UI &amp; API</div><div class="d">Next.js app · REST endpoints</div></div>
+              <div class="box"><div class="t">Chat assistant service</div><div class="d">Anthropic tool loop</div></div>
+              <div class="box"><div class="t">Slack service</div><div class="d">Socket Mode</div></div>
+              <div class="box"><div class="t">MCP endpoint</div><div class="d">Stateless streamable HTTP</div></div>
+            </div>
+          </div>
+          <div class="arch-lane">
+            <div class="lbl">Shared core</div>
+            <div class="arch-row">
+              <div class="box accent" style="flex:2"><div class="t">One tool registry &amp; permission layer</div><div class="d">Every surface above calls the same 58 tools; membership &amp; role re-checked on every request</div></div>
+              <div class="box"><div class="t">Repositories</div><div class="d">Requests · ideas · releases · users…</div></div>
+            </div>
+          </div>
+          <div class="arch-lane">
+            <div class="lbl">Backing services</div>
+            <div class="arch-row">
+              <div class="box ext"><div class="t">Azure SQL</div><div class="d">System of record</div></div>
+              <div class="box ext"><div class="t">Blob storage</div><div class="d">Attachments</div></div>
+              <div class="box ext"><div class="t">Key Vault</div><div class="d">Secrets</div></div>
+              <div class="box ext"><div class="t">Microsoft Entra / Graph</div><div class="d">Sign-in</div></div>
+              <div class="box ext"><div class="t">Anthropic API</div><div class="d">Assistant model</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="small muted">A defining property: the assistant in the app, the Slack bot, and an MCP client are three doors into <em>the same</em> tool registry, and none of them can bypass the permission layer. Pulse runs as a single instance (the Slack connection and short-lived caches assume it), with <span class="nowrap">always-on</span> hosting.</p>
+
+      <h3>Connecting over MCP</h3>
+      <p>Pulse is its own OAuth 2.1 authorization server, so a client like Claude can connect securely without any shared secret. The flow reuses your normal Pulse sign-in for the human consent step.</p>
+      <div class="diagram">
+        <pre class="mermaid">
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    autonumber
+    participant C as MCP client
+    participant M as Pulse /mcp
+    participant O as Pulse OAuth server
+    participant U as You (browser)
+    C->>M: Connect (no token yet)
+    M-->>C: 401 + where to authorize
+    C->>O: Register, then open authorize URL
+    O->>U: Sign in &amp; consent (normal Pulse login)
+    U-->>O: Allow
+    O-->>C: Authorization code
+    C->>O: Exchange code for tokens
+    O-->>C: Access token (1h) + refresh token (60d)
+    C->>M: Call tools with the access token
+    M-->>C: Results — scoped to your permissions
+        </pre>
+        <div class="cap">Tokens are short-lived and rotate: a one-hour access token, a sixty-day refresh token, single-use authorization codes, and a ten-minute consent window. Every tool call re-verifies that your account is still active.</div>
+      </div>
+    </section>
+
+    <!-- ============================ REFERENCE ============================ -->
+    <section id="reference">
+      <span class="eyebrow">Reference</span>
+      <h2>Reference</h2>
+
+      <h3>Id formats</h3>
+      <div class="deflist">
+        <div class="row"><dt>DCI-####</dt><dd>A customer request, e.g. <span class="chip">DCI-1042</span>.</dd></div>
+        <div class="row"><dt>IDEA-###</dt><dd>A product idea, e.g. <span class="chip">IDEA-318</span>.</dd></div>
+        <div class="row"><dt>REL-###</dt><dd>A release that bundles shipped ideas.</dd></div>
+        <div class="row"><dt>ORG-###</dt><dd>A customer organization.</dd></div>
+      </div>
+
+      <h3>Assistant tools</h3>
+      <p>The assistant exposes <strong>58 tools</strong> in three groups. In the in-app chat you only see the groups your role allows; over MCP all tool definitions are exposed. Either way the real boundary is the server, which re-checks every call. Read tools fetch; write tools change data; a few destructive writes require explicit confirmation.</p>
+
+      <details class="tools">
+        <summary>Customer tools <span class="count">24 · everyone</span></summary>
+        <div class="tooltable">
+          <table><tbody>
+            <tr><td>get_me</td><td><span class="rw">read</span></td><td>Your identity, memberships, and active organization</td></tr>
+            <tr><td>list_my_requests</td><td><span class="rw">read</span></td><td>Your org's requests, optionally filtered by status</td></tr>
+            <tr><td>get_request</td><td><span class="rw">read</span></td><td>Full details &amp; history for one request</td></tr>
+            <tr><td>find_similar</td><td><span class="rw">read</span></td><td>Search ideas &amp; requests for duplicates (runs before submitting)</td></tr>
+            <tr><td>submit_request</td><td><span class="rw w">write</span></td><td>Create a new request</td></tr>
+            <tr><td>edit_request</td><td><span class="rw w">write</span></td><td>Edit your request while open</td></tr>
+            <tr><td>set_request_status</td><td><span class="rw w">write</span></td><td>Change status (customers may only Withdraw)</td></tr>
+            <tr><td>save_request_draft · get · discard</td><td><span class="rw w">write</span></td><td>Manage an in-progress draft</td></tr>
+            <tr><td>list_attachments</td><td><span class="rw">read</span></td><td>List a request's files (upload/download is UI-only)</td></tr>
+            <tr><td>list_comments · add · edit · remove</td><td><span class="rw w">write</span></td><td>Comment on a request</td></tr>
+            <tr><td>browse_ideas · get_idea</td><td><span class="rw">read</span></td><td>Explore published ideas</td></tr>
+            <tr><td>follow_idea</td><td><span class="rw w">write</span></td><td>Follow an idea; mark “solves my need”</td></tr>
+            <tr><td>view_roadmap · list_releases</td><td><span class="rw">read</span></td><td>The published roadmap and releases</td></tr>
+            <tr><td>list_notifications · mark_read · preferences</td><td><span class="rw w">write</span></td><td>Notifications and delivery cadence</td></tr>
+          </tbody></table>
+        </div>
+      </details>
+
+      <details class="tools">
+        <summary>Internal tools <span class="count">23 · DataCentral staff</span></summary>
+        <div class="tooltable">
+          <table><tbody>
+            <tr><td>list_triage_queue</td><td><span class="rw">read</span></td><td>Requests for an org, for triage</td></tr>
+            <tr><td>bulk_triage</td><td><span class="rw cf">confirm</span></td><td>Update owner/tags/due for up to 100 requests</td></tr>
+            <tr><td>list_internal_ideas</td><td><span class="rw">read</span></td><td>All ideas including unpublished</td></tr>
+            <tr><td>create_idea · update_idea</td><td><span class="rw w">write</span></td><td>Author internal ideas (editing published → Staged)</td></tr>
+            <tr><td>publish_idea</td><td><span class="rw cf">confirm</span></td><td>Publish customer-safe wording to the roadmap</td></tr>
+            <tr><td>link_request_to_idea · move_request_link</td><td><span class="rw w">write</span></td><td>Attach request evidence to ideas</td></tr>
+            <tr><td>merge_ideas</td><td><span class="rw cf">confirm</span></td><td>Merge a duplicate idea into a survivor</td></tr>
+            <tr><td>score_idea · place_on_roadmap</td><td><span class="rw w">write</span></td><td>Prioritize and set roadmap horizon</td></tr>
+            <tr><td>list · add · remove external_link</td><td><span class="rw w">write</span></td><td>Reference links on an idea</td></tr>
+            <tr><td>list_internal_releases · create_release</td><td><span class="rw w">write</span></td><td>Draft releases</td></tr>
+            <tr><td>publish_release</td><td><span class="rw cf">confirm</span></td><td>Publish a release; notifies followers</td></tr>
+            <tr><td>saved views (list · create · delete)</td><td><span class="rw w">write</span></td><td>Named filter sets</td></tr>
+            <tr><td>analytics_summary · export_requests_csv</td><td><span class="rw">read</span></td><td>Insight and export (preview only in chat)</td></tr>
+            <tr><td>search_audit_log</td><td><span class="rw">read</span></td><td>Audit events — System admin only</td></tr>
+          </tbody></table>
+        </div>
+      </details>
+
+      <details class="tools">
+        <summary>Admin tools <span class="count">11 · System admin</span></summary>
+        <div class="tooltable">
+          <table><tbody>
+            <tr><td>list_organizations · save_organization</td><td><span class="rw w">write</span></td><td>Manage customer organizations</td></tr>
+            <tr><td>list_users · save_user</td><td><span class="rw w">write</span></td><td>Manage identities &amp; memberships (full-replace)</td></tr>
+            <tr><td>list_taxonomy · save_taxonomy</td><td><span class="rw w">write</span></td><td>Product areas, request types, tags, themes</td></tr>
+            <tr><td>get_settings · save_settings</td><td><span class="rw w">write</span></td><td>Score weights, limits, retention, locale</td></tr>
+            <tr><td>list_webhooks · create · set_state</td><td><span class="rw w">write</span></td><td>Outbound webhook subscriptions</td></tr>
+          </tbody></table>
+        </div>
+      </details>
+
+      <h3>Glossary</h3>
+      <div class="deflist">
+        <div class="row"><dt>Membership</dt><dd>A link between one person and one organization, carrying a role. Access is evaluated per membership.</dd></div>
+        <div class="row"><dt>Product idea</dt><dd>A canonical record consolidating related requests from multiple customers, kept private per customer.</dd></div>
+        <div class="row"><dt>Horizon</dt><dd>A roadmap band — Now, Next, or Later — expressing current delivery intent.</dd></div>
+        <div class="row"><dt>Triage</dt><dd>Classifying an incoming request into the right next step.</dd></div>
+        <div class="row"><dt>Anti-enumeration</dt><dd>Returning “not found” for both forbidden and non-existent items, so records can't be probed.</dd></div>
+        <div class="row"><dt>MCP</dt><dd>The protocol that lets an external AI client use Pulse's tools securely, under your permissions.</dd></div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <div class="wrap">
+        <span>DataCentral Pulse — user guide. Screens captured from the live application.</span>
+        <span><a href="#top">Back to top ↑</a></span>
+      </div>
+    </footer>
+
+  </main>
+</div>
