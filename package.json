@@ -15,6 +15,7 @@
     "test": "npm run typecheck && node --import tsx --test --test-concurrency=1 tests/domain.test.mjs tests/openapi.test.mjs tests/workflow.test.ts tests/dc-auth.test.ts tests/chat.test.ts tests/mrkdwn.test.ts tests/mcp-oauth.test.ts tests/tours.test.ts",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "eslint app lib --ignore-pattern .next",
+    "help:screenshots": "node scripts/capture-help-screenshots.mjs",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {
@@ -47,6 +48,7 @@
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "playwright": "^1.61.1",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "tsx": "^4.23.1",

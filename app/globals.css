@@ -140,3 +140,5 @@ h1,h2,h3,p{margin:0}h1,h2,h3{font-family:var(--font-heading)}
 @media print{.tour-host{display:none}}
 @media(max-width:1100px){.tour-progress-head,.tour-progress-row{grid-template-columns:minmax(120px,1.3fr) minmax(100px,1fr) 100px 50px 90px}.tour-progress-head span:last-child,.tour-progress-row>span:last-child{display:none}}
 @media(max-width:780px){.tour-host{left:14px;bottom:14px}.tour-menu{width:min(270px,calc(100vw - 28px))}.tour-progress-head,.tour-progress-row{grid-template-columns:1.3fr 1fr 100px}.tour-progress-head span:nth-child(n+4),.tour-progress-row>span:nth-child(n+4){display:none}}
+a.nav-item{text-decoration:none;color:inherit}
+a.tour-menu-item{text-decoration:none;color:inherit}

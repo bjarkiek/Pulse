@@ -191,6 +191,40 @@ async function getTourAccess(
   };
 }
 
+// ---------- help manual (the /help pages are generated from the catalog) ----------
+
+export type HelpChapter = {
+  def: (typeof TOUR_CATALOG)[number];
+  audience: TourAudience;
+};
+
+// Chapters the user is allowed to read, split by manual. Deliberately ignores
+// the master switch, per-tour enabled flags and the per-user opt-out: the
+// manual must stay reachable even when live tours are off — but audience
+// gating still applies so customers never receive internal/admin content.
+export async function getHelpData(identity: PulseIdentity) {
+  const access = await getTourAccess(identity);
+  if (!access) throw new Error("FORBIDDEN");
+  const settings = await getSettingRows();
+  const chapters: HelpChapter[] = TOUR_CATALOG.map((def) => ({
+    def,
+    audience:
+      settings.find((row) => row.tourKey === def.key)?.audience ??
+      def.defaultAudience,
+  })).filter(({ audience }) => audienceMatches(audience, access));
+  return {
+    locale: access.locale,
+    isInternal: access.isInternal,
+    isSystemAdmin: access.isSystemAdmin,
+    userChapters: chapters.filter(
+      ({ audience }) => audience === "All" || audience === "Customers",
+    ),
+    adminChapters: chapters.filter(
+      ({ audience }) => audience === "Internal" || audience === "SystemAdmins",
+    ),
+  };
+}
+
 // ---------- user-facing state ----------
 
 export async function getTourState(
@@ -302,8 +336,10 @@ export async function reportTourProgress(
         updatedAt: now,
       };
       rows.push(row);
-    } else if (row.version !== version) {
-      row.lastStepIndex = 0; // a new tour version starts over
+    } else if (row.version > version) {
+      return; // stale client from before a catalog version bump — ignore
+    } else if (row.version < version) {
+      row.lastStepIndex = 0; // a forward version bump starts over
       row.startedAt = now;
       row.completedAt = null;
     } else if (row.status === "Completed" && status !== "Completed") {
@@ -350,13 +386,13 @@ export async function reportTourProgress(
           );
         return;
       }
-      const row = existing.recordset[0];
-      if (
-        row.version === version &&
-        row.status === "Completed" &&
-        status !== "Completed"
-      )
-        return; // Completed never downgrades for the same version (§5.6.1)
+      // The invariants live in the UPDATE's WHERE clause so they are evaluated
+      // atomically against the row's current committed values — a plain
+      // SELECT-then-UPDATE would let a delayed InProgress report land after a
+      // concurrent Completed report and downgrade it (§5.6.1). The predicates:
+      // version<=@version ignores stale clients from before a catalog bump;
+      // the NOT(...) keeps Completed from downgrading within the same version
+      // (only a forward version bump resets a completed row).
       await pool
         .request()
         .input("userId", sql.UniqueIdentifier, identity.id)
@@ -368,14 +404,16 @@ export async function reportTourProgress(
         .input("source", sql.NVarChar(16), source)
         .query(
           `UPDATE dbo.TourProgress SET
-             last_step_index = CASE WHEN version<>@version THEN @stepIndex
+             last_step_index = CASE WHEN version<@version THEN @stepIndex
                WHEN last_step_index>@stepIndex THEN last_step_index ELSE @stepIndex END,
-             started_at = CASE WHEN version<>@version THEN SYSUTCDATETIME() ELSE started_at END,
+             started_at = CASE WHEN version<@version THEN SYSUTCDATETIME() ELSE started_at END,
              completed_at = CASE WHEN @status='Completed' THEN SYSUTCDATETIME()
-               WHEN version<>@version THEN NULL ELSE completed_at END,
+               WHEN version<@version THEN NULL ELSE completed_at END,
              version=@version, step_count=@stepCount, source=@source, status=@status,
              updated_at=SYSUTCDATETIME()
-           WHERE user_id=@userId AND tour_key=@key`,
+           WHERE user_id=@userId AND tour_key=@key
+             AND version<=@version
+             AND NOT (version=@version AND status='Completed' AND @status<>'Completed')`,
         );
       return;
     } catch (error) {

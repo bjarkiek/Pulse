@@ -252,6 +252,18 @@ export function TourHost({
               )}
             </button>
           ))}
+          <a
+            className="tour-menu-item tour-menu-manual"
+            role="menuitem"
+            href="/help"
+            target="_blank"
+            rel="noopener"
+          >
+            <span className="tour-menu-icon">📖</span>
+            <span className="tour-menu-label">
+              {is ? "Opna hjálpina (handbók)" : "Open the help pages"}
+            </span>
+          </a>
           <button
             type="button"
             className="tour-menu-hide"

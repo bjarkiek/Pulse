@@ -134,5 +134,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/:path*", "/", "/dc-embed", "/dc-auth", "/auth/:path*", "/mcp", "/oauth/:path*"],
+  matcher: ["/api/:path*", "/", "/help", "/dc-embed", "/dc-auth", "/auth/:path*", "/mcp", "/oauth/:path*"],
 };

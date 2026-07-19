@@ -181,6 +181,10 @@ export const TOUR_CATALOG: TourDefinition[] = [
       },
       {
         element: "[data-tour='composer-title']",
+        // "/compose" makes the glue reopen the composer modal, so resuming or
+        // deep-linking into steps 1-3 works even though the anchors live inside
+        // a conditionally-rendered dialog (effectiveRoute covers steps 2-3 too)
+        route: "/compose",
         title: { en: "Start with a short title", is: "Byrjaðu á stuttum titli" },
         description: {
           en: "As you type, Pulse suggests existing ideas — following one is often faster than filing a new request.",

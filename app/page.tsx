@@ -560,9 +560,17 @@ type IconName =
   | "building"
   | "send"
   | "link"
-  | "eye";
+  | "eye"
+  | "help";
 
 const iconPaths: Record<IconName, ReactNode> = {
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.4 9.2a2.6 2.6 0 1 1 3.6 2.4c-.7.3-1 .8-1 1.5v.6" />
+      <path d="M12 17h.01" />
+    </>
+  ),
   home: (
     <>
       <path d="M3 10.5 12 3l9 7.5" />
@@ -1066,6 +1074,16 @@ function AppShell() {
                 )}
             </button>
           ))}
+          <a
+            className="nav-item"
+            href="/help"
+            target="_blank"
+            rel="noopener"
+            data-tour="nav-help"
+          >
+            <Icon name="help" size={17} />
+            <span>Help</span>
+          </a>
           <div className="nav-section-label">DataCentral team</div>
           <button
             className={`nav-item ${page === "triage" ? "active" : ""}`}
@@ -1352,7 +1370,17 @@ function AppShell() {
         ready={identityReady}
         view={page}
         locale={meUser?.locale ?? "en"}
-        onNavigate={(next) => navigate(next as Page)}
+        onNavigate={(next) => {
+          // "compose" is a tour pseudo-view: the submit-request tour's later
+          // steps anchor inside the composer modal, so resuming them must
+          // reopen it (idempotent when it is already open)
+          if (next === "compose") {
+            navigate("home");
+            setComposerOpen(true);
+            return;
+          }
+          navigate(next as Page);
+        }}
       />
     </div>
   );
@@ -6179,40 +6207,55 @@ function OnboardingSettings({
   if (!data) return null;
 
   async function save(next: OnboardingAdminPayload) {
+    const previous = data;
     setSaving(true);
     setData(next);
-    const response = await fetch("/api/v1/admin/onboarding", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        enabled: next.enabled,
-        tours: next.settings.map(({ tourKey, enabled, audience, autoStart }) => ({
-          tourKey,
-          enabled,
-          audience,
-          autoStart,
-        })),
-      }),
-    });
-    const payload = await response.json();
-    setSaving(false);
-    if (!response.ok) {
-      onToast(
-        payload?.error?.message || "Onboarding settings could not be saved.",
-      );
-      return;
+    try {
+      const response = await fetch("/api/v1/admin/onboarding", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          enabled: next.enabled,
+          tours: next.settings.map(
+            ({ tourKey, enabled, audience, autoStart }) => ({
+              tourKey,
+              enabled,
+              audience,
+              autoStart,
+            }),
+          ),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setData(previous); // optimistic state must not survive a failed save
+        onToast(
+          payload?.error?.message || "Onboarding settings could not be saved.",
+        );
+        return;
+      }
+      setData(payload.item);
+      onToast("Onboarding settings saved and added to the audit trail.");
+    } catch {
+      setData(previous);
+      onToast("Onboarding settings could not be saved.");
+    } finally {
+      setSaving(false);
     }
-    setData(payload.item);
-    onToast("Onboarding settings saved and added to the audit trail.");
   }
 
   async function restore(user: OnboardingUserItem) {
-    const response = await fetch("/api/v1/admin/onboarding/restore", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: user.id }),
-    });
-    if (!response.ok) {
+    try {
+      const response = await fetch("/api/v1/admin/onboarding/restore", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: user.id }),
+      });
+      if (!response.ok) {
+        onToast("Tours could not be restored for this user.");
+        return;
+      }
+    } catch {
       onToast("Tours could not be restored for this user.");
       return;
     }
@@ -6231,12 +6274,21 @@ function OnboardingSettings({
   const hiddenUsers = data.users.filter((user) => user.toursHiddenAt);
   const gridRows = data.settings.flatMap((setting) => {
     if (filterTour && setting.tourKey !== filterTour) return [];
+    const progressByUser = new Map(
+      data.progress
+        .filter((item) => item.tourKey === setting.tourKey)
+        .map((item) => [item.userId, item]),
+    );
+    // audience-eligible users appear even without progress (Not started);
+    // users with real historical progress stay visible even after an admin
+    // narrows the tour's audience past them
     return data.users
-      .filter((user) => audienceMatches(setting.audience, user))
+      .filter(
+        (user) =>
+          audienceMatches(setting.audience, user) || progressByUser.has(user.id),
+      )
       .map((user) => {
-        const row = data.progress.find(
-          (item) => item.userId === user.id && item.tourKey === setting.tourKey,
-        );
+        const row = progressByUser.get(user.id);
         return { setting, user, row, status: row?.status ?? "NotStarted" };
       })
       .filter((entry) => !filterStatus || entry.status === filterStatus);
@@ -6258,7 +6310,11 @@ function OnboardingSettings({
                 off, nobody sees tours or the ? help menu — regardless of the
                 per-tour settings below. In DataCentral embeds, tours are
                 additionally only active for users whose launch carries the
-                &ldquo;Onboard&rdquo; role.
+                &ldquo;Onboard&rdquo; role.{" "}
+                <a href="/help#admin" target="_blank" rel="noopener">
+                  Open the admin manual
+                </a>
+                .
               </p>
             </div>
           </header>

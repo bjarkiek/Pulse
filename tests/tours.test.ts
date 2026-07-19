@@ -2,9 +2,14 @@ import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import type { PulseIdentity } from "../lib/domain";
-import { readSession, SESSION_COOKIE } from "../lib/server/session";
+import {
+  createSessionToken,
+  readSession,
+  SESSION_COOKIE,
+} from "../lib/server/session";
 import { getIdentity } from "../lib/server/auth";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
+import { GET as helpGet } from "../app/help/route";
 import {
   getOnboardingAdmin,
   getOnboardingEnabled,
@@ -145,6 +150,28 @@ test("progress: resume position tracks the furthest step and terminal statuses s
   assert.equal(welcome?.status, "Completed");
 });
 
+test("progress: stale lower-version reports are ignored; only a forward bump resets", async () => {
+  await reportTourProgress(CUSTOMER, {
+    key: "welcome", version: 2, stepIndex: 8, stepCount: 9, status: "Completed",
+  });
+  // a delayed report from a client still holding version 1 must not touch the row
+  await reportTourProgress(CUSTOMER, {
+    key: "welcome", version: 1, stepIndex: 0, stepCount: 9, status: "InProgress",
+  });
+  let row = globalThis.pulseMemoryTourProgress?.find((r) => r.tourKey === "welcome");
+  assert.equal(row?.version, 2);
+  assert.equal(row?.status, "Completed");
+  // a forward version bump legitimately starts the tour over
+  await reportTourProgress(CUSTOMER, {
+    key: "welcome", version: 3, stepIndex: 1, stepCount: 9, status: "InProgress",
+  });
+  row = globalThis.pulseMemoryTourProgress?.find((r) => r.tourKey === "welcome");
+  assert.equal(row?.version, 3);
+  assert.equal(row?.status, "InProgress");
+  assert.equal(row?.lastStepIndex, 1);
+  assert.equal(row?.completedAt, null);
+});
+
 test("progress: unknown keys are ignored, malformed reports rejected", async () => {
   await reportTourProgress(CUSTOMER, {
     key: "not-a-tour", version: 1, stepIndex: 0, stepCount: 3, status: "InProgress",
@@ -189,6 +216,46 @@ test("admin payload is System-admin only and scopes stats data", async () => {
     1,
   );
   assert.equal(admin.progress[0].source, "standalone");
+});
+
+test("/help shows the admin manual to the demo System admin, in the requested language", async () => {
+  // memory mode, no cookie → demo System-admin identity
+  const response = await helpGet(new Request("http://localhost/help"));
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.ok(html.includes('id="admin"'));
+  assert.ok(html.includes('id="team-workspace"'));
+  assert.ok(html.includes('id="admin-settings"'));
+  assert.ok(html.includes('id="welcome"'));
+  const icelandic = await (
+    await helpGet(new Request("http://localhost/help?lang=is"))
+  ).text();
+  assert.ok(icelandic.includes("Notendahandbók"));
+});
+
+test("/help never serves admin chapters to a customer session", async () => {
+  // a session cookie yields a customer-shaped identity in memory mode
+  // (role "Unknown", isInternal false) — the admin manual must be absent
+  const token = await createSessionToken({
+    sub: CUSTOMER.id,
+    email: CUSTOMER.email,
+    name: CUSTOMER.name,
+    ext: "dev:test",
+    amr: "entra",
+  });
+  const response = await helpGet(
+    new Request("http://localhost/help", {
+      headers: { cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}` },
+    }),
+  );
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.ok(html.includes('id="welcome"'));
+  assert.ok(html.includes('id="submit-request"'));
+  assert.ok(!html.includes('id="admin"'));
+  assert.ok(!html.includes('id="team-workspace"'));
+  assert.ok(!html.includes('id="admin-settings"'));
+  assert.ok(!html.includes("Triage inbox")); // no internal tour content leaks
 });
 
 test("dc-auth stamps dc_onboard only when the launch carries the Onboard role", async () => {
