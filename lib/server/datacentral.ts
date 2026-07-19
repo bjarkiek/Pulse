@@ -1,5 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+// DataCentral role display-name that activates onboarding tours for embedded
+// sessions (DataCentralEmbedOnboardingTours.md §7). Assigned in DataCentral,
+// carried in the signed launch payload's roleDisplayNames.
+export const DC_ONBOARD_ROLE = "Onboard";
+
 export type DataCentralLaunch = {
   userId: number; userName: string; userDisplayName: string; userEmail?: string;
   tenancyName: string; tenantId: number;

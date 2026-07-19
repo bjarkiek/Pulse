@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { readSession } from "@/lib/server/session";
-import { verifyDcLaunch } from "@/lib/server/datacentral";
+import { verifyDcLaunch, DC_ONBOARD_ROLE } from "@/lib/server/datacentral";
 import { resolveUserForDcLaunch } from "@/lib/server/user-directory";
 import { isAzureSqlConfigured } from "@/lib/server/database";
 
@@ -50,6 +50,7 @@ export async function getIdentity(request: Request): Promise<PulseIdentity> {
       role: "Unknown",
       isInternal: false,
       dcEmbed: Boolean(session.dc_embed),
+      dcOnboard: Boolean(session.dc_onboard),
       authMethod: session.amr,
       isVerified: true,
     };
@@ -89,6 +90,7 @@ export async function getIdentity(request: Request): Promise<PulseIdentity> {
           role: "Unknown",
           isInternal: false,
           dcEmbed: true,
+          dcOnboard: launch.roleDisplayNames?.includes(DC_ONBOARD_ROLE) ?? false,
           authMethod: "dc-hmac",
           isVerified: true,
         };

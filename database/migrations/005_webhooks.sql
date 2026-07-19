@@ -1,6 +1,12 @@
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 
+-- Guarded so a retried deploy (after a transient failure in a later GO batch of
+-- this file) does not fail on "object already exists". Batch 1 is atomic, so a
+-- single existence check covers all objects created here.
+IF OBJECT_ID('dbo.WebhookSubscriptions','U') IS NULL
+BEGIN
+
 CREATE TABLE dbo.WebhookSubscriptions (
   id uniqueidentifier NOT NULL PRIMARY KEY,
   url nvarchar(2000) NOT NULL,
@@ -31,10 +37,12 @@ CREATE INDEX IX_WebhookDeliveries_Work
   ON dbo.WebhookDeliveries(state,next_attempt_at,created_at)
   INCLUDE(subscription_id,event_type,attempt_count);
 
+END
+
 COMMIT TRANSACTION;
 GO
 
-CREATE TRIGGER dbo.TR_AuditEvents_WebhookOutbox ON dbo.AuditEvents
+CREATE OR ALTER TRIGGER dbo.TR_AuditEvents_WebhookOutbox ON dbo.AuditEvents
 AFTER INSERT AS
 BEGIN
   SET NOCOUNT ON;

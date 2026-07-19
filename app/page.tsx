@@ -4,6 +4,14 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import { ChatPanel } from "./chat-panel";
+import { TourHost } from "./tour-host";
+import {
+  audienceMatches,
+  TOUR_AUDIENCES,
+  type OnboardingAdminPayload,
+  type OnboardingUserItem,
+  type TourAudience,
+} from "@/lib/tours";
 
 function mutationHeaders(json = true) {
   return {
@@ -713,6 +721,7 @@ function Button({
   type = "button",
   className = "",
   disabled = false,
+  dataTour,
 }: {
   children: ReactNode;
   variant?: "primary" | "secondary" | "ghost";
@@ -721,6 +730,7 @@ function Button({
   type?: "button" | "submit";
   className?: string;
   disabled?: boolean;
+  dataTour?: string;
 }) {
   return (
     <button
@@ -728,6 +738,7 @@ function Button({
       disabled={disabled}
       onClick={onClick}
       className={`button button-${variant} ${className}`}
+      data-tour={dataTour}
     >
       {icon && <Icon name={icon} size={16} />}
       {children}
@@ -1034,7 +1045,7 @@ function AppShell() {
           />
           <span>Pulse</span>
         </div>
-        <nav className="nav" aria-label="Primary navigation">
+        <nav className="nav" aria-label="Primary navigation" data-tour="nav">
           {navItems.map((item) => (
             <button
               key={item.id}
@@ -1059,6 +1070,7 @@ function AppShell() {
           <button
             className={`nav-item ${page === "triage" ? "active" : ""}`}
             onClick={() => navigate("triage")}
+            data-tour="nav-triage"
           >
             <Icon name="layers" size={17} />
             <span>Triage inbox</span>
@@ -1067,6 +1079,7 @@ function AppShell() {
           <button
             className={`nav-item ${page === "productIdeas" ? "active" : ""}`}
             onClick={() => navigate("productIdeas")}
+            data-tour="nav-product-ideas"
           >
             <Icon name="spark" size={17} />
             <span>Product ideas</span>
@@ -1074,6 +1087,7 @@ function AppShell() {
           <button
             className={`nav-item ${page === "releases" ? "active" : ""}`}
             onClick={() => navigate("releases")}
+            data-tour="nav-releases"
           >
             <Icon name="check" size={17} />
             <span>Releases</span>
@@ -1081,6 +1095,7 @@ function AppShell() {
           <button
             className={`nav-item ${page === "analytics" ? "active" : ""}`}
             onClick={() => navigate("analytics")}
+            data-tour="nav-analytics"
           >
             <Icon name="map" size={17} />
             <span>Analytics</span>
@@ -1109,6 +1124,7 @@ function AppShell() {
           <button
             className={`nav-item ${page === "settings" ? "active" : ""}`}
             onClick={() => navigate("settings")}
+            data-tour="nav-settings"
           >
             <Icon name="settings" size={17} />
             <span>Settings</span>
@@ -1164,12 +1180,17 @@ function AppShell() {
             <button
               className="icon-button notification-button"
               aria-label="Notifications"
+              data-tour="notifications"
               onClick={() => setNotificationsOpen(!notificationsOpen)}
             >
               <Icon name="bell" />
               <span />
             </button>
-            <Button icon="plus" onClick={() => setComposerOpen(true)}>
+            <Button
+              icon="plus"
+              dataTour="submit-request"
+              onClick={() => setComposerOpen(true)}
+            >
               Submit a request
             </Button>
           </div>
@@ -1327,6 +1348,12 @@ function AppShell() {
         locale={meUser?.locale ?? "en"}
         onDataChanged={() => setDataVersion((v) => v + 1)}
       />
+      <TourHost
+        ready={identityReady}
+        view={page}
+        locale={meUser?.locale ?? "en"}
+        onNavigate={(next) => navigate(next as Page)}
+      />
     </div>
   );
 }
@@ -1375,7 +1402,7 @@ function HomePage({
         </div>
       </section>
 
-      <section className="ask-card">
+      <section className="ask-card" data-tour="ask-card">
         <div className="ask-copy">
           <div className="ask-icon">
             <Icon name="spark" size={22} />
@@ -1413,7 +1440,7 @@ function HomePage({
         )}
       </section>
 
-      <section className="metric-grid">
+      <section className="metric-grid" data-tour="metrics">
         <button className="metric-card" onClick={() => onNavigate("requests")}>
           <div className="metric-icon">
             <Icon name="inbox" />
@@ -1463,7 +1490,7 @@ function HomePage({
       </section>
 
       <section className="home-grid">
-        <div className="panel">
+        <div className="panel" data-tour="your-requests">
           <div className="panel-header">
             <div>
               <h3>Your requests</h3>
@@ -2237,7 +2264,7 @@ function TriagePage({
           </span>
         </div>
       </div>
-      <div className="triage-workspace">
+      <div className="triage-workspace" data-tour="triage-inbox">
         <aside className="triage-queue">
           <div className="queue-toolbar">
             <div className="search-input">
@@ -2743,7 +2770,7 @@ function RequestComposer({
           </button>
         </header>
         <form onSubmit={submit}>
-          <label className="form-field">
+          <label className="form-field" data-tour="composer-title">
             <span>
               Short title <em>Required</em>
             </span>
@@ -2838,7 +2865,7 @@ function RequestComposer({
               </button>
             </div>
           )}
-          <label className="form-field">
+          <label className="form-field" data-tour="composer-problem">
             <span>
               Problem or desired outcome <em>Required</em>
             </span>
@@ -3023,6 +3050,7 @@ function RequestComposer({
               <Button
                 type="submit"
                 icon="send"
+                dataTour="composer-submit"
                 disabled={!title.trim() || !problem.trim() || submitting}
               >
                 {submitting ? "Submitting…" : "Submit request"}
@@ -6112,7 +6140,351 @@ function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
           </Button>
         </article>
       </section>
+      <OnboardingSettings onToast={onToast} />
     </div>
+  );
+}
+
+const AUDIENCE_LABELS: Record<TourAudience, string> = {
+  All: "Everyone",
+  Customers: "Customers only",
+  Internal: "DataCentral team",
+  SystemAdmins: "System admins",
+};
+
+const TOUR_STATUS_FILTERS = [
+  ["NotStarted", "Not started"],
+  ["InProgress", "In progress"],
+  ["Completed", "Completed"],
+  ["Dismissed", "Dismissed"],
+] as const;
+
+function OnboardingSettings({
+  onToast,
+}: {
+  onToast: (message: string) => void;
+}) {
+  const [data, setData] = useState<OnboardingAdminPayload | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [filterTour, setFilterTour] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  useEffect(() => {
+    fetch("/api/v1/admin/onboarding")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => payload && setData(payload.item))
+      .catch(() => undefined);
+  }, []);
+  // Non-System-admins get a 404 from the endpoint above, so the whole
+  // onboarding block simply never renders for them.
+  if (!data) return null;
+
+  async function save(next: OnboardingAdminPayload) {
+    setSaving(true);
+    setData(next);
+    const response = await fetch("/api/v1/admin/onboarding", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        enabled: next.enabled,
+        tours: next.settings.map(({ tourKey, enabled, audience, autoStart }) => ({
+          tourKey,
+          enabled,
+          audience,
+          autoStart,
+        })),
+      }),
+    });
+    const payload = await response.json();
+    setSaving(false);
+    if (!response.ok) {
+      onToast(
+        payload?.error?.message || "Onboarding settings could not be saved.",
+      );
+      return;
+    }
+    setData(payload.item);
+    onToast("Onboarding settings saved and added to the audit trail.");
+  }
+
+  async function restore(user: OnboardingUserItem) {
+    const response = await fetch("/api/v1/admin/onboarding/restore", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: user.id }),
+    });
+    if (!response.ok) {
+      onToast("Tours could not be restored for this user.");
+      return;
+    }
+    setData(
+      (current) =>
+        current && {
+          ...current,
+          users: current.users.map((item) =>
+            item.id === user.id ? { ...item, toursHiddenAt: null } : item,
+          ),
+        },
+    );
+    onToast(`Tours restored for ${user.name}.`);
+  }
+
+  const hiddenUsers = data.users.filter((user) => user.toursHiddenAt);
+  const gridRows = data.settings.flatMap((setting) => {
+    if (filterTour && setting.tourKey !== filterTour) return [];
+    return data.users
+      .filter((user) => audienceMatches(setting.audience, user))
+      .map((user) => {
+        const row = data.progress.find(
+          (item) => item.userId === user.id && item.tourKey === setting.tourKey,
+        );
+        return { setting, user, row, status: row?.status ?? "NotStarted" };
+      })
+      .filter((entry) => !filterStatus || entry.status === filterStatus);
+  });
+
+  return (
+    <>
+      <section className="settings-grid onboarding-settings">
+        <article
+          className={`settings-card onboarding-card ${data.enabled ? "" : "onboarding-off"}`}
+          data-tour="settings-onboarding"
+        >
+          <header>
+            <Icon name="map" size={19} />
+            <div>
+              <h3>Onboarding tours</h3>
+              <p>
+                Guided walkthroughs for new users. When the master switch is
+                off, nobody sees tours or the ? help menu — regardless of the
+                per-tour settings below. In DataCentral embeds, tours are
+                additionally only active for users whose launch carries the
+                &ldquo;Onboard&rdquo; role.
+              </p>
+            </div>
+          </header>
+          <label className="onboarding-master">
+            <input
+              type="checkbox"
+              checked={data.enabled}
+              disabled={saving}
+              onChange={(event) =>
+                save({ ...data, enabled: event.target.checked })
+              }
+            />
+            <strong>Onboarding enabled (master switch)</strong>
+          </label>
+          <div className="onboarding-tour-list">
+            {data.settings.map((setting) => {
+              const eligible = data.users.filter((user) =>
+                audienceMatches(setting.audience, user),
+              );
+              const eligibleIds = new Set(eligible.map((user) => user.id));
+              // funnel counts scoped to the tour's *current* audience so
+              // completion percentages cannot exceed 100%
+              const rows = data.progress.filter(
+                (item) =>
+                  item.tourKey === setting.tourKey &&
+                  eligibleIds.has(item.userId),
+              );
+              const completed = rows.filter(
+                (item) => item.status === "Completed",
+              ).length;
+              return (
+                <div className="onboarding-tour-row" key={setting.tourKey}>
+                  <div className="onboarding-tour-head">
+                    <strong>{setting.title}</strong>
+                    <code>
+                      {setting.tourKey} · v{setting.version} ·{" "}
+                      {setting.stepCount} steps
+                    </code>
+                  </div>
+                  <p className="onboarding-tour-stats">
+                    {eligible.length} eligible · {rows.length} started ·{" "}
+                    {completed} completed ·{" "}
+                    {rows.filter((item) => item.status === "Dismissed").length}{" "}
+                    dismissed
+                    {eligible.length > 0 && (
+                      <strong>
+                        {" "}
+                        ({Math.round((100 * completed) / eligible.length)}%)
+                      </strong>
+                    )}
+                  </p>
+                  <div className="onboarding-tour-controls">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={setting.enabled}
+                        disabled={saving}
+                        onChange={(event) =>
+                          save({
+                            ...data,
+                            settings: data.settings.map((item) =>
+                              item.tourKey === setting.tourKey
+                                ? { ...item, enabled: event.target.checked }
+                                : item,
+                            ),
+                          })
+                        }
+                      />
+                      Enabled
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={setting.autoStart}
+                        disabled={saving}
+                        onChange={(event) =>
+                          save({
+                            ...data,
+                            settings: data.settings.map((item) =>
+                              item.tourKey === setting.tourKey
+                                ? { ...item, autoStart: event.target.checked }
+                                : item,
+                            ),
+                          })
+                        }
+                      />
+                      Auto-start
+                    </label>
+                    <select
+                      value={setting.audience}
+                      disabled={saving}
+                      aria-label={`${setting.title} audience`}
+                      onChange={(event) =>
+                        save({
+                          ...data,
+                          settings: data.settings.map((item) =>
+                            item.tourKey === setting.tourKey
+                              ? {
+                                  ...item,
+                                  audience: event.target.value as TourAudience,
+                                }
+                              : item,
+                          ),
+                        })
+                      }
+                    >
+                      {TOUR_AUDIENCES.map((audience) => (
+                        <option key={audience} value={audience}>
+                          {AUDIENCE_LABELS[audience]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </article>
+      </section>
+      <section
+        className="panel tour-progress-panel"
+        data-tour="onboarding-progress"
+      >
+        <div className="panel-header">
+          <div>
+            <h3>Tour progress by user</h3>
+            <p>Who started what, how far they got, and where.</p>
+          </div>
+          <div className="tour-progress-filters">
+            <select
+              value={filterTour}
+              aria-label="Filter by tour"
+              onChange={(event) => setFilterTour(event.target.value)}
+            >
+              <option value="">All tours</option>
+              {data.settings.map((setting) => (
+                <option key={setting.tourKey} value={setting.tourKey}>
+                  {setting.title}
+                </option>
+              ))}
+            </select>
+            <select
+              value={filterStatus}
+              aria-label="Filter by status"
+              onChange={(event) => setFilterStatus(event.target.value)}
+            >
+              <option value="">All statuses</option>
+              {TOUR_STATUS_FILTERS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {hiddenUsers.length > 0 && (
+          <div className="tour-hidden-row">
+            <span>
+              {hiddenUsers.length === 1
+                ? "1 user has hidden tours forever:"
+                : `${hiddenUsers.length} users have hidden tours forever:`}
+            </span>
+            {hiddenUsers.map((user) => (
+              <button
+                type="button"
+                key={user.id}
+                onClick={() => restore(user)}
+                title="Bring tours and the help menu back for this user"
+              >
+                {user.name} · Restore
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="tour-progress-table">
+          <div className="tour-progress-head">
+            <span>User</span>
+            <span>Tour</span>
+            <span>Status</span>
+            <span>Step</span>
+            <span>Where</span>
+            <span>Updated</span>
+          </div>
+          {gridRows.map(({ setting, user, row, status }) => (
+            <div
+              className="tour-progress-row"
+              key={`${setting.tourKey}:${user.id}`}
+            >
+              <span className="tour-progress-user">
+                {user.name}
+                {user.toursHiddenAt && <em>hidden</em>}
+              </span>
+              <span>{setting.title}</span>
+              <span>
+                {status === "Completed" && (
+                  <Status tone="success">Completed</Status>
+                )}
+                {status === "InProgress" && (
+                  <Status tone="violet">In progress</Status>
+                )}
+                {status === "Dismissed" && (
+                  <Status tone="warning">Dismissed</Status>
+                )}
+                {status === "NotStarted" && (
+                  <Status tone="neutral">Not started</Status>
+                )}
+              </span>
+              <span>
+                {row ? `${row.lastStepIndex + 1}/${row.stepCount}` : "—"}
+              </span>
+              <span>
+                {row ? (row.source === "embed" ? "DataCentral" : "Standalone") : "—"}
+              </span>
+              <span>
+                {row ? row.updatedAt.slice(0, 16).replace("T", " ") : "—"}
+              </span>
+            </div>
+          ))}
+          {gridRows.length === 0 && (
+            <div className="tour-progress-empty">
+              No users match the current filters.
+            </div>
+          )}
+        </div>
+      </section>
+    </>
   );
 }
 

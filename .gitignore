@@ -42,3 +42,6 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# Azure deploy environment facts written by infra/provision.ps1 (names/URLs, no secrets)
+infra/azure-env.*.json

@@ -233,6 +233,7 @@ export function ChatPanel(props: {
       <button
         type="button"
         className="chat-launcher no-print"
+        data-tour="assistant"
         aria-expanded={open}
         aria-label={open ? "Close assistant" : "Open assistant"}
         onClick={() => setOpen((value) => !value)}

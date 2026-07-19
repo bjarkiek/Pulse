@@ -1,4 +1,4 @@
-import { verifyDcLaunch, checkDcSession } from "@/lib/server/datacentral";
+import { verifyDcLaunch, checkDcSession, DC_ONBOARD_ROLE } from "@/lib/server/datacentral";
 import { validateGraphToken } from "@/lib/server/graph-validate";
 import { resolveUserForDcLaunch, resolveUserForEntra } from "@/lib/server/user-directory";
 import { createSessionToken, sessionSetCookie } from "@/lib/server/session";
@@ -51,6 +51,9 @@ export async function POST(request: Request): Promise<Response> {
     const token = await createSessionToken({
       sub: user.id, email: user.email, name: user.name,
       ext: user.externalSubject ?? `dc:${launch.userId}`, amr: "dc-hmac", dc_embed: true,
+      // Embedded sessions only get onboarding tours when the signed launch
+      // carried the DataCentral "Onboard" role (DataCentralEmbedOnboardingTours.md §7).
+      ...(launch.roleDisplayNames?.includes(DC_ONBOARD_ROLE) ? { dc_onboard: true as const } : {}),
     });
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
