@@ -70,6 +70,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Render UTF-8 in this console so any non-ASCII in az output/errors displays
+# correctly. (Unlike deploy.ps1 this script doesn't stream `az acr build` logs,
+# so it never hits the `▲`/cp1252 crash that needs the `-X utf8` workaround.)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -78,9 +83,13 @@ function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Gray }
 
 function Invoke-Az {
   # Runs `az` and throws on non-zero exit. Returns raw stdout (usually JSON).
-  param([Parameter(ValueFromRemainingArguments)][string[]]$AzArgs)
-  $out = & az @AzArgs
-  if ($LASTEXITCODE -ne 0) { throw "az $($AzArgs -join ' ') failed (exit $LASTEXITCODE)" }
+  # Deliberately a *simple* function using the automatic $args array rather than
+  # an advanced one with [Parameter(ValueFromRemainingArguments)]: an advanced
+  # function inherits the common parameters, so a leading `-o` (as in `-o json`)
+  # is treated as an ambiguous prefix of -OutVariable/-OutBuffer and the call
+  # fails before the args ever reach az. A simple function has no such params.
+  $out = & az @args
+  if ($LASTEXITCODE -ne 0) { throw "az $($args -join ' ') failed (exit $LASTEXITCODE)" }
   return $out
 }
 

@@ -33,6 +33,22 @@ export function verifyDcLaunch(dcdata: string, dcsig: string): DataCentralLaunch
   }
 }
 
+// Replay bound: an HMAC signature never expires on its own, and the dcdata/dcsig
+// pair is visible in the iframe URL — so a signed launch must be recent to count.
+// Window is DC_LAUNCH_MAX_AGE_MINUTES (default 60; 0 or negative disables the
+// check as an operational escape hatch). Small negative ages tolerate clock skew;
+// an unparseable timestamp fails closed.
+const LAUNCH_SKEW_MS = 5 * 60 * 1000;
+
+export function isLaunchFresh(launch: DataCentralLaunch): boolean {
+  const maxAgeMinutes = Number(process.env.DC_LAUNCH_MAX_AGE_MINUTES ?? "60");
+  if (!Number.isFinite(maxAgeMinutes) || maxAgeMinutes <= 0) return true;
+  const issued = Date.parse(launch.timeStamp);
+  if (Number.isNaN(issued)) return false;
+  const age = Date.now() - issued;
+  return age <= maxAgeMinutes * 60 * 1000 && age >= -LAUNCH_SKEW_MS;
+}
+
 // Optional hardening: confirm the live DataCentral session using the forwarded
 // accessToken. Controlled by DC_SESSION_CHECK: "off" | "when-available" (default).
 export async function checkDcSession(

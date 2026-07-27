@@ -46,12 +46,49 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Render UTF-8 in this console so the streamed build logs (which include the
+# `▲ Next.js` banner from `next build`) display correctly rather than as mojibake.
+# NB: this does NOT by itself stop the Azure CLI from crashing on that banner —
+# az runs an *isolated* Python (`python -IBm azure.cli`) that ignores
+# PYTHONIOENCODING/PYTHONUTF8, so a cp1252 stdout still throws
+# `UnicodeEncodeError: 'charmap' codec can't encode character '▲'`. The actual
+# crash-fix is invoking az with the `-X utf8` interpreter flag at the build step.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
 function Write-Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Gray }
+function Get-AzBundledPython {
+  # The MSI-installed az on Windows is `<install>\wbin\az.cmd` → `<install>\python.exe
+  # -IBm azure.cli`. Return that python.exe so we can invoke the CLI as a NATIVE
+  # process instead of through az.cmd. That matters twice:
+  #   1. It lets us pass `-X utf8` to force UTF-8 output past az's isolated Python
+  #      (so streamed `az acr build` logs containing `▲` don't crash it), and
+  #   2. it avoids cmd.exe, whose metacharacter parsing otherwise mangles any
+  #      argument containing `|` — e.g. `--linux-fx-version DOCKER|<image>`, where
+  #      the `|` is read as a shell pipe ("... is not recognized as a command").
+  # Returns $null for non-MSI layouts (pip/venv); callers fall back to `az`.
+  $src = (Get-Command az -ErrorAction SilentlyContinue).Source
+  if (-not $src) { return $null }
+  $py = Join-Path (Split-Path -Parent (Split-Path -Parent $src)) 'python.exe'
+  if (Test-Path $py) { return $py }
+  return $null
+}
+
+# Resolve az's bundled Python once. When present, every az call runs through it
+# as a native process (see Get-AzBundledPython); when absent, fall back to the
+# `az` launcher on PATH.
+$script:AzPython = Get-AzBundledPython
+if ($script:AzPython) { $env:AZ_INSTALLER = 'MSI' }
+
 function Invoke-Az {
-  param([Parameter(ValueFromRemainingArguments)][string[]]$AzArgs)
-  $out = & az @AzArgs
-  if ($LASTEXITCODE -ne 0) { throw "az $($AzArgs -join ' ') failed (exit $LASTEXITCODE)" }
+  # Run az and throw on non-zero exit; returns raw stdout (usually JSON). Uses the
+  # automatic $args array on purpose — a simple function, not an advanced one:
+  # an advanced function ([Parameter(ValueFromRemainingArguments)]) inherits the
+  # common parameters, so a leading `-o` (e.g. `-o tsv`) would be read as an
+  # ambiguous prefix of -OutVariable/-OutBuffer and fail before reaching az.
+  if ($script:AzPython) { $out = & $script:AzPython -I -X utf8 -B -m azure.cli @args }
+  else                  { $out = & az @args }
+  if ($LASTEXITCODE -ne 0) { throw "az $($args -join ' ') failed (exit $LASTEXITCODE)" }
   return $out
 }
 
@@ -113,12 +150,40 @@ $image = "$acrLoginServer/pulse:$Tag"
 # Build the image in ACR (cloud build from the Dockerfile — no local Docker)
 # ---------------------------------------------------------------------------
 Write-Step "Building image in ACR  (pulse:$Tag)"
-Invoke-Az acr build `
-  --registry $acrName `
-  --image "pulse:$Tag" `
-  --image 'pulse:latest' `
-  --file 'Dockerfile' `
+$buildArgs = @(
+  'acr', 'build',
+  '--registry', $acrName,
+  '--image', "pulse:$Tag",
+  '--image', 'pulse:latest',
+  '--file', 'Dockerfile',
   $repoRoot
+)
+# `az acr build` streams the cloud build logs, which contain the `▲ Next.js`
+# banner. az's isolated Python defaults its stdout to cp1252 on Windows and
+# crashes trying to write `▲`. Run az's own interpreter with `-X utf8` (the one
+# override isolated mode honours) so the logs stream through as UTF-8. Unlike
+# Invoke-Az this does NOT capture stdout, so build progress prints live.
+# Run from the repo root: az resolves `--file` against the CURRENT directory
+# (not the build context), so invoking the script from infra/ would otherwise
+# fail with "Unable to find 'Dockerfile'".
+Push-Location $repoRoot
+try {
+  if ($script:AzPython) {
+    & $script:AzPython -I -X utf8 -B -m azure.cli @buildArgs
+    if ($LASTEXITCODE -ne 0) { throw "az acr build failed (exit $LASTEXITCODE)" }
+  }
+  else {
+    # Non-MSI az (no bundled python to add -X utf8 to): suppress log streaming
+    # instead — the crash is in the log renderer, not the build. The build still
+    # runs and its exit code still reflects success/failure; you just don't get
+    # live logs. Fetch them with: az acr task logs -r <registry> --run-id <id>
+    Write-Warning 'Azure CLI bundled Python not found; building with --no-logs to avoid the console encoding crash (live build logs suppressed).'
+    Invoke-Az @buildArgs --no-logs
+  }
+}
+finally {
+  Pop-Location
+}
 Write-Info "built and pushed $image"
 
 # ---------------------------------------------------------------------------

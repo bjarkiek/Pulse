@@ -1,6 +1,6 @@
 import type { PulseIdentity, Tone } from "@/lib/domain";
 import { requireMembership } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { listIdeas } from "./idea-repository";
 import { listRequests } from "./request-repository";
 
@@ -132,7 +132,7 @@ export async function recordSuggestionDismissal(
     queryLength: Math.min(Math.max(Number(input.queryLength) || 0, 0), 500),
     suggestionCount: Math.min(input.suggestionIds?.length || 0, 5),
   };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     globalThis.pulseMemoryAudit ||= [];
     globalThis.pulseMemoryAudit.unshift({
       id: crypto.randomUUID(),

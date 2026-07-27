@@ -29,7 +29,13 @@ function isSameOrigin(request: Request): boolean {
     } catch {
       return false;
     }
-    if (originHost !== new URL(request.url).host) return false;
+    // Compare against the Host header, not request.url: behind App Service TLS
+    // termination request.url carries the internal http://localhost:3000
+    // authority while Origin and Host are both the public host (same trap as
+    // /dc-auth and the proxy CSRF gate). Fall back to request.url only when no
+    // Host header exists (non-browser tooling; browsers always send it).
+    const host = request.headers.get("host") ?? new URL(request.url).host;
+    if (originHost !== host) return false;
   }
   if (request.headers.get("sec-fetch-site") === "cross-site") return false;
   return true;

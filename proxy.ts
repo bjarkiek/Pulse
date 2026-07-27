@@ -49,13 +49,26 @@ export async function proxy(request: NextRequest) {
     const session = await readSession(request);
     if (!session && !localAllowed && process.env.PULSE_SESSION_SECRET) {
       const returnUrl = request.nextUrl.pathname + request.nextUrl.search;
-      const target = isEmbedRequest(request)
-        ? `/dc-embed?returnUrl=${encodeURIComponent(returnUrl)}`   // intercept the challenge — never redirect an iframe to Entra
-        : `/auth/login?returnUrl=${encodeURIComponent(returnUrl)}`;
+      // Embedded (iframe) requests split on whether this is a fresh launch:
+      //  - dcdata on the URL → run the /dc-embed handshake (AppReady exchange,
+      //    POST /dc-auth) to establish the session;
+      //  - no dcdata (the post-auth reload, or a revisit) → let the shell render
+      //    ANONYMOUSLY. Third-party-cookie blocking means the reload may carry no
+      //    cookie, and document navigations cannot carry an Authorization header;
+      //    the client attaches its sessionStorage bearer token to every API call,
+      //    so all data access stays authenticated. Redirecting here instead is
+      //    what caused the /dc-embed ↔ reload loop under cookie blocking.
+      if (isEmbedRequest(request)) {
+        if (request.nextUrl.searchParams.has("dcdata"))
+          return NextResponse.redirect(new URL(
+            `/dc-embed?returnUrl=${encodeURIComponent(returnUrl)}`,
+            process.env.PULSE_PUBLIC_URL || request.url), 302);
+        return withFraming(NextResponse.next());
+      }
       // Resolve against PULSE_PUBLIC_URL when set so App Service TLS termination
       // doesn't yield an http:// Location the Secure session cookie won't accompany.
       const base = process.env.PULSE_PUBLIC_URL || request.url;
-      return NextResponse.redirect(new URL(target, base), 302);
+      return NextResponse.redirect(new URL(`/auth/login?returnUrl=${encodeURIComponent(returnUrl)}`, base), 302);
     }
     return withFraming(NextResponse.next());
   }
@@ -65,6 +78,11 @@ export async function proxy(request: NextRequest) {
   const mutation = !["GET", "HEAD", "OPTIONS"].includes(request.method);
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
+  // Compare Origin to the HOST HEADER, not request.nextUrl: behind App Service
+  // TLS termination nextUrl carries the container's internal http://localhost:3000
+  // authority while the browser's Origin and the preserved Host header are both
+  // the public host — comparing against nextUrl would 403 every legitimate API
+  // mutation in production (same trap as /dc-auth's same-origin guard).
   // Opaque/malformed Origin values (e.g. the literal string "null") make
   // `new URL(origin)` throw. Fail closed — treat anything unparseable as a
   // cross-site mismatch (rejected below) rather than letting the exception
@@ -72,7 +90,8 @@ export async function proxy(request: NextRequest) {
   let originMismatch = false;
   if (origin) {
     try {
-      originMismatch = new URL(origin).host !== request.nextUrl.host;
+      const host = request.headers.get("host") ?? request.nextUrl.host;
+      originMismatch = new URL(origin).host !== host;
     } catch {
       originMismatch = true;
     }

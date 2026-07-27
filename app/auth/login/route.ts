@@ -2,6 +2,7 @@ import * as oidc from "openid-client";
 import {
   getOidcConfig, isEntraConfigured, oidcStateSetCookie, redirectUri, signOidcState,
 } from "@/lib/server/entra-oidc";
+import { getRuntimeSettings } from "@/lib/server/settings-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,14 @@ function redirectTo(origin: string, path: string): Response {
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const returnUrl = sanitizeReturnUrl(url.searchParams.get("returnUrl"));
+
+  // "Only allow access via DataCentral" (admin setting, ON by default): the
+  // standalone Entra flow is disabled entirely — no redirect URI needs to be
+  // registered for this host — and visitors get a whitelisted notice instead.
+  // The embedded flow (/dc-embed → /dc-auth) never touches this route.
+  const settings = await getRuntimeSettings().catch(() => null);
+  if (settings?.dcOnlyAccess !== false)
+    return redirectTo(url.origin, "/auth/error?code=dc_only");
 
   // Graceful degradation: the app must still start (and every other route
   // must still work) when Entra isn't configured — only this flow fails.

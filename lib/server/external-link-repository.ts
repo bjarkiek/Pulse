@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { getProductMemory } from "./product-repository";
 
 export type ExternalLinkRecord = {
@@ -35,7 +35,7 @@ export async function listExternalLinks(
   ideaPublicId: string,
 ) {
   await requireInternalRole(identity);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     if (!getProductMemory().some((idea) => idea.id === ideaPublicId))
       throw new Error("NOT_FOUND");
     return links().filter((link) => link.ideaId === ideaPublicId);
@@ -59,7 +59,7 @@ export async function addExternalLink(
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   if (!input.label?.trim()) throw new Error("INVALID_EXTERNAL_LINK_LABEL");
   const url = validateUrl(input.url);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     if (!getProductMemory().some((idea) => idea.id === ideaPublicId))
       throw new Error("NOT_FOUND");
     const item = {
@@ -115,7 +115,7 @@ export async function removeExternalLink(
   linkId: string,
 ) {
   await requireInternalRole(identity, ["Product manager", "System admin"]);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const index = links().findIndex(
       (link) => link.id === linkId && link.ideaId === ideaPublicId,
     );

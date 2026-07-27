@@ -46,11 +46,22 @@ const HANDSHAKE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>
     var fb=document.getElementById("fb"); fb.style.display="block";
     document.getElementById("diag").textContent = log.join(String.fromCharCode(10));
   }
-  // Loop guard: if cookies are blocked, /dc-auth "succeeds" but the reload bounces back here.
+  // Loop guard against rapid re-auth cycles (e.g. storage fully unavailable, so
+  // neither the bearer token nor the cookie survives the post-auth reload).
+  // Only RECENT attempts count: a genuine loop cycles in seconds, while a stale
+  // counter from an earlier failed session would otherwise trip the guard
+  // before a single auth attempt runs (sessionStorage survives every reload in
+  // the tab). Attempts older than 60s reset the window.
   var attempts = 0;
-  try { attempts = parseInt(sessionStorage.getItem("dc-embed-attempts")||"0",10)+1;
-        sessionStorage.setItem("dc-embed-attempts", String(attempts)); } catch(e){}
-  if (attempts > 2) { showFallback("cookie appears blocked in this browser (attempt "+attempts+")"); return; }
+  try {
+    var lastAt = parseInt(sessionStorage.getItem("dc-embed-attempts-at")||"0",10);
+    if (Date.now() - lastAt <= 60000)
+      attempts = parseInt(sessionStorage.getItem("dc-embed-attempts")||"0",10);
+    attempts += 1;
+    sessionStorage.setItem("dc-embed-attempts", String(attempts));
+    sessionStorage.setItem("dc-embed-attempts-at", String(Date.now()));
+  } catch(e){}
+  if (attempts > 2) { showFallback("sign-in loop detected — storage appears blocked in this browser (attempt "+attempts+")"); return; }
 
   // dcdata/dcsig ride on the returnUrl (proxy preserved the original query) and/or our own URL.
   var here = new URL(location.href), ru = new URL(RETURN, location.origin);
@@ -63,9 +74,18 @@ const HANDSHAKE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>
     fetch("/dc-auth", { method:"POST", credentials:"include",
       headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) })
     .then(function(res){
-      if (res.ok){ try{sessionStorage.removeItem("dc-embed-attempts");}catch(e){}
-        ru.searchParams.delete("dcdata"); ru.searchParams.delete("dcsig");
-        location.replace(ru.pathname + ru.search + ru.hash); return; }
+      if (res.ok){
+        // The body token is the embed session credential: the app attaches it as
+        // an Authorization Bearer header on every API call, so sign-in survives
+        // browsers that refuse the (partitioned) third-party session cookie.
+        return res.json().then(function(data){
+          try{ if (data && data.token) sessionStorage.setItem("pulse-embed-token", data.token); }catch(e){}
+          try{ sessionStorage.removeItem("dc-embed-attempts");
+               sessionStorage.removeItem("dc-embed-attempts-at"); }catch(e){}
+          ru.searchParams.delete("dcdata"); ru.searchParams.delete("dcsig");
+          location.replace(ru.pathname + ru.search + ru.hash);
+        });
+      }
       return res.text().then(function(t){ done=false; showFallback("/dc-auth "+res.status+" "+t); });
     }).catch(function(e){ done=false; showFallback("/dc-auth failed: "+e); });
   }
@@ -82,7 +102,15 @@ const HANDSHAKE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>
   });
 
   function sendReady(){
-    if (!window.parent || window.parent === window){ location.replace(RETURN); return; }
+    if (!window.parent || window.parent === window){
+      // Top level (no DataCentral parent to hand us an envelope). A signed
+      // launch payload is sufficient on its own: authenticate with it so this
+      // browser gets a FIRST-PARTY session cookie — the path that lets an
+      // operator reach the MCP OAuth consent page while "Only allow access via
+      // DataCentral" is on (open Pulse from DataCentral in a new tab first).
+      if (DCDATA && DCSIG){ if (!done) authenticate({ dcData: DCDATA, dcSig: DCSIG }, "hmac-top-level"); return; }
+      location.replace(RETURN); return;
+    }
     window.parent.postMessage({ type: "AppReady " }, "*");
     window.parent.postMessage({ type: "AppReady"  }, "*");
     rec("sent AppReady");

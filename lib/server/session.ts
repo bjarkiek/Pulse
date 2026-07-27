@@ -38,12 +38,20 @@ export async function createSessionToken(claims: Omit<SessionClaims, "ver">): Pr
 export async function readSession(request: Request): Promise<SessionClaims | null> {
   const key = secret();
   if (!key) return null;
+  // Two carriers for the same signed session token:
+  //  - cookie: standalone/top-level use (HttpOnly wins against XSS);
+  //  - Authorization: Bearer — embedded (iframe) use, where third-party-cookie
+  //    blocking can make the cookie undeliverable. The client stores the token
+  //    from /dc-auth's response body and attaches it per request.
   const cookie = request.headers.get("cookie")?.split(";")
     .map((v) => v.trim().split("="))
     .find(([n]) => n === SESSION_COOKIE)?.[1];
-  if (!cookie) return null;
+  const auth = request.headers.get("authorization");
+  const bearer = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : undefined;
+  const token = cookie ? decodeURIComponent(cookie) : bearer;
+  if (!token) return null;
   try {
-    const { payload } = await jwtVerify(decodeURIComponent(cookie), key, {
+    const { payload } = await jwtVerify(token, key, {
       issuer: "pulse", audience: "pulse",
     });
     return payload.ver === 1 ? (payload as unknown as SessionClaims) : null;

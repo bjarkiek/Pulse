@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { listRequests } from "./request-repository";
 
 function csvValue(value: unknown) {
@@ -11,7 +11,7 @@ function csvValue(value: unknown) {
 export async function exportAuthorizedRequests(identity: PulseIdentity) {
   await requireInternalRole(identity);
   let rows: Array<Record<string, unknown>>;
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     rows = await listRequests(identity);
     globalThis.pulseMemoryAudit ||= [];
     globalThis.pulseMemoryAudit.unshift({
@@ -88,7 +88,7 @@ export async function exportAuthorizedRequests(identity: PulseIdentity) {
 
 export async function getAnalyticsSummary(identity: PulseIdentity) {
   await requireInternalRole(identity);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const requests = await listRequests(identity);
     const notifications = globalThis.pulseMemoryNotifications || [];
     return {

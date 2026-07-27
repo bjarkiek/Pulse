@@ -1,5 +1,5 @@
 import type { PulseIdentity, Tone } from "@/lib/domain";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 
 export type IdeaRecord = {
   id: string;
@@ -132,7 +132,7 @@ function tone(status: string): Tone {
 export async function listIdeas(
   identity: PulseIdentity,
 ): Promise<IdeaRecord[]> {
-  if (!isAzureSqlConfigured()) return memory();
+  if (!isContentSqlActive()) return memory();
   const pool = await getSqlPool();
   const result = await pool
     .request()
@@ -166,7 +166,7 @@ export async function listIdeas(
 }
 
 export async function getIdea(identity: PulseIdentity, publicId: string) {
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const canonicalId =
       globalThis.pulseMemoryIdeaAliases?.get(publicId) || publicId;
     const item = memory().find((idea) => idea.id === canonicalId);
@@ -194,7 +194,7 @@ export async function toggleFollow(
   publicId: string,
   recordInterest = false,
 ) {
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memory().find((idea) => idea.id === publicId);
     if (!item) throw new Error("NOT_FOUND");
     const next = recordInterest ? true : !item.followed;

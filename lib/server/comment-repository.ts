@@ -1,5 +1,5 @@
 import type { PulseIdentity } from "@/lib/domain";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { listAttachments, listRequests } from "./request-repository";
 
 export type CommentRecord = {
@@ -33,7 +33,7 @@ function memory() {
 }
 
 async function canWriteInternal(identity: PulseIdentity) {
-  if (!isAzureSqlConfigured()) return identity.isInternal;
+  if (!isContentSqlActive()) return identity.isInternal;
   const pool = await getSqlPool();
   const result = await pool
     .request()
@@ -52,7 +52,7 @@ export async function listComments(
   if (!(await listRequests(identity)).some((item) => item.id === requestId))
     throw new Error("NOT_FOUND");
   const internal = includeInternal && (await canWriteInternal(identity));
-  if (!isAzureSqlConfigured())
+  if (!isContentSqlActive())
     return memory()
       .filter(
         (item) =>
@@ -123,7 +123,7 @@ export async function addComment(
       scanState: attachment.scanState,
     })),
   };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     memory().push({
       ...item,
       requestId,
@@ -202,7 +202,7 @@ async function getMutableComment(
   if (!(await listRequests(identity)).some((item) => item.id === requestId))
     throw new Error("NOT_FOUND");
   const internal = await canWriteInternal(identity);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memory().find(
       (comment) =>
         comment.id === commentId &&
@@ -250,7 +250,7 @@ export async function editComment(
 ) {
   if (!body.trim() || body.length > 5000) throw new Error("INVALID_COMMENT");
   const mutable = await getMutableComment(identity, requestId, commentId);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     mutable.item.revisions.push(mutable.item.body);
     mutable.item.body = body.trim();
     mutable.item.editedAt = new Date().toISOString();
@@ -326,7 +326,7 @@ export async function removeComment(
   const mutable = await getMutableComment(identity, requestId, commentId);
   if (mutable.internal && !reason.trim())
     throw new Error("INVALID_MODERATION_REASON_REQUIRED");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     mutable.item.revisions.push(mutable.item.body);
     mutable.item.removed = true;
     mutable.item.body = "[Comment removed]";

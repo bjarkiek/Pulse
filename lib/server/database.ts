@@ -2,12 +2,31 @@ import sql from "mssql";
 
 declare global {
   var pulseSqlPool: Promise<sql.ConnectionPool> | undefined;
+  // "Show demo data" runtime cache. Stamped by settings-repository on every
+  // read/save of the system settings and primed at boot (instrumentation-node),
+  // so the sync content-path switch below never needs a DB round-trip.
+  var pulseShowDemoData: boolean | undefined;
 }
 
 export function isAzureSqlConfigured() {
   return Boolean(
     process.env.AZURE_SQL_CONNECTION_STRING || process.env.AZURE_SQL_SERVER,
   );
+}
+
+export function isDemoDataActive() {
+  return globalThis.pulseShowDemoData === true;
+}
+
+// The switch CONTENT repositories use (requests, ideas, releases, triage,
+// analytics, search, taxonomy, comments, drafts, links). With "Show demo data"
+// enabled they serve the in-memory demo seed instead of Azure SQL — writes go
+// to memory too (ephemeral by design; single instance). Identity, authorization,
+// user/org administration, settings, tours, chat, MCP, and workers deliberately
+// keep using isAzureSqlConfigured() directly: who you are and what you may do
+// must never come from demo data.
+export function isContentSqlActive() {
+  return isAzureSqlConfigured() && !isDemoDataActive();
 }
 
 export async function getSqlPool() {

@@ -155,6 +155,27 @@ fallback below):
   `clientUrl`); `DC_SESSION_CHECK` controls that check's strictness — `off`
   | `when-available` (default) | `required` (`lib/server/datacentral.ts`,
   `checkDcSession`).
+- Optional: `DC_LAUNCH_MAX_AGE_MINUTES` (default 60) bounds replay of a
+  captured launch URL — `/dc-auth` rejects signed payloads whose `timeStamp`
+  is older with `401 stale_payload` (`isLaunchFresh`,
+  `lib/server/datacentral.ts`). `0` disables the check.
+
+**Embedded sessions are bearer-token first, cookie second.** `/dc-auth`
+returns the session JWT both as the `pulse-session` cookie (`SameSite=None;
+Secure; Partitioned`) **and** in the response body (`token`). The `/dc-embed`
+handshake stores the body token in `sessionStorage` (`pulse-embed-token`),
+and a one-time `window.fetch` patch (`lib/embed-auth.ts`, installed by
+`app/embed-auth-installer.tsx`) attaches it as `Authorization: Bearer` to
+every same-origin API call — never cross-origin (Azure Blob SAS uploads stay
+clean), never overriding an explicit `Authorization` header (MCP). This is
+what keeps the embed working when the browser refuses third-party cookies
+(Safari ITP, hard-blocked 3P cookies): the cookie is a progressive
+enhancement, the bearer is the guarantee. Accordingly the proxy serves
+unauthenticated **iframe** page shells anonymously (data still gated by
+bearer-authenticated APIs); only fresh launches (`dcdata` on the URL) bounce
+through `/dc-embed`, and standalone documents still redirect to
+`/auth/login`. Standalone sessions keep the HttpOnly cookie
+(`SameSite=Lax` in dev, `None; Partitioned` in production).
 
 **Graph-token forwarding — correction to how this actually gates sign-in.**
 The DataCentral embed's *primary* sign-in path is the signed `dcdata`/`dcsig`

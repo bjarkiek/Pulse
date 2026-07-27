@@ -4,7 +4,7 @@ import type {
   RequestRecord,
   Tone,
 } from "@/lib/domain";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { getRuntimeSettings } from "./settings-repository";
 import { requireMembership, requirePublishRole } from "./authorization";
 
@@ -99,7 +99,7 @@ export async function listRequests(
   identity: PulseIdentity,
 ): Promise<RequestRecord[]> {
   await assertMembership(identity);
-  if (!isAzureSqlConfigured())
+  if (!isContentSqlActive())
     return memory().requests.filter(
       (item) => item.organizationId === identity.organizationId,
     );
@@ -137,7 +137,7 @@ export async function getRequest(identity: PulseIdentity, id: string) {
 
 export async function getRequestHistory(identity: PulseIdentity, id: string) {
   await getRequest(identity, id);
-  if (!isAzureSqlConfigured())
+  if (!isContentSqlActive())
     return (globalThis.pulseMemoryAudit || [])
       .filter(
         (event) => event.entityType === "Request" && event.entityId === id,
@@ -185,7 +185,7 @@ export async function createRequest(
   if (!(["Private", "Organization"] as string[]).includes(input.visibility))
     throw new Error("INVALID_VISIBILITY");
   let id = `DCI-${Math.floor(1000 + Math.random() * 9000)}`;
-  if (isAzureSqlConfigured()) {
+  if (isContentSqlActive()) {
     const pool = await getSqlPool();
     const number = await pool
       .request()
@@ -216,7 +216,7 @@ export async function createRequest(
     workaround: input.workaround?.trim() || undefined,
     desiredTiming: input.desiredTiming?.trim() || undefined,
   };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     if (linkedIdeaId) {
       const idea = globalThis.pulseMemoryProducts?.find(
         (item) => item.id === linkedIdeaId && item.publishState === "Published",
@@ -386,7 +386,7 @@ export async function updateRequestStatus(
     throw new Error("INVALID_CLOSURE_EXPLANATION_REQUIRED");
   if (status === "Routed to support" && !details.supportReference?.trim())
     throw new Error("INVALID_SUPPORT_REFERENCE_REQUIRED");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memory().requests.find(
       (request) =>
         request.id === id && request.organizationId === identity.organizationId,
@@ -540,7 +540,7 @@ export async function editRequest(
   } catch {
     internal = false;
   }
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memory().requests.find(
       (request) =>
         request.id === id && request.organizationId === identity.organizationId,
@@ -669,7 +669,7 @@ export async function requestAttachmentBytes(
     scanState: "Pending upload",
     createdAt: new Date().toISOString(),
   };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     memory().attachments.push(record);
     return record;
   }
@@ -695,7 +695,7 @@ export async function listAttachments(
   requestId: string,
 ): Promise<StoredAttachment[]> {
   await assertMembership(identity);
-  if (!isAzureSqlConfigured())
+  if (!isContentSqlActive())
     return memory().attachments.filter(
       (item) =>
         item.requestId === requestId &&
@@ -714,7 +714,7 @@ export async function listAttachments(
 
 export async function getAttachment(identity: PulseIdentity, id: string) {
   await assertMembership(identity);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memory().attachments.find(
       (a) => a.id === id && a.organizationId === identity.organizationId,
     );
@@ -737,7 +737,7 @@ export async function setAttachmentState(
   id: string,
   scanState: AttachmentRecord["scanState"],
 ) {
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memory().attachments.find((a) => a.id === id);
     if (!item) throw new Error("NOT_FOUND");
     const parent = memory().requests.find((request) => request.id === item.requestId);

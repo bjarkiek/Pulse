@@ -5,7 +5,11 @@ const nextConfig: NextConfig = {
   turbopack: { root: process.cwd() },
   poweredByHeader: false,
   experimental: { serverActions: { bodySizeLimit: "1mb" } },
-  serverExternalPackages: ["@slack/bolt", "@slack/socket-mode", "@slack/web-api"],
+  // mssql must stay external: bundling it gives the instrumentation chunk and
+  // the route chunks separate copies, and a SQL pool created by one copy
+  // rejects the other copy's type objects ("r.type.validate is not a function")
+  // — killing every SQL-backed API in production.
+  serverExternalPackages: ["@slack/bolt", "@slack/socket-mode", "@slack/web-api", "mssql"],
   async headers() {
     return [{ source: "/(.*)", headers: [
       { key: "X-Content-Type-Options", value: "nosniff" },

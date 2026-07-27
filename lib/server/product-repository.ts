@@ -1,6 +1,6 @@
 import type { PulseIdentity, Tone } from "@/lib/domain";
 import { requireInternalRole, requirePublishRole } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { getIdeaMemory, type IdeaRecord } from "./idea-repository";
 import { listRequests, updateRequestStatus } from "./request-repository";
 import { getRuntimeSettings } from "./settings-repository";
@@ -190,7 +190,7 @@ function mapSql(row: Record<string, unknown>): ProductIdea {
 
 export async function listInternalIdeas(identity: PulseIdentity) {
   await requireInternalRole(identity);
-  if (!isAzureSqlConfigured()) return products();
+  if (!isContentSqlActive()) return products();
   const pool = await getSqlPool();
   const result = await pool
     .request()
@@ -205,7 +205,7 @@ export async function createIdea(identity: PulseIdentity, input: IdeaInput) {
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   if (!input.internalTitle?.trim() || !input.internalDescription?.trim())
     throw new Error("INVALID_IDEA");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const id = `IDEA-${Math.max(327, ...products().map((item) => Number(item.id.split("-")[1]))) + 1}`;
     const item: ProductIdea = {
       id,
@@ -269,7 +269,7 @@ export async function updateIdea(
 ) {
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   validateTransition(input);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = products().find((value) => value.id === publicId);
     if (!item) throw new Error("NOT_FOUND");
     Object.assign(item, input, {
@@ -344,7 +344,7 @@ export async function publishIdea(
   await requirePublishRole(identity);
   if (!confirmedSafe)
     throw new Error("INVALID_SAFE_WORDING_CONFIRMATION_REQUIRED");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = products().find((value) => value.id === publicId);
     if (!item) throw new Error("NOT_FOUND");
     validateTransition(item);
@@ -457,7 +457,7 @@ export async function linkRequest(
 ) {
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   if (!reason.trim()) throw new Error("INVALID_LINK_REASON");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const idea = products().find((item) => item.id === ideaPublicId);
     const request = (await listRequests(identity)).find(
       (item) => item.id === requestPublicId,
@@ -560,7 +560,7 @@ export async function moveRequestLink(
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   if (!reason.trim() || sourceIdeaPublicId === targetIdeaPublicId)
     throw new Error("INVALID_LINK_MOVE");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const source = products().find((item) => item.id === sourceIdeaPublicId);
     const target = products().find((item) => item.id === targetIdeaPublicId);
     const link = links().find(
@@ -685,7 +685,7 @@ export async function scoreIdea(
   const score = Number(
     ((value * (input.confidence / 100)) / input.effort).toFixed(4),
   );
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const idea = products().find((item) => item.id === publicId);
     if (!idea) throw new Error("NOT_FOUND");
     idea.score = score;
@@ -750,7 +750,7 @@ export async function mergeIdeas(
   await requirePublishRole(identity);
   if (targetPublicId === sourcePublicId || !reason.trim())
     throw new Error("INVALID_MERGE");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const target = products().find((item) => item.id === targetPublicId);
     const source = products().find((item) => item.id === sourcePublicId);
     if (!target || !source) throw new Error("NOT_FOUND");

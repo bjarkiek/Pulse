@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import EmbedAuthInstaller from "./embed-auth-installer";
 
 export const metadata: Metadata = {
   title: "DataCentral Pulse",
@@ -9,5 +10,8 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  // suppressHydrationWarning covers THIS element only: browser extensions stamp
+  // attributes onto <html> before React hydrates (e.g. data-sml-extension-installed),
+  // which would otherwise trip the dev overlay with a false hydration mismatch.
+  return <html lang="en" suppressHydrationWarning><body><EmbedAuthInstaller />{children}</body></html>;
 }

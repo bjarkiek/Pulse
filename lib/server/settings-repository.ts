@@ -9,6 +9,15 @@ export type PulseSettings = {
   retentionDays: number;
   defaultLocale: "en" | "is";
   roadmapDisclaimer: string;
+  // When on, content repositories serve the in-memory demo seed instead of
+  // Azure SQL (isContentSqlActive in database.ts). Identity/authorization/admin
+  // stay on real data. Off by default.
+  showDemoData: boolean;
+  // When on (the default), standalone sign-in is disabled: /auth/login shows a
+  // "sign in via DataCentral" notice instead of starting the Entra flow, so no
+  // Entra redirect URI needs to exist for this host. The embedded DataCentral
+  // flow (/dc-embed, /dc-auth) is unaffected.
+  dcOnlyAccess: boolean;
   scoreWeights: {
     impact: number;
     reach: number;
@@ -26,6 +35,8 @@ const defaults: PulseSettings = {
   defaultLocale: "en",
   roadmapDisclaimer:
     "Roadmap content is directional, may change, and is not a contractual commitment.",
+  showDemoData: false,
+  dcOnlyAccess: true,
   scoreWeights: {
     impact: 30,
     reach: 20,
@@ -42,6 +53,7 @@ declare global {
 export async function getRuntimeSettings() {
   if (!isAzureSqlConfigured()) {
     globalThis.pulseMemorySettings ||= structuredClone(defaults);
+    globalThis.pulseShowDemoData = globalThis.pulseMemorySettings.showDemoData;
     return structuredClone(globalThis.pulseMemorySettings);
   }
   const pool = await getSqlPool();
@@ -49,12 +61,15 @@ export async function getRuntimeSettings() {
     .request()
     .input("key", sql.NVarChar(100), "system")
     .query("SELECT value_json value FROM dbo.Settings WHERE setting_key=@key");
-  return result.recordset.length
+  const settings = result.recordset.length
     ? ({
         ...defaults,
         ...JSON.parse(result.recordset[0].value),
       } as PulseSettings)
     : defaults;
+  // Keep the sync demo-mode cache (database.ts isDemoDataActive) current.
+  globalThis.pulseShowDemoData = settings.showDemoData;
+  return settings;
 }
 
 export async function getSettings(identity: PulseIdentity) {
@@ -82,6 +97,10 @@ export async function saveSettings(
   );
   if (weightTotal !== 100) throw new Error("INVALID_SCORE_WEIGHTS");
   const saved = structuredClone(input);
+  saved.showDemoData = input.showDemoData === true;
+  globalThis.pulseShowDemoData = saved.showDemoData;
+  // Fail closed: an absent value keeps standalone sign-in disabled.
+  saved.dcOnlyAccess = input.dcOnlyAccess !== false;
   if (!isAzureSqlConfigured()) {
     const before = globalThis.pulseMemorySettings;
     saved.formulaVersion =

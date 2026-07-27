@@ -265,7 +265,8 @@ test("dc-auth stamps dc_onboard only when the launch carries the Onboard role", 
       userId: 42, userName: "bjarki@uidata.com", userDisplayName: "Bjarki",
       userEmail: "bjarki@uidata.com", tenancyName: "Origo", tenantId: 1,
       roleDisplayNames: roles, roleIds: [], clientUrl: "https://app.datacentral.ai",
-      timeStamp: "2026-07-15T09:00:00Z",
+      // Fresh timestamp: /dc-auth enforces a launch-freshness window (stale_payload).
+      timeStamp: new Date().toISOString(),
     };
     const dcData = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
     const dcSig = createHmac("sha256", "test-dc-app-secret")
@@ -277,7 +278,10 @@ test("dc-auth stamps dc_onboard only when the launch carries the Onboard role", 
     dcAuthPost(
       new Request("http://localhost/dc-auth", {
         method: "POST",
-        headers: { "content-type": "application/json", origin: "http://localhost" },
+        // host must accompany origin: the route's same-origin guard compares
+        // Origin to the Host header (request.url is unreliable behind App
+        // Service TLS termination) and fails closed when Host is missing.
+        headers: { "content-type": "application/json", origin: "http://localhost", host: "localhost" },
         body,
       }),
     );

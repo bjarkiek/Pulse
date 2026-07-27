@@ -263,6 +263,10 @@ export const adminTools: ChatTool[] = [
         const current = await getSettings(scoped);
         const saved = await saveSettings(scoped, {
           formulaVersion: current.formulaVersion,
+          // Not exposed to the assistant: demo mode and access policy are
+          // deliberate human decisions — current values carry through unchanged.
+          showDemoData: current.showDemoData,
+          dcOnlyAccess: current.dcOnlyAccess,
           attachmentMaxMb: input.attachmentMaxMb as PulseSettings["attachmentMaxMb"],
           requestAttachmentMaxMb:
             input.requestAttachmentMaxMb as PulseSettings["requestAttachmentMaxMb"],

@@ -580,3 +580,44 @@ test("merged idea aliases resolve to the surviving published idea", async () => 
   assert.equal(resolved.redirected, true);
   assert.equal(resolved.canonicalId, target.id);
 });
+
+test("show-demo-data toggle: defaults off, round-trips through settings, stamps the runtime cache", async () => {
+  const { isDemoDataActive } = await import("../lib/server/database");
+  const settings = await getSettings(internal);
+  assert.equal(settings.showDemoData, false, "must default to off");
+  const saved = await saveSettings(internal, { ...settings, showDemoData: true });
+  assert.equal(saved.showDemoData, true);
+  assert.equal((await getSettings(internal)).showDemoData, true);
+  assert.equal(isDemoDataActive(), true, "save must stamp the runtime cache");
+  await saveSettings(internal, { ...settings, showDemoData: false });
+  assert.equal(isDemoDataActive(), false);
+});
+
+test("isContentSqlActive: demo mode forces the memory content path even when SQL is configured", async () => {
+  const { isContentSqlActive } = await import("../lib/server/database");
+  const original = process.env.AZURE_SQL_SERVER;
+  process.env.AZURE_SQL_SERVER = "fake-sql.database.windows.net";
+  try {
+    globalThis.pulseShowDemoData = false;
+    assert.equal(isContentSqlActive(), true, "SQL on, demo off -> SQL content");
+    globalThis.pulseShowDemoData = true;
+    assert.equal(isContentSqlActive(), false, "demo on -> memory content");
+  } finally {
+    if (original === undefined) delete process.env.AZURE_SQL_SERVER;
+    else process.env.AZURE_SQL_SERVER = original;
+    globalThis.pulseShowDemoData = undefined;
+  }
+});
+
+test("dc-only access setting: defaults ON and round-trips through settings", async () => {
+  globalThis.pulseMemorySettings = undefined;
+  try {
+    const settings = await getSettings(internal);
+    assert.equal(settings.dcOnlyAccess, true, "must default to DataCentral-only");
+    const saved = await saveSettings(internal, { ...settings, dcOnlyAccess: false });
+    assert.equal(saved.dcOnlyAccess, false);
+    assert.equal((await getSettings(internal)).dcOnlyAccess, false);
+  } finally {
+    globalThis.pulseMemorySettings = undefined;
+  }
+});

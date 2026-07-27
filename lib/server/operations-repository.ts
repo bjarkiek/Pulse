@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole, requirePublishRole } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { getProductMemory } from "./product-repository";
 
 export type ReleaseRecord = {
@@ -74,7 +74,7 @@ function memoryAudit(
 
 export async function listReleases(identity: PulseIdentity, internal = false) {
   if (internal) await requireInternalRole(identity);
-  if (!isAzureSqlConfigured())
+  if (!isContentSqlActive())
     return releases().filter((item) => internal || item.published);
   const pool = await getSqlPool();
   const result = await pool
@@ -114,7 +114,7 @@ export async function createRelease(
     !input.availability?.trim()
   )
     throw new Error("INVALID_RELEASE");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item: ReleaseRecord = {
       ...input,
       id: `REL-${releases().length + 1}`,
@@ -191,7 +191,7 @@ export async function publishRelease(
   publicId: string,
 ) {
   await requirePublishRole(identity);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = releases().find((value) => value.id === publicId);
     if (!item) throw new Error("NOT_FOUND");
     if (!item.ideaIds.length) throw new Error("INVALID_RELEASE_REQUIRES_IDEAS");
@@ -288,7 +288,7 @@ export async function placeRoadmap(
       !([50, 80, 100] as number[]).includes(input.confidence))
   )
     throw new Error("INVALID_ROADMAP_PLACEMENT");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const idea = getProductMemory().find((value) => value.id === ideaPublicId);
     if (!idea) throw new Error("NOT_FOUND");
     idea.horizon = input.horizon;
@@ -341,7 +341,7 @@ export async function placeRoadmap(
 }
 
 export async function listNotifications(identity: PulseIdentity) {
-  if (!isAzureSqlConfigured()) return notifications();
+  if (!isContentSqlActive()) return notifications();
   const pool = await getSqlPool();
   const result = await pool
     .request()
@@ -355,7 +355,7 @@ export async function markNotificationRead(
   identity: PulseIdentity,
   id: string,
 ) {
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = notifications().find((value) => value.id === id);
     if (!item) throw new Error("NOT_FOUND");
     item.readAt = new Date().toISOString();
@@ -374,7 +374,7 @@ export async function markNotificationRead(
 }
 export async function listAudit(identity: PulseIdentity, limit = 100) {
   await requireInternalRole(identity, ["System admin"]);
-  if (!isAzureSqlConfigured()) return audits().slice(0, Math.min(limit, 500));
+  if (!isContentSqlActive()) return audits().slice(0, Math.min(limit, 500));
   const pool = await getSqlPool();
   const result = await pool
     .request()

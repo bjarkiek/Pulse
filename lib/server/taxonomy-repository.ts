@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 
 export type TaxonomyValue = {
   id: string;
@@ -45,7 +45,7 @@ function values() {
 
 export async function listTaxonomy(identity: PulseIdentity) {
   await requireInternalRole(identity, ["System admin"]);
-  if (!isAzureSqlConfigured()) return values();
+  if (!isContentSqlActive()) return values();
   const pool = await getSqlPool();
   const result = await pool
     .request()
@@ -69,7 +69,7 @@ export async function saveTaxonomy(
     throw new Error("INVALID_TAXONOMY_VALUE");
   const id = /^[0-9a-f-]{36}$/i.test(input.id) ? input.id : crypto.randomUUID();
   const item = { ...input, id, value: input.value.trim() };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const index = values().findIndex((value) => value.id === id);
     if (index >= 0) values()[index] = item;
     else values().push(item);

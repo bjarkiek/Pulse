@@ -473,3 +473,34 @@ test("mcp with a valid token lists tools bound to the user", async () => {
   const body = await res.json();
   assert.ok(body.result.tools.some((t: { name: string }) => t.name === "submit_request"));
 });
+
+test("decision accepts a same-origin POST when Origin matches the Host header even though request.url is the internal authority (App Service TLS termination)", async () => {
+  const reg = await register(new Request("http://localhost/oauth/register", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+  }));
+  const { client_id } = await reg.json();
+  const res = await authorize(new Request(
+    `http://localhost/oauth/authorize?client_id=${client_id}&redirect_uri=${encodeURIComponent("https://claude.ai/api/mcp/auth_callback")}&response_type=code&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz`));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  const nonce = html.match(/name="nonce" value="([^"]+)"/)?.[1];
+  assert.ok(nonce);
+
+  // Behind App Service the container sees request.url as http://localhost:3000
+  // while the browser's Origin and the preserved Host header are the public
+  // host. This is the SAME same-origin request a browser sends from the consent
+  // page — it must not be rejected as cross-site.
+  const dec = await decision(new Request("http://localhost:3000/oauth/authorize/decision", {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: "https://dcpulseprod-app.azurewebsites.net",
+      host: "dcpulseprod-app.azurewebsites.net",
+      "sec-fetch-site": "same-origin",
+    },
+    body: new URLSearchParams({ nonce: nonce!, action: "allow" }).toString(),
+  }));
+  assert.notEqual(await dec.clone().text(), "Cross-site request rejected.",
+    "Origin matching the Host header must count as same-origin");
+});

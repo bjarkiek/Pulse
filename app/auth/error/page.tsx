@@ -6,6 +6,8 @@ const MESSAGES: Record<string, string> = {
     "Your account has not been set up in Pulse yet. Ask a DataCentral administrator to add you (same email address).",
   disabled: "Your account is disabled — please contact an administrator.",
   oidc_failed: "Sign-in failed. Please try again.",
+  dc_only:
+    "You can only sign in to Pulse through DataCentral. Open Pulse from your DataCentral workspace. For further information talk to your administrator, or email support.",
 };
 
 const DEFAULT_MESSAGE = MESSAGES.oidc_failed;
@@ -32,8 +34,19 @@ export default async function AuthErrorPage({
       }}
     >
       <section style={{ maxWidth: 420, textAlign: "center" }}>
-        <h1 style={{ fontSize: 20, marginBottom: 12 }}>Sign-in problem</h1>
+        <h1 style={{ fontSize: 20, marginBottom: 12 }}>
+          {code === "dc_only" ? "Sign in through DataCentral" : "Sign-in problem"}
+        </h1>
         <p style={{ fontSize: 14, lineHeight: 1.5, color: "#444" }}>{message}</p>
+        {code === "dc_only" && (
+          // The one deliberate exception to this page's no-links rule: the
+          // admin-configured DataCentral-only notice points at support.
+          <p style={{ fontSize: 14, marginTop: 12 }}>
+            <a href="mailto:support@datacentral.ai" style={{ color: "#6d28d9" }}>
+              support@datacentral.ai
+            </a>
+          </p>
+        )}
       </section>
     </main>
   );

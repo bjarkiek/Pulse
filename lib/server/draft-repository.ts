@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { requireMembership } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 
 export type RequestDraft = {
   title: string;
@@ -31,7 +31,7 @@ function key(identity: PulseIdentity) {
 
 export async function getRequestDraft(identity: PulseIdentity) {
   await requireMembership(identity);
-  if (!isAzureSqlConfigured()) return drafts().get(key(identity)) || null;
+  if (!isContentSqlActive()) return drafts().get(key(identity)) || null;
   const pool = await getSqlPool();
   const result = await pool
     .request()
@@ -67,7 +67,7 @@ export async function saveRequestDraft(
     linkedIdeaId: input.linkedIdeaId?.trim() || undefined,
     updatedAt: new Date().toISOString(),
   };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     drafts().set(key(identity), item);
     return item;
   }
@@ -100,7 +100,7 @@ export async function saveRequestDraft(
 
 export async function deleteRequestDraft(identity: PulseIdentity) {
   await requireMembership(identity);
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     drafts().delete(key(identity));
     return;
   }

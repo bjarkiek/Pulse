@@ -1,6 +1,6 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { listRequests } from "./request-repository";
 
 export async function bulkUpdateTriage(
@@ -26,7 +26,7 @@ export async function bulkUpdateTriage(
   if (dueAt && Number.isNaN(dueAt.getTime()))
     throw new Error("INVALID_TRIAGE_DUE_AT");
 
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const available = await listRequests(identity);
     if (requestIds.some((id) => !available.some((item) => item.id === id)))
       throw new Error("NOT_FOUND");

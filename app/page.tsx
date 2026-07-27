@@ -34,7 +34,8 @@ type Page =
   | "companies"
   | "users"
   | "authentication"
-  | "settings";
+  | "settings"
+  | "help";
 type Tone = "success" | "warning" | "neutral" | "violet" | "error";
 
 type Idea = {
@@ -214,6 +215,8 @@ type PulseSettings = {
   retentionDays: number;
   defaultLocale: "en" | "is";
   roadmapDisclaimer: string;
+  showDemoData: boolean;
+  dcOnlyAccess: boolean;
   scoreWeights: {
     impact: number;
     reach: number;
@@ -536,6 +539,7 @@ const pageTitles: Record<Page, string> = {
   users: "Users",
   authentication: "Authentication",
   settings: "Settings",
+  help: "Help",
 };
 
 type IconName =
@@ -809,8 +813,9 @@ function AppShell() {
         if (response.status === 401) {
           // Session missing/expired. Top-level: send the browser through the
           // login flow. Framed inside DataCentral: a top-level redirect would
-          // just break the iframe, so reload and let the proxy route to
-          // /dc-embed instead.
+          // break the iframe, and the proxy now serves embed shells anonymously
+          // (no /dc-embed bounce), so navigate to the handshake ourselves —
+          // clearing any stale bearer token first so the retry starts clean.
           if (window.self === window.top) {
             window.location.assign(
               "/auth/login?returnUrl=" +
@@ -819,7 +824,13 @@ function AppShell() {
                 ),
             );
           } else {
-            window.location.reload();
+            try { sessionStorage.removeItem("pulse-embed-token"); } catch { /* storage blocked */ }
+            window.location.replace(
+              "/dc-embed?returnUrl=" +
+                encodeURIComponent(
+                  window.location.pathname + window.location.search,
+                ),
+            );
           }
           return null;
         }
@@ -1074,16 +1085,14 @@ function AppShell() {
                 )}
             </button>
           ))}
-          <a
-            className="nav-item"
-            href="/help"
-            target="_blank"
-            rel="noopener"
+          <button
+            className={`nav-item ${page === "help" ? "active" : ""}`}
+            onClick={() => navigate("help")}
             data-tour="nav-help"
           >
             <Icon name="help" size={17} />
             <span>Help</span>
-          </a>
+          </button>
           <div className="nav-section-label">DataCentral team</div>
           <button
             className={`nav-item ${page === "triage" ? "active" : ""}`}
@@ -1267,6 +1276,16 @@ function AppShell() {
               ideas={ideas}
               notifications={notifications}
               onOpen={setDetailIdea}
+            />
+          )}
+          {page === "help" && (
+            // The server-rendered manual (audience-gated, with tour screenshots)
+            // shown in the content area; same-origin so CSP frame-src 'self' allows it.
+            <iframe
+              src="/help"
+              title="Pulse help"
+              className="help-frame"
+              data-tour="help-frame"
             />
           )}
           {page === "triage" && (
@@ -5817,6 +5836,8 @@ function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
     defaultLocale: "en",
     roadmapDisclaimer:
       "Roadmap content is directional, may change, and is not a contractual commitment.",
+    showDemoData: false,
+    dcOnlyAccess: true,
     scoreWeights: {
       impact: 30,
       reach: 20,
@@ -6051,6 +6072,69 @@ function SettingsPage({ onToast }: { onToast: (message: string) => void }) {
           </label>
           <Button variant="secondary" onClick={save} disabled={saving}>
             Save wording
+          </Button>
+        </article>
+        <article className="settings-card">
+          <header>
+            <Icon name="settings" size={19} />
+            <div>
+              <h3>Access</h3>
+              <p>Control how people are allowed to sign in to Pulse.</p>
+            </div>
+          </header>
+          <label className="form-field demo-toggle">
+            <input
+              type="checkbox"
+              checked={settings.dcOnlyAccess}
+              onChange={(event) =>
+                setSettings({
+                  ...settings,
+                  dcOnlyAccess: event.target.checked,
+                })
+              }
+            />
+            <span>
+              Only allow access via DataCentral — standalone Microsoft sign-in
+              is disabled and visitors are told to open Pulse from DataCentral
+              (or contact support@datacentral.ai). Uncheck to re-enable the
+              standalone Microsoft sign-in flow.
+            </span>
+          </label>
+          <Button variant="secondary" onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save access policy"}
+          </Button>
+        </article>
+        <article className="settings-card">
+          <header>
+            <Icon name="eye" size={19} />
+            <div>
+              <h3>Demo data</h3>
+              <p>
+                Showcase Pulse with the built-in sample content instead of live
+                data.
+              </p>
+            </div>
+          </header>
+          <label className="form-field demo-toggle">
+            <input
+              type="checkbox"
+              checked={settings.showDemoData}
+              onChange={(event) =>
+                setSettings({
+                  ...settings,
+                  showDemoData: event.target.checked,
+                })
+              }
+            />
+            <span>
+              Show demo data — requests, ideas, releases, triage, and analytics
+              come from the built-in sample set. Changes made while enabled are
+              demo-only and reset on restart; live data is untouched and returns
+              when switched off.
+            </span>
+          </label>
+          <Button variant="secondary" onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save demo mode"}
           </Button>
         </article>
         <article className="settings-card">
