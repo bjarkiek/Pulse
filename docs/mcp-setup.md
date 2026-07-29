@@ -5,7 +5,7 @@ Claude Desktop, or anything else that speaks streamable HTTP + OAuth 2.1)
 can drive Pulse **as the signed-in user** — same tools, same permissions,
 same audit trail as the in-app AI assistant.
 
-```
+```text
 https://<your-app-host>/mcp        ← the endpoint (e.g. https://dcpulseprod-app.azurewebsites.net/mcp)
 ```
 
@@ -31,28 +31,31 @@ Key Vault invalidates every outstanding token at once.
 2. **A browser session for the consent step** — see the next section, this is
    the one part that needs care when "Only allow access via DataCentral" is on.
 
-## The consent step under "Only allow access via DataCentral"
+## The consent step
 
 Connecting ends with your browser opening Pulse's consent page
 (`/oauth/authorize`) — *"‹client› is asking to access DataCentral Pulse as
-‹you›"* — which requires a signed-in **top-level** browser session. With the
-default *Only allow access via DataCentral* setting, standalone Microsoft
-sign-in is disabled, so establish the session from DataCentral first:
+‹you›"* — which requires a signed-in browser session.
 
-1. In DataCentral, open Pulse **in its own browser tab** (top-level, not the
-   embedded panel). The launch URL carries a signed payload (`dcdata`/`dcsig`)
-   and signs you in automatically — you should land in Pulse.
-   *Tip: if your DataCentral host only embeds Pulse in an iframe, right-click
-   the Pulse panel → This Frame → Open Frame in New Tab immediately after it
-   loads (the signed launch URL expires after ~60 minutes — a stale one shows
-   `stale_payload`; just relaunch from DataCentral).*
-2. In the **same browser**, start the MCP connection (below). The consent page
-   now finds your session and shows **Deny / Allow**.
-3. Click **Allow** once — the refresh token keeps the client connected for
-   60 days without repeating this.
+**Normal path (Entra sign-in):** even with *Only allow access via DataCentral*
+enabled, a sign-in **bound for the MCP consent page** is allowed through the
+standalone Microsoft flow (that one destination is exempt; every other page
+still shows the DataCentral-only notice). So usually there is nothing to
+prepare: hit **Connect** in your MCP client, sign in with Microsoft when the
+browser asks, and click **Allow** once. The refresh token keeps the client
+connected for 60 days. Requires `AUTH_ENTRA_*` to be configured and the
+`/auth/callback` redirect URI registered on the Entra app.
 
-If you land on *"Sign in through DataCentral"* during consent, you skipped
-step 1 or used a different browser profile.
+**Alternative (no Entra at all):** establish a top-level session from
+DataCentral first — open Pulse **in its own browser tab** (the signed
+`dcdata`/`dcsig` launch signs you in automatically; if your host only embeds
+Pulse in an iframe, right-click the panel → This Frame → Open Frame in New
+Tab; launches older than ~60 min show `stale_payload`, just relaunch). Then
+start the MCP connection in the **same browser** — the consent page finds the
+session.
+
+Either way, only **provisioned Pulse users** can complete consent
+(`not_provisioned` otherwise).
 
 ## Connecting
 
@@ -87,7 +90,7 @@ Discovery documents live at `/.well-known/oauth-authorization-server` and
 ## Troubleshooting
 
 | Symptom | Meaning / fix |
-|---|---|
+| --- | --- |
 | Consent page shows *"Sign in through DataCentral"* | No top-level session — do step 1 above in the same browser. |
 | `stale_payload` while signing in | The DataCentral launch URL is older than the freshness window (default 60 min, `DC_LAUNCH_MAX_AGE_MINUTES`). Relaunch from DataCentral. |
 | `not_provisioned` (with the email shown) | That email isn't in Pulse — provision it (Users admin, or `infra/seed-admin.ps1` for the first admin). |

@@ -3,6 +3,7 @@ import {
   getOidcConfig, isEntraConfigured, oidcStateSetCookie, redirectUri, signOidcState,
 } from "@/lib/server/entra-oidc";
 import { getRuntimeSettings } from "@/lib/server/settings-repository";
+import { publicOrigin } from "@/lib/server/http";
 
 export const dynamic = "force-dynamic";
 
@@ -24,16 +25,21 @@ export async function GET(request: Request): Promise<Response> {
   const returnUrl = sanitizeReturnUrl(url.searchParams.get("returnUrl"));
 
   // "Only allow access via DataCentral" (admin setting, ON by default): the
-  // standalone Entra flow is disabled entirely — no redirect URI needs to be
-  // registered for this host — and visitors get a whitelisted notice instead.
+  // standalone Entra flow is disabled — visitors get a whitelisted notice —
+  // EXCEPT when the sign-in was triggered by the MCP OAuth consent page
+  // (/oauth/authorize bounce): connecting an MCP client needs a top-level
+  // browser session, so that one destination may use Entra sign-in. This is a
+  // UX gate, not a hard wall — a provisioned user could hand-craft the consent
+  // returnUrl — and access is still bounded by Pulse provisioning either way.
   // The embedded flow (/dc-embed → /dc-auth) never touches this route.
+  const mcpConsentBound = returnUrl.startsWith("/oauth/authorize");
   const settings = await getRuntimeSettings().catch(() => null);
-  if (settings?.dcOnlyAccess !== false)
-    return redirectTo(url.origin, "/auth/error?code=dc_only");
+  if (settings?.dcOnlyAccess !== false && !mcpConsentBound)
+    return redirectTo(publicOrigin(request), "/auth/error?code=dc_only");
 
   // Graceful degradation: the app must still start (and every other route
   // must still work) when Entra isn't configured — only this flow fails.
-  if (!isEntraConfigured()) return redirectTo(url.origin, "/auth/error?code=oidc_failed");
+  if (!isEntraConfigured()) return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
 
   try {
     const config = await getOidcConfig();
@@ -47,7 +53,7 @@ export async function GET(request: Request): Promise<Response> {
     });
 
     const token = await signOidcState({ cv: codeVerifier, state, nonce, ru: returnUrl });
-    if (!token) return redirectTo(url.origin, "/auth/error?code=oidc_failed");
+    if (!token) return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
 
     return new Response(null, {
       status: 302,
@@ -56,6 +62,6 @@ export async function GET(request: Request): Promise<Response> {
   } catch {
     // Discovery/network failure against login.microsoftonline.com — fail
     // into the same whitelisted error page rather than a raw 500.
-    return redirectTo(url.origin, "/auth/error?code=oidc_failed");
+    return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
   }
 }

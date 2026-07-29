@@ -5,6 +5,7 @@
 // with PULSE_ALLOW_DEMO_IDENTITY=true) getIdentity's demo fallback resolves a
 // stable identity without any of this, so the redirect never fires locally.
 import { getIdentity } from "../auth";
+import { publicOrigin } from "../http";
 import type { PulseIdentity } from "@/lib/domain";
 
 export async function requireBrowserIdentity(request: Request): Promise<PulseIdentity | Response> {
@@ -14,7 +15,9 @@ export async function requireBrowserIdentity(request: Request): Promise<PulseIde
     if (e instanceof Error && e.message === "UNAUTHORIZED") {
       const url = new URL(request.url);
       const returnUrl = url.pathname + url.search;
-      return Response.redirect(`${url.origin}/auth/login?returnUrl=${encodeURIComponent(returnUrl)}`, 302);
+      // publicOrigin, NOT url.origin: behind App Service the latter is the
+      // container's internal bind address and unreachable from the browser.
+      return Response.redirect(`${publicOrigin(request)}/auth/login?returnUrl=${encodeURIComponent(returnUrl)}`, 302);
     }
     throw e;
   }

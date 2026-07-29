@@ -737,3 +737,82 @@ test("dc-only access OFF: /auth/login behaves as before (Entra flow / oidc_faile
     globalThis.pulseMemorySettings = undefined;
   }
 });
+
+test("dc-only access: the MCP consent path is exempt — /auth/login with an /oauth/authorize returnUrl starts the Entra flow", async () => {
+  // Policy: the app stays DataCentral-only, but connecting an MCP client needs
+  // a browser sign-in at the consent page. When the login bounce came from
+  // /oauth/authorize, standalone Entra sign-in is allowed through; every other
+  // destination still gets the dc_only notice. Provisioning still gates who
+  // can actually sign in.
+  const { GET: loginGet } = await import("../app/auth/login/route");
+  globalThis.pulseMemorySettings = undefined; // defaults: dcOnlyAccess ON
+  try {
+    const consentReturn = encodeURIComponent("/oauth/authorize?client_id=abc&state=xyz");
+    const res = await loginGet(new Request(`http://localhost/auth/login?returnUrl=${consentReturn}`));
+    assert.equal(res.status, 302);
+    const location = res.headers.get("location") ?? "";
+    assert.ok(!location.includes("code=dc_only"),
+      `consent-bound login must not be dc_only-blocked (got ${location})`);
+    // Entra unconfigured in tests -> the flow's normal degradation, proving we
+    // fell through INTO the Entra flow rather than the dc-only gate.
+    assert.ok(location.includes("code=oidc_failed"));
+  } finally {
+    globalThis.pulseMemorySettings = undefined;
+  }
+});
+
+test("oauth authorize login bounce redirects to the PUBLIC origin, not the container's internal address", async () => {
+  // Behind App Service the container sees request.url as its internal bind
+  // (e.g. https://0.0.0.0:3000) — absolute redirects built from it send the
+  // browser to ERR_ADDRESS_INVALID. All auth redirects must prefer PULSE_PUBLIC_URL.
+  const { requireBrowserIdentity } = await import("../lib/server/mcp/browser-auth");
+  const origServer = process.env.AZURE_SQL_SERVER;
+  const origPublic = process.env.PULSE_PUBLIC_URL;
+  process.env.AZURE_SQL_SERVER = "fake-sql.database.windows.net"; // confine demo fallback -> UNAUTHORIZED
+  process.env.PULSE_PUBLIC_URL = "https://dcpulseprod-app.azurewebsites.net";
+  try {
+    const result = await requireBrowserIdentity(new Request("https://0.0.0.0:3000/oauth/authorize?client_id=x"));
+    assert.ok(result instanceof Response, "unauthenticated -> redirect Response");
+    const location = result.headers.get("location") ?? "";
+    assert.ok(location.startsWith("https://dcpulseprod-app.azurewebsites.net/auth/login"),
+      `must redirect to the public host (got ${location})`);
+    assert.ok(location.includes(encodeURIComponent("/oauth/authorize?client_id=x")),
+      "returnUrl must survive");
+  } finally {
+    if (origServer === undefined) delete process.env.AZURE_SQL_SERVER; else process.env.AZURE_SQL_SERVER = origServer;
+    if (origPublic === undefined) delete process.env.PULSE_PUBLIC_URL; else process.env.PULSE_PUBLIC_URL = origPublic;
+  }
+});
+
+test("auth/login dc_only redirect targets the PUBLIC origin", async () => {
+  const { GET: loginGet } = await import("../app/auth/login/route");
+  const origPublic = process.env.PULSE_PUBLIC_URL;
+  process.env.PULSE_PUBLIC_URL = "https://dcpulseprod-app.azurewebsites.net";
+  globalThis.pulseMemorySettings = undefined; // dcOnlyAccess defaults ON
+  try {
+    const res = await loginGet(new Request("https://0.0.0.0:3000/auth/login?returnUrl=%2F"));
+    assert.equal(res.status, 302);
+    assert.ok((res.headers.get("location") ?? "").startsWith(
+      "https://dcpulseprod-app.azurewebsites.net/auth/error?code=dc_only"));
+  } finally {
+    if (origPublic === undefined) delete process.env.PULSE_PUBLIC_URL; else process.env.PULSE_PUBLIC_URL = origPublic;
+    globalThis.pulseMemorySettings = undefined;
+  }
+});
+
+test("publicCallbackUrl rebuilds the request URL on the public origin with the query intact", async () => {
+  // openid-client derives the token-exchange redirect_uri from the callback
+  // URL it is given; behind App Service request.url is the internal bind
+  // (https://0.0.0.0:3000), and Entra rejects the exchange on the mismatch.
+  const { publicCallbackUrl } = await import("../lib/server/http");
+  const origPublic = process.env.PULSE_PUBLIC_URL;
+  process.env.PULSE_PUBLIC_URL = "https://dcpulseprod-app.azurewebsites.net";
+  try {
+    const rebuilt = publicCallbackUrl(new Request("https://0.0.0.0:3000/auth/callback?code=abc&state=xyz"));
+    assert.equal(rebuilt.toString(),
+      "https://dcpulseprod-app.azurewebsites.net/auth/callback?code=abc&state=xyz");
+  } finally {
+    if (origPublic === undefined) delete process.env.PULSE_PUBLIC_URL;
+    else process.env.PULSE_PUBLIC_URL = origPublic;
+  }
+});
