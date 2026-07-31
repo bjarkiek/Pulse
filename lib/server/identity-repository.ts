@@ -1,6 +1,26 @@
 import type { PulseIdentity } from "@/lib/domain";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
 
+declare global {
+  // Memory-mode per-user locale overrides (SQL mode persists to dbo.Users.locale).
+  var pulseMemoryLocales: Record<string, string> | undefined;
+}
+
+export async function setUserLocaleById(userId: string, locale: string): Promise<void> {
+  if (locale !== "en" && locale !== "is") throw new Error("INVALID_LOCALE");
+  if (!isAzureSqlConfigured()) {
+    globalThis.pulseMemoryLocales ||= {};
+    globalThis.pulseMemoryLocales[userId] = locale;
+    return;
+  }
+  const pool = await getSqlPool();
+  await pool
+    .request()
+    .input("userId", sql.UniqueIdentifier, userId)
+    .input("locale", sql.NVarChar(12), locale)
+    .query("UPDATE dbo.Users SET locale=@locale, updated_at=SYSUTCDATETIME() WHERE id=@userId");
+}
+
 export type MembershipContext = {
   id: string;
   name: string;
@@ -16,7 +36,7 @@ export async function getIdentityContext(identity: PulseIdentity) {
         id: identity.id,
         email: identity.email,
         name: identity.name,
-        locale: "en",
+        locale: globalThis.pulseMemoryLocales?.[identity.id] ?? "en",
       },
       organizations: [
         {

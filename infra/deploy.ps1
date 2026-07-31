@@ -110,6 +110,17 @@ $envFile = Join-Path $PSScriptRoot "azure-env.$NamePrefix.json"
 $appPrincipalId = $null
 if (Test-Path $envFile) {
   $envCfg = Get-Content $envFile -Raw | ConvertFrom-Json
+  # Pin az to the environment's subscription (recorded by provision.ps1) unless
+  # the caller overrode it. Without this, whatever subscription az happens to
+  # have active — e.g. after working on another project — makes every ARM call
+  # fail with ResourceGroupNotFound.
+  if (-not $SubscriptionId -and $envCfg.PSObject.Properties.Name -contains 'subscriptionId' -and $envCfg.subscriptionId) {
+    $current = (& az account show --query id -o tsv 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $current -and $current.Trim() -ne $envCfg.subscriptionId) {
+      Write-Info "Switching az to subscription $($envCfg.subscriptionId) (was $($current.Trim()))"
+      Invoke-Az account set --subscription $envCfg.subscriptionId | Out-Null
+    }
+  }
   if (-not $ResourceGroup) { $ResourceGroup = $envCfg.resourceGroup }
   $acrName = $envCfg.acrName
   $acrLoginServer = $envCfg.acrLoginServer

@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { makeT, type UiLocale } from "@/lib/i18n";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import { ChatPanel } from "./chat-panel";
@@ -12,6 +13,14 @@ import {
   type OnboardingUserItem,
   type TourAudience,
 } from "@/lib/tours";
+
+// Customer-facing UI localization: AppShell provides the active locale's t();
+// components read it with useT(). English is the identity translation, so a
+// component without useT simply stays English (the internal/admin pages do).
+const LocaleContext = createContext<(s: string) => string>((s) => s);
+function useT() {
+  return useContext(LocaleContext);
+}
 
 function mutationHeaders(json = true) {
   return {
@@ -717,10 +726,11 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 }
 
 function Status({ tone, children }: { tone: Tone; children: ReactNode }) {
+  const t = useT();
   return (
     <span className={`status status-${tone}`}>
       <span className="status-dot" />
-      {children}
+      {typeof children === "string" ? t(children) : children}
     </span>
   );
 }
@@ -744,6 +754,7 @@ function Button({
   disabled?: boolean;
   dataTour?: string;
 }) {
+  const t = useT();
   return (
     <button
       type={type}
@@ -753,7 +764,7 @@ function Button({
       data-tour={dataTour}
     >
       {icon && <Icon name={icon} size={16} />}
-      {children}
+      {typeof children === "string" ? t(children) : children}
     </button>
   );
 }
@@ -792,6 +803,19 @@ function AppShell() {
   // Bumped whenever the chat assistant reports it changed data server-side,
   // so identity-gated data-loading effects below refetch without a reload.
   const [dataVersion, setDataVersion] = useState(0);
+  // Active UI language. Seeded from the profile (which the DataCentral launch
+  // language also syncs into); the topbar toggle switches it live and persists
+  // the choice back to the profile.
+  const [locale, setLocale] = useState<UiLocale>("en");
+  const t = useMemo(() => makeT(locale), [locale]);
+  async function switchLocale(next: UiLocale) {
+    setLocale(next);
+    await fetch("/api/v1/me", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ locale: next }),
+    }).catch(() => undefined);
+  }
 
   function openRequest(item: RequestItem) {
     setDetailRequest(item);
@@ -842,6 +866,7 @@ function AppShell() {
         setOrganizationContexts(context.organizations || []);
         setDcEmbed(Boolean(context.dcEmbed));
         setMeUser(context.user ?? null);
+        setLocale(context.user?.locale === "is" ? "is" : "en");
         const requested = new URLSearchParams(window.location.search).get(
           "organization",
         );
@@ -1029,7 +1054,7 @@ function AppShell() {
         {organizationContexts.length > 1 ? (
           <section>
             <p className="eyebrow">DataCentral Pulse</p>
-            <h1>Choose an organization</h1>
+            <h1>{t("Choose an organization")}</h1>
             <p>
               Your role and access are evaluated separately in each context.
             </p>
@@ -1046,12 +1071,13 @@ function AppShell() {
             </div>
           </section>
         ) : (
-          <p>Resolving your authorized organization…</p>
+          <p>{t("Resolving your authorized organization…")}</p>
         )}
       </main>
     );
 
   return (
+    <LocaleContext.Provider value={t}>
     <div className="app-shell">
       <aside className={`sidebar ${menuOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-brand">
@@ -1072,7 +1098,7 @@ function AppShell() {
               onClick={() => navigate(item.id)}
             >
               <Icon name={item.icon} size={17} />
-              <span>{item.label}</span>
+              <span>{t(item.label)}</span>
               {item.id === "updates" &&
                 notifications.some((notification) => !notification.readAt) && (
                   <span className="nav-count">
@@ -1091,7 +1117,7 @@ function AppShell() {
             data-tour="nav-help"
           >
             <Icon name="help" size={17} />
-            <span>Help</span>
+            <span>{t("Help")}</span>
           </button>
           <div className="nav-section-label">DataCentral team</div>
           <button
@@ -1179,7 +1205,7 @@ function AppShell() {
       {menuOpen && (
         <button
           className="sidebar-backdrop"
-          aria-label="Close navigation"
+          aria-label={t("Close navigation")}
           onClick={() => setMenuOpen(false)}
         />
       )}
@@ -1189,14 +1215,22 @@ function AppShell() {
           <div className="topbar-left">
             <button
               className="icon-button mobile-menu"
-              aria-label="Open navigation"
+              aria-label={t("Open navigation")}
               onClick={() => setMenuOpen(true)}
             >
               <Icon name="menu" />
             </button>
-            <h1>{pageTitles[page]}</h1>
+            <h1>{t(pageTitles[page])}</h1>
           </div>
           <div className="topbar-actions">
+            <button
+              className="workspace-switcher locale-toggle"
+              onClick={() => switchLocale(locale === "is" ? "en" : "is")}
+              title={locale === "is" ? "Switch to English" : "Skipta yfir í íslensku"}
+              aria-label={locale === "is" ? "Switch to English" : "Skipta yfir í íslensku"}
+            >
+              {locale === "is" ? "EN" : "IS"}
+            </button>
             {!dcEmbed && (
               <button className="workspace-switcher">
                 <Icon name="building" size={15} />
@@ -1206,7 +1240,7 @@ function AppShell() {
             )}
             <button
               className="icon-button notification-button"
-              aria-label="Notifications"
+              aria-label={t("Notifications")}
               data-tour="notifications"
               onClick={() => setNotificationsOpen(!notificationsOpen)}
             >
@@ -1218,7 +1252,7 @@ function AppShell() {
               dataTour="submit-request"
               onClick={() => setComposerOpen(true)}
             >
-              Submit a request
+              {t("Submit a request")}
             </Button>
           </div>
           {notificationsOpen && (
@@ -1282,7 +1316,7 @@ function AppShell() {
             // The server-rendered manual (audience-gated, with tour screenshots)
             // shown in the content area; same-origin so CSP frame-src 'self' allows it.
             <iframe
-              src="/help"
+              src={locale === "is" ? "/help?lang=is" : "/help"}
               title="Pulse help"
               className="help-frame"
               data-tour="help-frame"
@@ -1382,13 +1416,13 @@ function AppShell() {
         </div>
       )}
       <ChatPanel
-        locale={meUser?.locale ?? "en"}
+        locale={locale}
         onDataChanged={() => setDataVersion((v) => v + 1)}
       />
       <TourHost
         ready={identityReady}
         view={page}
-        locale={meUser?.locale ?? "en"}
+        locale={locale}
         onNavigate={(next) => {
           // "compose" is a tour pseudo-view: the submit-request tour's later
           // steps anchor inside the composer modal, so resuming them must
@@ -1402,6 +1436,7 @@ function AppShell() {
         }}
       />
     </div>
+    </LocaleContext.Provider>
   );
 }
 
@@ -1422,6 +1457,7 @@ function HomePage({
   onNavigate: (page: Page) => void;
   dcEmbed: boolean;
 }) {
+  const t = useT();
   const [search, setSearch] = useState("");
   const matches =
     search.trim().length > 2
@@ -1437,14 +1473,12 @@ function HomePage({
     <div className="page-stack home-page">
       <section className="welcome-row">
         <div>
-          <p className="eyebrow">Customer feedback</p>
-          {!dcEmbed && <h2>Good morning, Bjarki</h2>}
-          <p>
-            Track your requests and help shape what DataCentral builds next.
-          </p>
+          <p className="eyebrow">{t("Customer feedback")}</p>
+          {!dcEmbed && <h2>{t("Good morning")}, Bjarki</h2>}
+          <p>{t("Track your requests and help shape what DataCentral builds next.")}</p>
         </div>
         <div className="home-meta">
-          <span>Last updated</span>
+          <span>{t("Last updated")}</span>
           <strong>14 July 2026 · 23:42Z</strong>
         </div>
       </section>
@@ -1455,8 +1489,8 @@ function HomePage({
             <Icon name="spark" size={22} />
           </div>
           <div>
-            <h3>What would make DataCentral work better for your team?</h3>
-            <p>Search existing ideas or describe a new requirement.</p>
+            <h3>{t("What would make DataCentral work better for your team?")}</h3>
+            <p>{t("Search existing ideas or describe a new requirement.")}</p>
           </div>
         </div>
         <div className="ask-search-row">
@@ -1465,8 +1499,8 @@ function HomePage({
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search ideas and requests"
-              aria-label="Search ideas and requests"
+              placeholder={t("Search ideas and requests")}
+              aria-label={t("Search ideas and requests")}
             />
           </div>
           <Button icon="plus" onClick={onSubmit}>
@@ -1475,7 +1509,7 @@ function HomePage({
         </div>
         {matches.length > 0 && (
           <div className="quick-results">
-            <span>Related ideas</span>
+            <span>{t("Related ideas")}</span>
             {matches.map((idea) => (
               <button key={idea.id} onClick={() => onOpenIdea(idea)}>
                 <strong>{idea.title}</strong>
@@ -1493,7 +1527,7 @@ function HomePage({
             <Icon name="inbox" />
           </div>
           <div>
-            <span>Active requests</span>
+            <span>{t("Active requests")}</span>
             <strong>
               {
                 requests.filter(
@@ -1501,7 +1535,7 @@ function HomePage({
                 ).length
               }
             </strong>
-            <small>Across your organization</small>
+            <small>{t("Across your organization")}</small>
           </div>
           <Icon name="chevron" size={16} />
         </button>
@@ -1513,11 +1547,11 @@ function HomePage({
             <Icon name="message" />
           </div>
           <div>
-            <span>Needs your input</span>
+            <span>{t("Needs your input")}</span>
             <strong>
               {requests.filter((r) => r.status === "Needs information").length}
             </strong>
-            <small>Response requested</small>
+            <small>{t("Response requested")}</small>
           </div>
           <Icon name="chevron" size={16} />
         </button>
@@ -1526,11 +1560,11 @@ function HomePage({
             <Icon name="check" />
           </div>
           <div>
-            <span>Recently released</span>
+            <span>{t("Recently released")}</span>
             <strong>
               {ideas.filter((i) => i.status === "Released").length}
             </strong>
-            <small>In the last 30 days</small>
+            <small>{t("In the last 30 days")}</small>
           </div>
           <Icon name="chevron" size={16} />
         </button>
@@ -1540,14 +1574,14 @@ function HomePage({
         <div className="panel" data-tour="your-requests">
           <div className="panel-header">
             <div>
-              <h3>Your requests</h3>
-              <p>Latest activity from Origo</p>
+              <h3>{t("Your requests")}</h3>
+              <p>{t("Latest activity from")} Origo</p>
             </div>
             <button
               className="text-link"
               onClick={() => onNavigate("requests")}
             >
-              View all <Icon name="arrow" size={14} />
+              {t("View all")} <Icon name="arrow" size={14} />
             </button>
           </div>
           <div className="request-list">
@@ -1585,7 +1619,7 @@ function HomePage({
         <div className="panel shipped-panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Recently shipped</p>
+              <p className="eyebrow">{t("Recently shipped")}</p>
               <h3>Mobile dashboard improvements</h3>
             </div>
             <span className="release-mark">
@@ -1597,14 +1631,14 @@ function HomePage({
             across embedded mobile dashboards.
           </p>
           <div className="release-details">
-            <span>Released</span>
+            <span>{t("Released")}</span>
             <code>8 JUL 2026</code>
           </div>
           <button
             className="text-link"
             onClick={() => onOpenIdea(ideas.find((i) => i.id === "IDEA-276")!)}
           >
-            View release notes <Icon name="arrow" size={14} />
+            {t("View release notes")} <Icon name="arrow" size={14} />
           </button>
         </div>
       </section>
@@ -1623,6 +1657,7 @@ function IdeasPage({
   onFollow: (id: string) => void;
   onSubmit: () => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All statuses");
   const filtered = ideas.filter(
@@ -1650,21 +1685,21 @@ function IdeasPage({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search ideas"
+            placeholder={t("Search ideas")}
           />
         </div>
         <label className="select-wrap">
           <Icon name="filter" size={16} />
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option>All statuses</option>
-            <option>Under review</option>
-            <option>Considering</option>
-            <option>Planned</option>
-            <option>In progress</option>
-            <option>Released</option>
+            <option value="All statuses">{t("All statuses")}</option>
+            <option value="Under review">{t("Under review")}</option>
+            <option value="Considering">{t("Considering")}</option>
+            <option value="Planned">{t("Planned")}</option>
+            <option value="In progress">{t("In progress")}</option>
+            <option>{t("Released")}</option>
           </select>
         </label>
-        <span className="result-count">{filtered.length} ideas</span>
+        <span className="result-count">{filtered.length} {t("ideas")}</span>
       </div>
       <div className="idea-grid">
         {filtered.map((idea) => (
@@ -1684,14 +1719,14 @@ function IdeasPage({
             <div className="idea-footer">
               <div>
                 <Icon name="building" size={15} />
-                <span>{idea.organizations} organizations</span>
+                <span>{idea.organizations} {t("organizations")}</span>
               </div>
               <button
                 className={idea.followed ? "following" : ""}
                 onClick={() => onFollow(idea.id)}
               >
                 <Icon name={idea.followed ? "check" : "bell"} size={14} />
-                {idea.followed ? "Following" : "Follow"}
+                {t(idea.followed ? "Following" : "Follow")}
               </button>
             </div>
           </article>
@@ -1716,6 +1751,7 @@ function RoadmapPage({
   ideas: Idea[];
   onOpen: (idea: Idea) => void;
 }) {
+  const t = useT();
   const columns: { title: Idea["horizon"]; note: string }[] = [
     { title: "Now", note: "Active delivery" },
     { title: "Next", note: "Approved and sequenced" },
@@ -1731,11 +1767,8 @@ function RoadmapPage({
       <div className="roadmap-callout">
         <Icon name="map" size={19} />
         <div>
-          <strong>Built from governed customer evidence</strong>
-          <span>
-            Roadmap items combine related requests while keeping each customer’s
-            context private.
-          </span>
+          <strong>{t("Built from governed customer evidence")}</strong>
+          <span>{t("Roadmap items combine related requests while keeping each customer’s context private.")}</span>
         </div>
       </div>
       <div className="roadmap-board">
@@ -1743,8 +1776,8 @@ function RoadmapPage({
           <section className="roadmap-column" key={column.title}>
             <header>
               <div>
-                <h3>{column.title}</h3>
-                <p>{column.note}</p>
+                <h3>{t(column.title)}</h3>
+                <p>{t(column.note)}</p>
               </div>
               <span>
                 {ideas.filter((i) => i.horizon === column.title).length}
@@ -1779,8 +1812,8 @@ function RoadmapPage({
       </div>
       <section className="released-strip">
         <div>
-          <p className="eyebrow">Released</p>
-          <h3>Recently delivered</h3>
+          <p className="eyebrow">{t("Released")}</p>
+          <h3>{t("Recently delivered")}</h3>
         </div>
         {ideas
           .filter((i) => i.horizon === "Released")
@@ -1810,6 +1843,7 @@ function RequestsPage({
   onOpen: (request: RequestItem) => void;
   onSubmit: () => void;
 }) {
+  const t = useT();
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
   const [area, setArea] = useState("All areas");
@@ -1871,7 +1905,7 @@ function RequestsPage({
             className={filter === tab ? "active" : ""}
             onClick={() => setFilter(tab)}
           >
-            {tab}
+            {t(tab)}
             <span>
               {tab === "All"
                 ? requests.length
@@ -1890,8 +1924,8 @@ function RequestsPage({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search request number, title, or problem"
-            aria-label="Search requests"
+            placeholder={t("Search request number, title, or problem")}
+            aria-label={t("Search requests")}
           />
         </label>
         <label className="select-control">
@@ -1899,21 +1933,21 @@ function RequestsPage({
           <select
             value={area}
             onChange={(event) => setArea(event.target.value)}
-            aria-label="Filter by product area"
+            aria-label={t("Filter by product area")}
           >
             {areas.map((value) => (
-              <option key={value}>{value}</option>
+              <option key={value} value={value}>{t(value)}</option>
             ))}
           </select>
         </label>
-        <span className="result-count">{visible.length} requests</span>
+        <span className="result-count">{visible.length} {t("requests")}</span>
       </div>
       <div className="table-panel">
         <div className="table-head">
-          <span>Request</span>
-          <span>Product area</span>
-          <span>Submitted</span>
-          <span>Status</span>
+          <span>{t("Request")}</span>
+          <span>{t("Product area")}</span>
+          <span>{t("Submitted")}</span>
+          <span>{t("Status")}</span>
           <span />
         </div>
         {visible.map((request) => (
@@ -1958,6 +1992,7 @@ function UpdatesPage({
   notifications: NotificationItem[];
   onOpen: (idea: Idea) => void;
 }) {
+  const t = useT();
   const [preferences, setPreferences] = useState<NotificationPreferenceItem[]>(
     [],
   );
@@ -2047,7 +2082,7 @@ function UpdatesPage({
       <section className="notification-preferences" aria-labelledby="notification-preferences-title">
         <header>
           <div>
-            <h3 id="notification-preferences-title">Notification preferences</h3>
+            <h3 id="notification-preferences-title">{t("Notification preferences")}</h3>
             <p>Choose when email updates arrive for this company context.</p>
           </div>
           <span role="status">{preferenceStatus}</span>
@@ -2075,10 +2110,10 @@ function UpdatesPage({
                   updatePreference(preference.eventType, event.target.value)
                 }
               >
-                <option>Immediate</option>
-                <option>Daily</option>
-                <option>Weekly</option>
-                <option>Off</option>
+                <option>{t("Immediate")}</option>
+                <option>{t("Daily")}</option>
+                <option>{t("Weekly")}</option>
+                <option>{t("Off")}</option>
               </select>
             </label>
           ))}
@@ -2136,6 +2171,7 @@ function TriagePage({
   setRequests: (items: RequestItem[]) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const queue = useMemo(
     () => [
       ...requests,
@@ -2383,7 +2419,7 @@ function TriagePage({
                   <strong>{selected.impact}</strong>
                 </div>
                 <div>
-                  <p className="field-label">Product area</p>
+                  <p className="field-label">{t("Product area")}</p>
                   <strong>{selected.area}</strong>
                 </div>
                 <div>
@@ -2535,12 +2571,13 @@ function PageIntro({
   description: string;
   action?: ReactNode;
 }) {
+  const t = useT();
   return (
     <header className="page-intro">
       <div>
-        <p className="eyebrow">{eyebrow}</p>
-        <h2>{title}</h2>
-        <p>{description}</p>
+        <p className="eyebrow">{t(eyebrow)}</p>
+        <h2>{t(title)}</h2>
+        <p>{t(description)}</p>
       </div>
       {action}
     </header>
@@ -2558,15 +2595,16 @@ function EmptyState({
   action: string;
   onAction: () => void;
 }) {
+  const t = useT();
   return (
     <div className="empty-state">
       <span>
         <Icon name="search" size={22} />
       </span>
-      <h3>{title}</h3>
-      <p>{description}</p>
+      <h3>{t(title)}</h3>
+      <p>{t(description)}</p>
       <Button variant="secondary" onClick={onAction}>
-        {action}
+        {t(action)}
       </Button>
     </div>
   );
@@ -2581,6 +2619,7 @@ function RequestComposer({
   onSubmit: (request: RequestItem) => void;
   onFollow: (id: string, support?: boolean) => void;
 }) {
+  const t = useT();
   const [title, setTitle] = useState("");
   const [problem, setProblem] = useState("");
   const [area, setArea] = useState("Distribution");
@@ -2805,28 +2844,25 @@ function RequestComposer({
       >
         <header>
           <div>
-            <p className="eyebrow">New customer request</p>
-            <h2 id="composer-title">Describe the outcome you need</h2>
-            <p>
-              Start with the problem. DataCentral will assess the right product
-              response.
-            </p>
+            <p className="eyebrow">{t("New customer request")}</p>
+            <h2 id="composer-title">{t("Describe the outcome you need")}</h2>
+            <p>{t("Start with the problem. DataCentral will assess the right product response.")}</p>
           </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close">
+          <button className="icon-button" onClick={onClose} aria-label={t("Close")}>
             <Icon name="x" />
           </button>
         </header>
         <form onSubmit={submit}>
           <label className="form-field" data-tour="composer-title">
             <span>
-              Short title <em>Required</em>
+              {t("Short title")} <em>{t("Required")}</em>
             </span>
             <input
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               maxLength={140}
-              placeholder="For example: Scheduled report delivery to SharePoint"
+              placeholder={t("For example: Scheduled report delivery to SharePoint")}
               required
             />
             <small>{title.length}/140</small>
@@ -2836,7 +2872,7 @@ function RequestComposer({
               <div>
                 <Icon name="spark" size={17} />
                 <span>
-                  <strong>Related ideas already exist</strong>
+                  <strong>{t("Related ideas already exist")}</strong>
                   <small>
                     Add your organization’s interest or continue with distinct
                     context.
@@ -2914,13 +2950,13 @@ function RequestComposer({
           )}
           <label className="form-field" data-tour="composer-problem">
             <span>
-              Problem or desired outcome <em>Required</em>
+              {t("Problem or desired outcome")} <em>{t("Required")}</em>
             </span>
             <textarea
               value={problem}
               onChange={(e) => setProblem(e.target.value)}
               maxLength={5000}
-              placeholder="What are you trying to achieve, who is affected, and what happens today?"
+              placeholder={t("What are you trying to achieve, who is affected, and what happens today?")}
               required
             />
             <small>{problem.length}/5,000</small>
@@ -2936,65 +2972,65 @@ function RequestComposer({
           {showDetails && (
             <div className="form-grid">
               <label className="form-field">
-                <span>Request type</span>
+                <span>{t("Request type")}</span>
                 <select
                   value={requestType}
                   onChange={(e) => setRequestType(e.target.value)}
                 >
-                  <option>Feature</option>
-                  <option>Improvement</option>
-                  <option>Integration</option>
-                  <option>Compliance</option>
+                  <option value="Feature">{t("Feature")}</option>
+                  <option value="Improvement">{t("Improvement")}</option>
+                  <option value="Integration">{t("Integration")}</option>
+                  <option value="Compliance">{t("Compliance")}</option>
                 </select>
               </label>
               <label className="form-field">
-                <span>Product area</span>
+                <span>{t("Product area")}</span>
                 <select value={area} onChange={(e) => setArea(e.target.value)}>
-                  <option>Distribution</option>
-                  <option>Governance</option>
-                  <option>Authentication</option>
-                  <option>Embedding</option>
-                  <option>Display</option>
-                  <option>Administration</option>
-                  <option>Experience</option>
+                  <option value="Distribution">{t("Distribution")}</option>
+                  <option value="Governance">{t("Governance")}</option>
+                  <option value="Authentication">{t("Authentication")}</option>
+                  <option value="Embedding">{t("Embedding")}</option>
+                  <option value="Display">{t("Display")}</option>
+                  <option value="Administration">{t("Administration")}</option>
+                  <option value="Experience">{t("Experience")}</option>
                 </select>
               </label>
               <label className="form-field">
-                <span>Business impact</span>
+                <span>{t("Business impact")}</span>
                 <select
                   value={impact}
                   onChange={(e) => setImpact(e.target.value)}
                 >
-                  <option>Low</option>
-                  <option>Medium</option>
-                  <option>High</option>
-                  <option>Critical</option>
+                  <option value="Low">{t("Low")}</option>
+                  <option value="Medium">{t("Medium")}</option>
+                  <option value="High">{t("High")}</option>
+                  <option value="Critical">{t("Critical")}</option>
                 </select>
               </label>
               <label className="form-field">
-                <span>Affected users</span>
+                <span>{t("Affected users")}</span>
                 <input
                   type="number"
                   min="1"
                   value={affectedUsers}
                   onChange={(e) => setAffectedUsers(e.target.value)}
-                  placeholder="Optional estimate"
+                  placeholder={t("Optional estimate")}
                 />
               </label>
               <label className="form-field">
-                <span>Desired timing</span>
+                <span>{t("Desired timing")}</span>
                 <input
                   value={desiredTiming}
                   onChange={(e) => setDesiredTiming(e.target.value)}
-                  placeholder="For example Q4 or 2026-11-01"
+                  placeholder={t("For example Q4 or 2026-11-01")}
                 />
               </label>
               <label className="form-field form-field-wide">
-                <span>Current workaround</span>
+                <span>{t("Current workaround")}</span>
                 <textarea
                   value={workaround}
                   onChange={(e) => setWorkaround(e.target.value)}
-                  placeholder="How do you handle this today?"
+                  placeholder={t("How do you handle this today?")}
                 />
               </label>
             </div>
@@ -3019,7 +3055,7 @@ function RequestComposer({
             <label htmlFor="request-files">
               <Icon name="plus" size={17} />
               <span>
-                <strong>Add screenshots or files</strong>
+                <strong>{t("Add screenshots or files")}</strong>
                 <small>
                   Drop files here or browse · 25 MB each, 100 MB total
                 </small>
@@ -3064,8 +3100,8 @@ function RequestComposer({
               value={visibility}
               onChange={(e) => setVisibility(e.target.value)}
             >
-              <option>Organization</option>
-              <option>Private</option>
+              <option>{t("Organization")}</option>
+              <option>{t("Private")}</option>
             </select>
           </div>
           <div className="privacy-reminder">
@@ -3150,6 +3186,7 @@ function RequestDrawer({
   onToast: (message: string) => void;
   onChange: (request: RequestItem) => void;
 }) {
+  const t = useT();
   const [reply, setReply] = useState("");
   const [attachments, setAttachments] = useState<RequestAttachment[]>([]);
   const [comments, setComments] = useState<RequestComment[]>([]);
@@ -3331,19 +3368,19 @@ function RequestDrawer({
       <div className="drawer-content">
         <section className="drawer-summary">
           <div>
-            <span>Product area</span>
+            <span>{t("Product area")}</span>
             <strong>{request.area}</strong>
           </div>
           <div>
-            <span>Business impact</span>
+            <span>{t("Business impact")}</span>
             <strong>{request.impact}</strong>
           </div>
           <div>
-            <span>Submitted</span>
+            <span>{t("Submitted")}</span>
             <code>{request.submitted}</code>
           </div>
           <div>
-            <span>Internal owner</span>
+            <span>{t("Internal owner")}</span>
             <strong>{request.owner}</strong>
           </div>
         </section>
@@ -3351,7 +3388,7 @@ function RequestDrawer({
           <section className="action-callout">
             <Icon name="message" size={19} />
             <div>
-              <strong>DataCentral needs more context</strong>
+              <strong>{t("DataCentral needs more context")}</strong>
               <p>
                 How should the correct customer brand be selected when the same
                 report is delivered to several external organizations?
@@ -3360,7 +3397,7 @@ function RequestDrawer({
           </section>
         )}
         <section className="drawer-section">
-          <p className="field-label">Original customer need</p>
+          <p className="field-label">{t("Original customer need")}</p>
           <p>{request.problem}</p>
           {["Submitted", "Needs information"].includes(request.status) && (
             <div className="request-edit-actions">
@@ -3375,7 +3412,7 @@ function RequestDrawer({
         </section>
         {attachments.length > 0 && (
           <section className="drawer-section">
-            <p className="field-label">Attachments</p>
+            <p className="field-label">{t("Attachments")}</p>
             <div className="attachment-list">
               {attachments.map((attachment) => (
                 <a
@@ -3408,7 +3445,7 @@ function RequestDrawer({
         )}
         {idea && (
           <section className="linked-idea">
-            <p className="field-label">Linked product idea</p>
+            <p className="field-label">{t("Linked product idea")}</p>
             <div>
               <span>
                 <Status tone={idea.tone}>{idea.status}</Status>
@@ -3421,7 +3458,7 @@ function RequestDrawer({
         )}
         {comments.length > 0 && (
           <section className="drawer-section">
-            <p className="field-label">Discussion</p>
+            <p className="field-label">{t("Discussion")}</p>
             <div className="comment-list">
               {comments.map((comment) => (
                 <article key={comment.id}>
@@ -3448,7 +3485,7 @@ function RequestDrawer({
                     </ReactMarkdown>
                   </div>
                   {comment.editedAt && !comment.removed && (
-                    <small>Edited</small>
+                    <small>{t("Edited")}</small>
                   )}
                   {comment.attachments && comment.attachments.length > 0 && (
                     <div className="comment-attachments">
@@ -3469,7 +3506,7 @@ function RequestDrawer({
                   )}
                   {comment.canEdit && !comment.removed && (
                     <div className="comment-actions">
-                      <button onClick={() => editReply(comment)}>Edit</button>
+                      <button onClick={() => editReply(comment)}>{t("Edit")}</button>
                       <button onClick={() => removeReply(comment)}>
                         Remove
                       </button>
@@ -3481,7 +3518,7 @@ function RequestDrawer({
           </section>
         )}
         <section className="drawer-section">
-          <p className="field-label">History</p>
+          <p className="field-label">{t("History")}</p>
           <div className="history">
             {(history.length
               ? history
@@ -3515,12 +3552,12 @@ function RequestDrawer({
           </div>
         </section>
         <section className="reply-box">
-          <label htmlFor="reply">Add context</label>
+          <label htmlFor="reply">{t("Add context")}</label>
           <textarea
             id="reply"
             value={reply}
             onChange={(e) => setReply(e.target.value)}
-            placeholder="Reply to DataCentral or add relevant information"
+            placeholder={t("Reply to DataCentral or add relevant information")}
           />
           <label className="comment-file-picker">
             <Icon name="plus" size={14} />
@@ -3568,6 +3605,7 @@ function IdeaDrawer({
   onClose: () => void;
   onFollow: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <Drawer onClose={onClose}>
       <header className="drawer-head">
@@ -3582,7 +3620,7 @@ function IdeaDrawer({
       </header>
       <div className="drawer-content">
         <section className="idea-highlight">
-          <p className="eyebrow">Product direction</p>
+          <p className="eyebrow">{t("Product direction")}</p>
           <h3>
             {idea.horizon === "Released"
               ? "Available now"
@@ -3592,24 +3630,24 @@ function IdeaDrawer({
         </section>
         <section className="drawer-summary">
           <div>
-            <span>Product area</span>
+            <span>{t("Product area")}</span>
             <strong>{idea.area}</strong>
           </div>
           <div>
-            <span>Organizations</span>
+            <span>{t("Organizations")}</span>
             <strong>{idea.organizations}</strong>
           </div>
           <div>
-            <span>Followers</span>
+            <span>{t("Followers")}</span>
             <strong>{idea.followers}</strong>
           </div>
           <div>
-            <span>Last update</span>
+            <span>{t("Last update")}</span>
             <strong>{idea.updated.replace("Updated ", "")}</strong>
           </div>
         </section>
         <section className="drawer-section">
-          <p className="field-label">Latest update</p>
+          <p className="field-label">{t("Latest update")}</p>
           <h3>
             {idea.status === "Released"
               ? "Released to eligible tenants"
@@ -3660,6 +3698,7 @@ function CompaniesPage({
   onChange: (companies: Company[]) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Company | "new" | null>(null);
   const visible = companies.filter((company) =>
@@ -3738,7 +3777,7 @@ function CompaniesPage({
           <span>Type</span>
           <span>Users</span>
           <span>Authentication</span>
-          <span>Status</span>
+          <span>{t("Status")}</span>
           <span />
         </div>
         {visible.map((company) => {
@@ -3810,6 +3849,7 @@ function CompanyEditor({
   onClose: () => void;
   onSave: (company: Company) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState(company?.name || "");
   const [domain, setDomain] = useState(company?.domain || "");
   const [type, setType] = useState<Company["type"]>(
@@ -3874,7 +3914,7 @@ function CompanyEditor({
           <div className="form-grid">
             <label className="form-field">
               <span>
-                Company name <em>Required</em>
+                Company name <em>{t("Required")}</em>
               </span>
               <input
                 value={name}
@@ -3885,7 +3925,7 @@ function CompanyEditor({
             </label>
             <label className="form-field">
               <span>
-                Verified domain <em>Required</em>
+                Verified domain <em>{t("Required")}</em>
               </span>
               <input
                 value={domain}
@@ -3908,7 +3948,7 @@ function CompanyEditor({
               </select>
             </label>
             <label className="form-field">
-              <span>Status</span>
+              <span>{t("Status")}</span>
               <select
                 value={status}
                 onChange={(event) =>
@@ -3982,6 +4022,7 @@ function UsersPage({
   onChange: (users: ManagedUser[]) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [companyFilter, setCompanyFilter] = useState("All companies");
   const [editing, setEditing] = useState<ManagedUser | "new" | null>(null);
@@ -4068,7 +4109,7 @@ function UsersPage({
           <span>User</span>
           <span>Authentication</span>
           <span>Company access</span>
-          <span>Status</span>
+          <span>{t("Status")}</span>
           <span />
         </div>
         {visible.map((user) => (
@@ -4147,6 +4188,7 @@ function UserEditor({
   onClose: () => void;
   onSave: (user: ManagedUser) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
   const [status, setStatus] = useState<ManagedUser["status"]>(
@@ -4216,7 +4258,7 @@ function UserEditor({
           <div className="form-grid">
             <label className="form-field">
               <span>
-                Full name <em>Required</em>
+                Full name <em>{t("Required")}</em>
               </span>
               <input
                 value={name}
@@ -4227,7 +4269,7 @@ function UserEditor({
             </label>
             <label className="form-field">
               <span>
-                Email address <em>Required</em>
+                Email address <em>{t("Required")}</em>
               </span>
               <input
                 type="email"
@@ -4267,7 +4309,7 @@ function UserEditor({
           </div>
           <fieldset className="membership-editor">
             <legend>
-              Company memberships <em>Required</em>
+              Company memberships <em>{t("Required")}</em>
             </legend>
             <p>
               Select every company this user may enter. Assign a role
@@ -4352,6 +4394,7 @@ function AuthenticationPage({
   companies: Company[];
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [entraOpen, setEntraOpen] = useState(false);
   const [appId, setAppId] = useState("");
   const [tenantId, setTenantId] = useState("");
@@ -4540,7 +4583,7 @@ function AuthenticationPage({
             >
               <label className="form-field">
                 <span>
-                  Application (client) ID <em>Required</em>
+                  Application (client) ID <em>{t("Required")}</em>
                 </span>
                 <input
                   value={appId}
@@ -4551,7 +4594,7 @@ function AuthenticationPage({
               </label>
               <label className="form-field">
                 <span>
-                  Azure Tenant ID <em>Required</em>
+                  Azure Tenant ID <em>{t("Required")}</em>
                 </span>
                 <input
                   value={tenantId}
@@ -4611,6 +4654,7 @@ function InternalIdeasPage({
   onChange: (items: InternalIdea[]) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState<InternalIdea | "new" | null>(null);
   const [query, setQuery] = useState("");
   const visible = ideas.filter((idea) =>
@@ -4685,7 +4729,7 @@ function InternalIdeasPage({
       <div className="management-table idea-admin-table">
         <div className="management-head">
           <span>Idea</span>
-          <span>Status</span>
+          <span>{t("Status")}</span>
           <span>Roadmap</span>
           <span>Evidence</span>
           <span>Score</span>
@@ -4751,6 +4795,7 @@ function IdeaWorkflowEditor({
   onMerged: (sourceId: string, targetId: string) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [internalTitle, setInternalTitle] = useState(idea?.internalTitle || "");
   const [internalDescription, setInternalDescription] = useState(
     idea?.internalDescription || "",
@@ -4971,7 +5016,7 @@ function IdeaWorkflowEditor({
               <p className="field-label">Internal product record</p>
               <label className="form-field">
                 <span>
-                  Internal title <em>Required</em>
+                  Internal title <em>{t("Required")}</em>
                 </span>
                 <input
                   value={internalTitle}
@@ -4981,7 +5026,7 @@ function IdeaWorkflowEditor({
               </label>
               <label className="form-field">
                 <span>
-                  Internal description <em>Required</em>
+                  Internal description <em>{t("Required")}</em>
                 </span>
                 <textarea
                   value={internalDescription}
@@ -4993,7 +5038,7 @@ function IdeaWorkflowEditor({
               </label>
               <div className="form-grid">
                 <label className="form-field">
-                  <span>Product area</span>
+                  <span>{t("Product area")}</span>
                   <select
                     value={area}
                     onChange={(event) => setArea(event.target.value)}
@@ -5371,6 +5416,7 @@ function ReleasesPage({
   onIdeasChange: (items: InternalIdea[]) => void;
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -5510,7 +5556,7 @@ function ReleasesPage({
               <div className="form-grid">
                 <label className="form-field">
                   <span>
-                    Title <em>Required</em>
+                    Title <em>{t("Required")}</em>
                   </span>
                   <input
                     value={title}
@@ -5530,7 +5576,7 @@ function ReleasesPage({
               </div>
               <label className="form-field">
                 <span>
-                  Customer summary <em>Required</em>
+                  Customer summary <em>{t("Required")}</em>
                 </span>
                 <textarea
                   value={summary}
@@ -5568,7 +5614,7 @@ function ReleasesPage({
               </div>
               <fieldset className="membership-editor">
                 <legend>
-                  Included ideas <em>Required</em>
+                  Included ideas <em>{t("Required")}</em>
                 </legend>
                 {ideas
                   .filter((idea) => idea.internalStatus !== "Archived")
@@ -6276,6 +6322,7 @@ function OnboardingSettings({
 }: {
   onToast: (message: string) => void;
 }) {
+  const t = useT();
   const [data, setData] = useState<OnboardingAdminPayload | null>(null);
   const [saving, setSaving] = useState(false);
   const [filterTour, setFilterTour] = useState("");
@@ -6577,7 +6624,7 @@ function OnboardingSettings({
           <div className="tour-progress-head">
             <span>User</span>
             <span>Tour</span>
-            <span>Status</span>
+            <span>{t("Status")}</span>
             <span>Step</span>
             <span>Where</span>
             <span>Updated</span>
@@ -6637,14 +6684,15 @@ function NotificationsPopover({
   onRead: (id: string) => void;
   onOpenUpdates: () => void;
 }) {
+  const t = useT();
   return (
     <div className="notification-popover">
       <header>
         <strong>Updates</strong>
-        <button onClick={onOpenUpdates}>View all</button>
+        <button onClick={onOpenUpdates}>{t("View all")}</button>
       </header>
       {items.length === 0 ? (
-        <div className="notification-empty">No unread product updates.</div>
+        <div className="notification-empty">{t("No unread product updates.")}</div>
       ) : (
         items.slice(0, 5).map((item) => (
           <button

@@ -1,6 +1,7 @@
 import { verifyDcLaunch, checkDcSession, isLaunchFresh, DC_ONBOARD_ROLE } from "@/lib/server/datacentral";
 import { validateGraphToken } from "@/lib/server/graph-validate";
 import { resolveUserForDcLaunch, resolveUserForEntra } from "@/lib/server/user-directory";
+import { setUserLocaleById } from "@/lib/server/identity-repository";
 import { createSessionToken, sessionSetCookie } from "@/lib/server/session";
 
 type Body = { dcData?: string; dcSig?: string; accessToken?: string; graphToken?: string; aadToken?: string };
@@ -72,6 +73,12 @@ export async function POST(request: Request): Promise<Response> {
     let user;
     try { user = await resolveUserForDcLaunch(launch); }
     catch (e) { const r = provisioningError(e, launch.userEmail || launch.userName); if (r) return r; throw e; }
+    // DataCentral's language setting carries into the user's locale on every
+    // launch (the in-app toggle can override until the next launch). Only
+    // known locales sync; failures never block sign-in.
+    const lang = launch.language?.toLowerCase();
+    const locale = lang?.startsWith("is") ? "is" : lang?.startsWith("en") ? "en" : null;
+    if (locale) await setUserLocaleById(user.id, locale).catch(() => undefined);
     const token = await createSessionToken({
       sub: user.id, email: user.email, name: user.name,
       ext: user.externalSubject ?? `dc:${launch.userId}`, amr: "dc-hmac", dc_embed: true,
