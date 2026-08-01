@@ -723,16 +723,20 @@ test("dc-only access (default ON): /auth/login shows the DataCentral-only notice
   }
 });
 
-test("dc-only access OFF: /auth/login behaves as before (Entra flow / oidc_failed when unconfigured)", async () => {
+test("dc-only access OFF: /auth/login renders the login screen (Microsoft + e-mail code)", async () => {
   const { GET: loginGet } = await import("../app/auth/login/route");
   const { getRuntimeSettings } = await import("../lib/server/settings-repository");
   const current = await getRuntimeSettings();
   globalThis.pulseMemorySettings = { ...current, dcOnlyAccess: false };
   try {
     const res = await loginGet(new Request("http://localhost/auth/login?returnUrl=%2F"));
-    assert.equal(res.status, 302);
-    // Entra unconfigured in tests -> the pre-existing graceful degradation path.
-    assert.ok((res.headers.get("location") ?? "").includes("/auth/error?code=oidc_failed"));
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.ok(html.includes("/auth/otp/start"), "screen must offer the e-mail code flow");
+    // Explicit provider selection still runs the Entra flow (unconfigured -> degradation).
+    const entra = await loginGet(new Request("http://localhost/auth/login?provider=microsoft&returnUrl=%2F"));
+    assert.equal(entra.status, 302);
+    assert.ok((entra.headers.get("location") ?? "").includes("/auth/error?code=oidc_failed"));
   } finally {
     globalThis.pulseMemorySettings = undefined;
   }
@@ -749,13 +753,11 @@ test("dc-only access: the MCP consent path is exempt — /auth/login with an /oa
   try {
     const consentReturn = encodeURIComponent("/oauth/authorize?client_id=abc&state=xyz");
     const res = await loginGet(new Request(`http://localhost/auth/login?returnUrl=${consentReturn}`));
-    assert.equal(res.status, 302);
-    const location = res.headers.get("location") ?? "";
-    assert.ok(!location.includes("code=dc_only"),
-      `consent-bound login must not be dc_only-blocked (got ${location})`);
-    // Entra unconfigured in tests -> the flow's normal degradation, proving we
-    // fell through INTO the Entra flow rather than the dc-only gate.
-    assert.ok(location.includes("code=oidc_failed"));
+    // The exemption now lands on the login SCREEN (Microsoft + e-mail code) so
+    // OTP users can complete MCP consent too — not straight into Entra.
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.ok(html.includes("/auth/otp/start"));
   } finally {
     globalThis.pulseMemorySettings = undefined;
   }

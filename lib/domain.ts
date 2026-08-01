@@ -49,6 +49,6 @@ export type PulseIdentity = {
   isInternal: boolean;
   dcEmbed?: boolean;
   dcOnboard?: boolean;
-  authMethod?: "entra" | "dc-hmac" | "dc-graph" | "easyauth" | "dev";
+  authMethod?: "entra" | "dc-hmac" | "dc-graph" | "otp" | "easyauth" | "dev";
   isVerified?: boolean;
 };

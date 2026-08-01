@@ -5,7 +5,7 @@ export type SessionClaims = {
   email: string;
   name: string;
   ext: string;                 // external subject: Entra oid | "dc:{userId}" | "dev:local"
-  amr: "entra" | "dc-hmac" | "dc-graph" | "dev";
+  amr: "entra" | "dc-hmac" | "dc-graph" | "otp" | "dev";
   dc_embed?: true;             // chrome-hiding claim — set once at sign-in, travels with cookie
   dc_onboard?: true;           // DataCentral launch carried the "Onboard" role — gates tours in embeds
   tid?: string;                // Entra tenant id when applicable

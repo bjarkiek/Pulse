@@ -275,3 +275,29 @@ async function resolveUserForDcLaunchSql(launch: DataCentralLaunch): Promise<Pro
     throw error;
   }
 }
+
+// Email one-time-passcode sign-in (standalone login screen). Only Active users
+// the admin designated authentication = "OTP" may sign in this way — Entra
+// users must SSO, so a compromised mailbox alone can never bypass their SSO
+// (and its MFA). No subject stamping: the email IS the identity here.
+export async function resolveUserForOtp(email: string): Promise<ProvisionedUser> {
+  const normalized = email.trim().toLowerCase();
+  if (!isAzureSqlConfigured()) {
+    const user = memoryUsers().find((u) => u.email.toLowerCase() === normalized);
+    if (!user || user.authentication !== "OTP") throw new Error("NOT_PROVISIONED");
+    assertActive(user);
+    return toProvisioned(user);
+  }
+  const pool = await getSqlPool();
+  const row = (
+    await pool.request()
+      .input("email", sql.NVarChar(320), normalized)
+      .query(`SELECT ${SELECT_COLUMNS}, auth_method authMethod FROM dbo.Users WHERE email=@email`)
+  ).recordset[0];
+  if (!row || row.authMethod !== "OTP") throw new Error("NOT_PROVISIONED");
+  if (row.status !== "Active") throw new Error("USER_DISABLED");
+  return {
+    id: row.id, email: row.email, name: row.name,
+    status: row.status, externalSubject: row.externalSubject ?? null,
+  };
+}
