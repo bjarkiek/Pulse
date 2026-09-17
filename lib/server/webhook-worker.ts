@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
-import { validateWebhookUrl } from "./webhook-repository";
+import { postPublicWebhook } from "./safe-outbound";
 
 type Delivery = {
   id: string;
@@ -40,28 +40,19 @@ export async function processWebhookBatch(limit = 20) {
     const item = await claimNext();
     if (!item) break;
     try {
-      const url = await validateWebhookUrl(item.url);
       const timestamp = Math.floor(Date.now() / 1000).toString();
       const signature = createHmac("sha256", secret)
         .update(`${timestamp}.${item.payload}`)
         .digest("hex");
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-pulse-delivery": item.id,
-          "x-pulse-timestamp": timestamp,
-          "x-pulse-signature": `sha256=${signature}`,
-        },
-        body: item.payload,
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok) throw new Error(`HTTP_${response.status}`);
+      const status = await postPublicWebhook(item.url, {
+        "content-type": "application/json", "x-pulse-delivery": item.id,
+        "x-pulse-timestamp": timestamp, "x-pulse-signature": `sha256=${signature}`,
+      }, item.payload);
+      if (status < 200 || status >= 300) throw new Error(`HTTP_${status}`);
       await pool
         .request()
         .input("id", sql.UniqueIdentifier, item.id)
-        .input("status", sql.Int, response.status)
+        .input("status", sql.Int, status)
         .query(
           "UPDATE dbo.WebhookDeliveries SET state='Delivered',delivered_at=SYSUTCDATETIME(),last_status=@status,next_attempt_at=NULL,last_error_code=NULL WHERE id=@id",
         );

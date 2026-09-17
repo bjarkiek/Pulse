@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import {
@@ -25,7 +26,7 @@ export async function PATCH(request: Request) {
       {
         item: await saveOnboardingSettings(
           await getIdentity(request),
-          await request.json(),
+          await readJson(request),
         ),
       },
       {},

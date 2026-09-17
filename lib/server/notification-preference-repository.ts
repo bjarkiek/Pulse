@@ -1,3 +1,4 @@
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireMembership } from "./authorization";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
@@ -98,8 +99,8 @@ export async function saveNotificationPreference(
   }
 
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const prior = await new sql.Request(transaction)
       .input("userId", sql.UniqueIdentifier, identity.id)
@@ -134,14 +135,14 @@ export async function saveNotificationPreference(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,organization_id,action,entity_type,before_json,after_json,correlation_id) VALUES(@id,@actor,@organizationId,'notification.preference.updated','NotificationPreference',@before,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return {
       eventType: typedEvent,
       cadence: typedCadence,
       mandatory: mandatoryEvents.has(typedEvent),
     };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

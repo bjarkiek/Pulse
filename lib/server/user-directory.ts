@@ -1,3 +1,4 @@
+import { beginSqlTransaction } from "@/lib/server/database";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
 import type { DataCentralLaunch } from "./datacentral";
 import { users, type UserRecord } from "@/lib/server/admin-repository";
@@ -106,8 +107,8 @@ async function resolveUserForEntraSql(
   email: string,
 ): Promise<ProvisionedUser> {
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     let row = (
       await new sql.Request(transaction)
@@ -150,10 +151,10 @@ async function resolveUserForEntraSql(
       .query(
         "UPDATE dbo.Users SET external_subject=@oid, entra_tenant_id=@tenantId, last_login_at=SYSUTCDATETIME(), last_login_method='entra' WHERE id=@id",
       );
-    await transaction.commit();
+    await scope.commit();
     return { id: row.id, email: row.email, name: row.name, status: row.status, externalSubject: oid };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -214,8 +215,8 @@ function resolveUserForDcLaunchMemory(launch: DataCentralLaunch): ProvisionedUse
 
 async function resolveUserForDcLaunchSql(launch: DataCentralLaunch): Promise<ProvisionedUser> {
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const subject = `dc:${launch.userId}`;
     const email = launch.userEmail ?? launch.userName;
@@ -262,7 +263,7 @@ async function resolveUserForDcLaunchSql(launch: DataCentralLaunch): Promise<Pro
         .input("id", sql.UniqueIdentifier, row.id)
         .query("UPDATE dbo.Users SET last_login_at=SYSUTCDATETIME(), last_login_method='dc-hmac' WHERE id=@id");
     }
-    await transaction.commit();
+    await scope.commit();
     return {
       id: row.id,
       email: row.email,
@@ -271,7 +272,7 @@ async function resolveUserForDcLaunchSql(launch: DataCentralLaunch): Promise<Pro
       externalSubject: row.externalSubject,
     };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

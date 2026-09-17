@@ -1,3 +1,4 @@
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import {
   audienceMatches,
@@ -587,8 +588,8 @@ export async function saveOnboardingSettings(
     return getOnboardingAdmin(identity);
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     await new sql.Request(transaction)
       .input("key", sql.NVarChar(100), "onboarding")
@@ -620,9 +621,9 @@ export async function saveOnboardingSettings(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,after_json,correlation_id) VALUES(@id,@actor,'onboarding.settings.updated','Onboarding',@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
   return getOnboardingAdmin(identity);

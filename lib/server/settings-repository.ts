@@ -1,3 +1,6 @@
+import { parseInput } from "./validation";
+import { settingsInputSchema } from "@/lib/contracts";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
@@ -67,6 +70,7 @@ export async function getRuntimeSettings() {
         ...JSON.parse(result.recordset[0].value),
       } as PulseSettings)
     : defaults;
+  if (process.env.NODE_ENV === "production") settings.showDemoData = false;
   // Keep the sync demo-mode cache (database.ts isDemoDataActive) current.
   globalThis.pulseShowDemoData = settings.showDemoData;
   return settings;
@@ -81,7 +85,9 @@ export async function saveSettings(
   identity: PulseIdentity,
   input: PulseSettings,
 ) {
+  input = parseInput(settingsInputSchema, input);
   await requireInternalRole(identity, ["System admin"]);
+  if (process.env.NODE_ENV === "production" && input.showDemoData) throw new Error("INVALID_DEMO_MODE_DISABLED");
   if (
     ![10, 25, 50].includes(Number(input.attachmentMaxMb)) ||
     ![50, 100, 250].includes(Number(input.requestAttachmentMaxMb)) ||
@@ -124,8 +130,8 @@ export async function saveSettings(
     return saved;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const prior = await new sql.Request(transaction)
       .input("key", sql.NVarChar(100), "system")
@@ -162,10 +168,10 @@ export async function saveSettings(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,before_json,after_json,correlation_id) VALUES(@id,@actor,'settings.updated','Settings',@before,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return saved;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

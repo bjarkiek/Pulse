@@ -1,3 +1,4 @@
+import { checkedMutation } from "../versions";
 import { z } from "zod";
 import { orgIdParam, withScope, type ChatTool } from "./tool-contract";
 import { requireInternalRole } from "../authorization";
@@ -46,7 +47,11 @@ const ideaStatuses = [
 ] as const;
 const horizons = ["Now", "Next", "Later", "Released"] as const;
 const roadmapHorizons = ["Now", "Next", "Later"] as const;
-const confidenceSchema = z.union([z.literal(50), z.literal(80), z.literal(100)]);
+const confidenceSchema = z.union([
+  z.literal(50),
+  z.literal(80),
+  z.literal(100),
+]);
 const effortSchema = z.union([
   z.literal(1),
   z.literal(2),
@@ -99,7 +104,10 @@ export const internalTools: ChatTool[] = [
         .array(z.string())
         .max(100)
         .describe("Request public ids, e.g. DCI-1051"),
-      ownerId: z.string().optional().describe("User id to assign as owner, or 'me'"),
+      ownerId: z
+        .string()
+        .optional()
+        .describe("User id to assign as owner, or 'me'"),
       tagIds: z.array(z.string()).optional().describe("Tag taxonomy value ids"),
       triageDueAt: z.string().optional().describe("yyyy-MM-dd"),
       confirmed: z
@@ -146,7 +154,7 @@ export const internalTools: ChatTool[] = [
           .map(
             (idea) =>
               `${idea.id} '${idea.internalTitle}' — ${idea.internalStatus} (publish ${idea.publishState}), ` +
-              `area ${idea.area}, horizon ${idea.horizon}` +
+              `area ${idea.area}, horizon ${idea.horizon}, version ${idea.version}` +
               (idea.ownerId ? `, owner ${idea.ownerId}` : "") +
               (idea.score != null ? `, score ${idea.score}` : "") +
               `, linked requests ${idea.linkedRequests ?? 0}`,
@@ -183,10 +191,20 @@ export const internalTools: ChatTool[] = [
       "reference, or release notes. WARNING: editing a Published idea demotes it back to Staged (it must be " +
       "re-published to go live again). Do not retry on timeout.",
     inputSchema: {
+      version: z
+        .string()
+        .min(1)
+        .describe(
+          "Version returned by the most recent read; re-read on conflict.",
+        ),
       id: z.string().describe("Idea public id, e.g. IDEA-318"),
       internalTitle: z.string().max(200).optional(),
       internalDescription: z.string().max(5000).optional(),
-      publishedTitle: z.string().max(200).optional().describe("Customer-visible title"),
+      publishedTitle: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("Customer-visible title"),
       publishedDescription: z
         .string()
         .max(5000)
@@ -208,7 +226,13 @@ export const internalTools: ChatTool[] = [
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        const idea = await updateIdea(scoped, input.id as string, input as never);
+        const idea = await checkedMutation(
+          scoped,
+          "Ideas",
+          input.id as string,
+          input.version,
+          () => updateIdea(scoped, input.id as string, input as never),
+        );
         return `Updated ${idea.id} '${idea.internalTitle}' (status ${idea.internalStatus}, publish ${idea.publishState}).`;
       }),
   },
@@ -220,6 +244,12 @@ export const internalTools: ChatTool[] = [
       "confirmed_safe true ONLY after the user explicitly confirms the published wording is customer-safe. " +
       "Requires publishedTitle/publishedDescription to already be set via update_idea. Do not retry on timeout.",
     inputSchema: {
+      version: z
+        .string()
+        .min(1)
+        .describe(
+          "Version returned by the most recent read; re-read on conflict.",
+        ),
       id: z.string().describe("Idea public id, e.g. IDEA-318"),
       confirmed_safe: z
         .boolean()
@@ -232,10 +262,17 @@ export const internalTools: ChatTool[] = [
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        const idea = await publishIdea(
+        const idea = await checkedMutation(
           scoped,
+          "Ideas",
           input.id as string,
-          Boolean(input.confirmed_safe),
+          input.version,
+          () =>
+            publishIdea(
+              scoped,
+              input.id as string,
+              Boolean(input.confirmed_safe),
+            ),
         );
         return `Published ${idea.id} '${idea.title}' (status ${idea.status}).`;
       }),
@@ -307,7 +344,9 @@ export const internalTools: ChatTool[] = [
       reason: z.string(),
       confirmed: z
         .boolean()
-        .describe("Set true ONLY after the user explicitly confirms this merge"),
+        .describe(
+          "Set true ONLY after the user explicitly confirms this merge",
+        ),
       organization_id: orgIdParam,
     },
     readOnly: false,
@@ -376,6 +415,10 @@ export const internalTools: ChatTool[] = [
       "immediately). Do not retry on timeout.",
     inputSchema: {
       id: z.string().describe("Idea public id, e.g. IDEA-318"),
+      version: z
+        .string()
+        .min(1)
+        .describe("Version from the latest idea read; re-read on conflict."),
       horizon: z.enum(roadmapHorizons),
       targetQuarter: z.string().optional().describe("e.g. 'Q3 2026'"),
       confidence: confidenceSchema.optional(),
@@ -386,12 +429,19 @@ export const internalTools: ChatTool[] = [
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        await placeRoadmap(scoped, input.id as string, {
-          horizon: input.horizon as "Now" | "Next" | "Later",
-          targetQuarter: input.targetQuarter as string | undefined,
-          confidence: input.confidence as 50 | 80 | 100 | undefined,
-          publish: input.publish as boolean | undefined,
-        });
+        await checkedMutation(
+          scoped,
+          "Ideas",
+          input.id as string,
+          input.version,
+          () =>
+            placeRoadmap(scoped, input.id as string, {
+              horizon: input.horizon as "Now" | "Next" | "Later",
+              targetQuarter: input.targetQuarter as string | undefined,
+              confidence: input.confidence as 50 | 80 | 100 | undefined,
+              publish: input.publish as boolean | undefined,
+            }),
+        );
         return `${input.id} placed on roadmap horizon ${input.horizon}${input.publish ? " (published)" : ""}.`;
       }),
   },
@@ -449,14 +499,19 @@ export const internalTools: ChatTool[] = [
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        await removeExternalLink(scoped, input.ideaId as string, input.linkId as string);
+        await removeExternalLink(
+          scoped,
+          input.ideaId as string,
+          input.linkId as string,
+        );
         return `Removed link ${input.linkId} from ${input.ideaId}.`;
       }),
   },
   {
     name: "list_internal_releases",
     title: "List internal releases",
-    description: "List all releases including unpublished drafts (public id REL-###).",
+    description:
+      "List all releases including unpublished drafts (public id REL-###).",
     inputSchema: { organization_id: orgIdParam },
     readOnly: true,
     group: "internal",
@@ -486,7 +541,9 @@ export const internalTools: ChatTool[] = [
       availability: z.string().describe("e.g. 'Rolling out over 2 weeks'"),
       documentationUrl: z.string().optional(),
       rolloutNotes: z.string().optional(),
-      ideaIds: z.array(z.string()).describe("Idea public ids this release bundles, e.g. IDEA-318"),
+      ideaIds: z
+        .array(z.string())
+        .describe("Idea public ids this release bundles, e.g. IDEA-318"),
       organization_id: orgIdParam,
     },
     readOnly: false,
@@ -498,6 +555,23 @@ export const internalTools: ChatTool[] = [
       }),
   },
   {
+    name: "get_release",
+    title: "Read release before publishing",
+    description:
+      "Read an internal draft release and its version before requesting explicit publication approval.",
+    inputSchema: { id: z.string(), organization_id: orgIdParam },
+    readOnly: true,
+    group: "internal",
+    run: (identity, args) =>
+      withScope(identity, args, async (scoped, input) => {
+        const item = (await listReleases(scoped, true)).find(
+          (r) => r.id === input.id,
+        );
+        if (!item) throw new Error("NOT_FOUND");
+        return JSON.stringify(item);
+      }),
+  },
+  {
     name: "publish_release",
     title: "Publish release",
     description:
@@ -505,10 +579,18 @@ export const internalTools: ChatTool[] = [
       "availability and release notes, and notifies followers by email and in-app. Set confirmed true ONLY " +
       "after the user explicitly confirms this publish. Do not retry on timeout.",
     inputSchema: {
+      version: z
+        .string()
+        .min(1)
+        .describe(
+          "Version returned by the most recent read; re-read on conflict.",
+        ),
       id: z.string().describe("Release public id, e.g. REL-3"),
       confirmed: z
         .boolean()
-        .describe("Set true ONLY after the user explicitly confirms this release publish"),
+        .describe(
+          "Set true ONLY after the user explicitly confirms this release publish",
+        ),
       organization_id: orgIdParam,
     },
     readOnly: false,
@@ -521,7 +603,13 @@ export const internalTools: ChatTool[] = [
             "followers by email and in-app. Please confirm with the user, then call again with confirmed: true."
           );
         }
-        const release = await publishRelease(scoped, input.id as string);
+        const release = await checkedMutation(
+          scoped,
+          "Releases",
+          input.id as string,
+          input.version,
+          () => publishRelease(scoped, input.id as string),
+        );
         return `Published ${release.id} '${release.title}' — notified followers.`;
       }),
   },
@@ -602,10 +690,12 @@ export const internalTools: ChatTool[] = [
       withScope(identity, args, async (scoped) => {
         const summary = await getAnalyticsSummary(scoped);
         const areas =
-          summary.areas.map((a) => `${a.area}: ${a.count}`).join(", ") || "none";
-        const notifications =
-          summary.notifications.map((n) => `${n.state}: ${n.count}`).join(", ") ||
+          summary.areas.map((a) => `${a.area}: ${a.count}`).join(", ") ||
           "none";
+        const notifications =
+          summary.notifications
+            .map((n) => `${n.state}: ${n.count}`)
+            .join(", ") || "none";
         return (
           `Requests: ${summary.requests.total} total, ${summary.requests.open} open. Areas: ${areas}. ` +
           `Avg first response ${summary.serviceLevels.averageFirstResponseHours.toFixed(1)}h, ` +
@@ -646,7 +736,12 @@ export const internalTools: ChatTool[] = [
       "Search recent audit events (who did what, when) by action, entity type, or actor name. " +
       "System admin only. Returns at most 100 matching events, most recent first.",
     inputSchema: {
-      query: z.string().optional().describe("Substring to match against action, entity type, or actor name"),
+      query: z
+        .string()
+        .optional()
+        .describe(
+          "Substring to match against action, entity type, or actor name",
+        ),
       limit: z
         .number()
         .int()
@@ -664,7 +759,10 @@ export const internalTools: ChatTool[] = [
     group: "internal",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        const items = await listAudit(scoped, (input.limit as number | undefined) ?? 100);
+        const items = await listAudit(
+          scoped,
+          (input.limit as number | undefined) ?? 100,
+        );
         const query = (input.query as string | undefined)?.toLowerCase();
         const filtered = query
           ? items.filter((e) =>

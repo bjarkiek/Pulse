@@ -1,6 +1,11 @@
+import { secureHtmlResponse } from "@/lib/server/html-response";
 import * as oidc from "openid-client";
 import {
-  getOidcConfig, isEntraConfigured, oidcStateSetCookie, redirectUri, signOidcState,
+  getOidcConfig,
+  isEntraConfigured,
+  oidcStateSetCookie,
+  redirectUri,
+  signOidcState,
 } from "@/lib/server/entra-oidc";
 import { getRuntimeSettings } from "@/lib/server/settings-repository";
 import { publicOrigin } from "@/lib/server/http";
@@ -13,7 +18,10 @@ function sanitizeReturnUrl(value: string | null): string {
 }
 
 function redirectTo(origin: string, path: string): Response {
-  return new Response(null, { status: 302, headers: { location: new URL(path, origin).toString() } });
+  return new Response(null, {
+    status: 302,
+    headers: { location: new URL(path, origin).toString() },
+  });
 }
 
 // Entry point for the standalone (non-embedded) sign-in flow. Redirects to
@@ -41,11 +49,12 @@ export async function GET(request: Request): Promise<Response> {
   // The actual Entra redirect runs only when the Microsoft button is followed
   // (?provider=microsoft), below.
   if (url.searchParams.get("provider") !== "microsoft")
-    return loginScreen(returnUrl);
+    return loginScreen(returnUrl, request);
 
   // Graceful degradation: the app must still start (and every other route
   // must still work) when Entra isn't configured — only this flow fails.
-  if (!isEntraConfigured()) return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
+  if (!isEntraConfigured())
+    return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
 
   try {
     const config = await getOidcConfig();
@@ -54,16 +63,29 @@ export async function GET(request: Request): Promise<Response> {
     const state = oidc.randomState();
     const nonce = oidc.randomNonce();
     const authUrl = oidc.buildAuthorizationUrl(config, {
-      redirect_uri: redirectUri(), scope: "openid profile email",
-      code_challenge: codeChallenge, code_challenge_method: "S256", state, nonce,
+      redirect_uri: redirectUri(),
+      scope: "openid profile email",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      state,
+      nonce,
     });
 
-    const token = await signOidcState({ cv: codeVerifier, state, nonce, ru: returnUrl });
-    if (!token) return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
+    const token = await signOidcState({
+      cv: codeVerifier,
+      state,
+      nonce,
+      ru: returnUrl,
+    });
+    if (!token)
+      return redirectTo(publicOrigin(request), "/auth/error?code=oidc_failed");
 
     return new Response(null, {
       status: 302,
-      headers: { location: authUrl.toString(), "set-cookie": oidcStateSetCookie(token) },
+      headers: {
+        location: authUrl.toString(),
+        "set-cookie": oidcStateSetCookie(token),
+      },
     });
   } catch {
     // Discovery/network failure against login.microsoftonline.com — fail
@@ -87,7 +109,7 @@ function jsStringLiteral(value: unknown): string {
     .replace(new RegExp(String.fromCharCode(8233), "g"), BS + "u2029");
 }
 
-function loginScreen(returnUrl: string): Response {
+function loginScreen(returnUrl: string, request: Request): Response {
   const microsoft = isEntraConfigured()
     ? `<a class="ms" href="/auth/login?provider=microsoft&returnUrl=${encodeURIComponent(returnUrl)}">Sign in with Microsoft</a>
        <div class="divider"><span>or / eða</span></div>`
@@ -166,7 +188,5 @@ function loginScreen(returnUrl: string): Response {
   });
 })();
 </script></body></html>`;
-  return new Response(html, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
+  return secureHtmlResponse(html, request);
 }

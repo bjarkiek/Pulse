@@ -1,3 +1,5 @@
+import { scanVerdictSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { setAttachmentState } from "@/lib/server/request-repository";
 import { timingSafeEqual } from "node:crypto";
@@ -22,14 +24,18 @@ export async function POST(
     if (!validSecret(request.headers.get("x-pulse-scan-secret")))
       throw new Error("UNAUTHORIZED");
     const { id } = await context.params;
-    const body = await request.json();
+    const body = await readInput(request, scanVerdictSchema);
     const state =
       body.clean === true
         ? "Clean"
         : body.clean === false
           ? "Infected"
           : "Failed";
-    await setAttachmentState(id, state);
+    await setAttachmentState(
+      id,
+      state,
+      typeof body.etag === "string" ? body.etag : undefined,
+    );
     return json({ ok: true }, {}, correlation);
   } catch (error) {
     return apiError(error, correlation);

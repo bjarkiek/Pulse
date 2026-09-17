@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -16,7 +18,13 @@ export async function POST(
       `idea.merge:${id}`,
       200,
       async () => {
-        const body = await request.json();
+        const body = await readInput(
+          request,
+          z.object({
+            sourceIdeaId: z.string().regex(/^IDEA-\d+$/),
+            reason: z.string().trim().min(1).max(5000),
+          }),
+        );
         return mergeIdeas(identity, id, body.sourceIdeaId, body.reason);
       },
     );

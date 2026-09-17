@@ -1,3 +1,5 @@
+import { webhookInputSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -29,7 +31,10 @@ export async function POST(request: Request) {
       "webhook-subscription.create",
       201,
       async () =>
-        createWebhookSubscription(identity, await request.json()),
+        createWebhookSubscription(
+          identity,
+          await readInput(request, webhookInputSchema),
+        ),
     );
     return json(result.body, { status: result.status }, id);
   } catch (error) {

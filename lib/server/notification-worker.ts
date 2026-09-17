@@ -113,7 +113,11 @@ export async function processNotificationBatch(limit = 10) {
         content: { subject: content.subject, plainText: content.body },
         recipients: { to: [{ address: item.email }] },
       });
-      await poller.pollUntilDone();
+      const outcome = await poller.pollUntilDone({
+        abortSignal: AbortSignal.timeout(30_000),
+      });
+      if (outcome.status !== "Succeeded")
+        throw new Error("EMAIL_DELIVERY_FAILED");
       await pool
         .request()
         .input("ids", sql.NVarChar(sql.MAX), JSON.stringify(item.ids))

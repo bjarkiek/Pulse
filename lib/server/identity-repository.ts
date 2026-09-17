@@ -1,3 +1,4 @@
+import { requireActiveAccount } from "./active-account";
 import type { PulseIdentity } from "@/lib/domain";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
 
@@ -30,6 +31,7 @@ export type MembershipContext = {
 };
 
 export async function getIdentityContext(identity: PulseIdentity) {
+  await requireActiveAccount(identity);
   if (!isAzureSqlConfigured())
     return {
       user: {

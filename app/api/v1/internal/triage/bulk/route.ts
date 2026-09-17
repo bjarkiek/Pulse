@@ -1,3 +1,5 @@
+import { triageInputSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -12,7 +14,8 @@ export async function POST(request: Request) {
       identity,
       "triage.bulk-update",
       200,
-      async () => bulkUpdateTriage(identity, await request.json()),
+      async () =>
+        bulkUpdateTriage(identity, await readInput(request, triageInputSchema)),
     );
     return json(result.body, { status: result.status }, id);
   } catch (error) {

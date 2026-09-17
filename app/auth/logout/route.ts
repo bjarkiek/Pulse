@@ -7,7 +7,10 @@ export const dynamic = "force-dynamic";
 export async function POST(): Promise<Response> {
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
-    headers: { "content-type": "application/json", "set-cookie": sessionClearCookie() },
+    headers: {
+      "content-type": "application/json",
+      "set-cookie": sessionClearCookie(),
+    },
   });
 }
 

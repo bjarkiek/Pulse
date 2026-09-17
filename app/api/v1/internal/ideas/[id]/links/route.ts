@@ -1,10 +1,9 @@
+import { z } from "zod";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
-import {
-  linkRequest,
-  moveRequestLink,
-} from "@/lib/server/product-repository";
+import { linkRequest, moveRequestLink } from "@/lib/server/product-repository";
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
@@ -19,7 +18,17 @@ export async function POST(
       `idea.link:${id}`,
       201,
       async () => {
-        const body = await request.json();
+        const body = await readInput(
+          request,
+          z.object({
+            requestId: z.string().regex(/^DCI-\d+$/),
+            targetIdeaId: z
+              .string()
+              .regex(/^IDEA-\d+$/)
+              .optional(),
+            reason: z.string().trim().min(1).max(5000),
+          }),
+        );
         return linkRequest(identity, id, body.requestId, body.reason);
       },
     );
@@ -36,7 +45,17 @@ export async function PATCH(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const body = await request.json();
+    const body = await readInput(
+      request,
+      z.object({
+        requestId: z.string().regex(/^DCI-\d+$/),
+        targetIdeaId: z
+          .string()
+          .regex(/^IDEA-\d+$/)
+          .optional(),
+        reason: z.string().trim().min(1).max(5000),
+      }),
+    );
     return json(
       await moveRequestLink(
         await getIdentity(request),

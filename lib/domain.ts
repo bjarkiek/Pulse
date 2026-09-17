@@ -41,6 +41,7 @@ export type AttachmentRecord = {
 };
 
 export type PulseIdentity = {
+  sessionIssuedAt?: number;
   id: string;
   email: string;
   name: string;

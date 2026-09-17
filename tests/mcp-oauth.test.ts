@@ -26,7 +26,7 @@ beforeEach(() => {
   globalThis.pulseMcpEphemeralKey = undefined;
   globalThis.pulseMemoryUsers = undefined;
   globalThis.pulseMcpCodeCache = undefined;
-  globalThis.pulseMcpOauthRateLimit = undefined;
+  globalThis.pulseSharedLocalLimits = undefined;
 });
 
 const mcpTestUser = { id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com", name: "Bjarki" };

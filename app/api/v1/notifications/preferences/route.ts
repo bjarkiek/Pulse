@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import {
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   const id = correlationId(request);
   try {
-    const body = await request.json();
+    const body = await readJson(request);
     return json(
       await saveNotificationPreference(
         await getIdentity(request),

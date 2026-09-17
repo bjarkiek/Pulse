@@ -1,3 +1,5 @@
+import { externalLinkInputSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import {
   addExternalLink,
@@ -30,7 +32,11 @@ export async function POST(
   try {
     const { id } = await context.params;
     return json(
-      await addExternalLink(await getIdentity(request), id, await request.json()),
+      await addExternalLink(
+        await getIdentity(request),
+        id,
+        await readInput(request, externalLinkInputSchema),
+      ),
       { status: 201 },
       correlation,
     );

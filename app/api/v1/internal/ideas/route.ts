@@ -1,3 +1,5 @@
+import { readInput } from "@/lib/server/validation";
+import { ideaInputSchema } from "@/lib/contracts";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -23,7 +25,12 @@ export async function POST(request: Request) {
       identity,
       "idea.create",
       201,
-      async () => ({ item: await createIdea(identity, await request.json()) }),
+      async () => ({
+        item: await createIdea(
+          identity,
+          await readInput(request, ideaInputSchema),
+        ),
+      }),
     );
     return json(result.body, { status: result.status }, id);
   } catch (error) {

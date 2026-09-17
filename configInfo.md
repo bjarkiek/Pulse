@@ -16,10 +16,7 @@ manifest + token walkthrough), [`docs/architecture.md`](docs/architecture.md)
 plan at
 [`docs/superpowers/plans/2026-07-15-ai-chat-mcp-datacentral-embed.md`](docs/superpowers/plans/2026-07-15-ai-chat-mcp-datacentral-embed.md).
 
-Every secret below is optional to leave unset in isolation — the affected
-subsystem degrades gracefully (chat panel shows "unconfigured", Slack never
-connects, MCP tokens are ephemeral) — but a production deployment needs all
-of them for the full feature set to work as designed.
+Production startup validates SQL, Blob Storage, session signing, stable MCP signing, scanner/job secrets, HTTPS public URL, replay settings, and enabled integrations. Missing or unresolved required secrets stop startup. AI and Slack remain optional, but partial Slack configuration fails validation. Ephemeral MCP keys and memory/demo adapters are development-only. See [production hardening](docs/production-hardening.md) for the current requirements.
 
 ---
 

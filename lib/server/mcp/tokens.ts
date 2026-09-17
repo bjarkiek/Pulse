@@ -15,6 +15,7 @@ export type McpAccessTokenClaims = {
   name: string;
   clientId: string;
   exp: number;
+  issuedAt: number;
 };
 
 type MemoryRefreshToken = {
@@ -52,6 +53,7 @@ function signingKey(): Uint8Array {
     const buf = Buffer.from(configured, "base64");
     if (buf.length >= 64) return buf;
   }
+  if (process.env.NODE_ENV === "production") throw new Error("MCP_SIGNING_KEY_NOT_CONFIGURED");
   if (!globalThis.pulseMcpEphemeralKey) {
     console.warn(
       "[mcp/tokens] MCP_TOKEN_SIGNING_KEY is not configured (or shorter than 64 bytes) — " +
@@ -72,7 +74,7 @@ export async function issueAccessToken(
   clientId: string,
 ): Promise<string> {
   const key = signingKey();
-  return new SignJWT({ email: user.email, name: user.name, client_id: clientId })
+  return new SignJWT({ iat_ms: Date.now(), email: user.email, name: user.name, client_id: clientId })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.id)
     .setJti(randomToken(16))
@@ -107,6 +109,7 @@ export async function verifyAccessToken(token: string): Promise<McpAccessTokenCl
       name: payload.name,
       clientId: payload.client_id,
       exp: payload.exp,
+      issuedAt: typeof payload.iat_ms === "number" ? payload.iat_ms : (payload.iat || 0) * 1000,
     };
   } catch {
     return null;
@@ -179,7 +182,7 @@ async function redeemRefreshTokenSql(tokenHash: string, clientId: string): Promi
     .query(
       "UPDATE dbo.McpRefreshTokens SET revoked_at = SYSUTCDATETIME() " +
         "OUTPUT CAST(inserted.user_id AS nvarchar(36)) AS userId " +
-        "WHERE token_hash=@hash AND client_id=@clientId AND revoked_at IS NULL AND expires_at > SYSUTCDATETIME()",
+        "WHERE token_hash=@hash AND client_id=@clientId AND revoked_at IS NULL AND expires_at > SYSUTCDATETIME() AND EXISTS (SELECT 1 FROM dbo.Users u WHERE u.id=dbo.McpRefreshTokens.user_id AND u.status='Active' AND (u.tokens_valid_after IS NULL OR dbo.McpRefreshTokens.created_at>u.tokens_valid_after))",
     );
   const userId: string | undefined = claim.recordset[0]?.userId;
   if (!userId) return null;

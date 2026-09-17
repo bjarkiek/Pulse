@@ -1,3 +1,4 @@
+import { readJson } from "@/lib/server/validation";
 import { getCurrentUser } from "@/lib/server/current-user";
 import { setUserLocaleById } from "@/lib/server/identity-repository";
 import { apiError, correlationId, json } from "@/lib/server/http";
@@ -7,8 +8,11 @@ export async function PATCH(request: Request) {
   const id = correlationId(request);
   try {
     const current = await getCurrentUser(request);
-    const body = (await request.json().catch(() => ({}))) as { locale?: string };
-    if (body.locale !== "en" && body.locale !== "is") throw new Error("INVALID_LOCALE");
+    const body = (await readJson(request).catch(() => ({}))) as {
+      locale?: string;
+    };
+    if (body.locale !== "en" && body.locale !== "is")
+      throw new Error("INVALID_LOCALE");
     await setUserLocaleById(current.userId, body.locale);
     return json({ ok: true, locale: body.locale }, {}, id);
   } catch (error) {

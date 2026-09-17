@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { requireMembership } from "@/lib/server/authorization";
 import { apiError, correlationId, json } from "@/lib/server/http";
@@ -6,7 +8,10 @@ export async function POST(request: Request) {
   const id = correlationId(request);
   try {
     const identity = await getIdentity(request);
-    const body = await request.json();
+    const body = await readInput(
+      request,
+      z.object({ organizationId: z.string().min(1).max(32) }),
+    );
     await requireMembership(identity, body.organizationId);
     const response = json(
       { activeOrganizationId: body.organizationId },

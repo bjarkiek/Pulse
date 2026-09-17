@@ -41,3 +41,27 @@ test("documented idempotent operations require an idempotency key", () => {
     );
   }
 });
+import { readdir } from "node:fs/promises";
+async function routes(directory) {
+ const result=[];
+ for(const entry of await readdir(directory,{withFileTypes:true})) {
+  const file=new URL(entry.name+(entry.isDirectory()?"/":""),directory);
+  if(entry.isDirectory())result.push(...await routes(file));else if(entry.name==="route.ts")result.push(file);
+ }
+ return result;
+}
+test("every implemented API path and method is documented with resolved references",async()=>{
+ const root=new URL("../app/api/v1/",import.meta.url);
+ for(const file of await routes(root)) {
+  const source=await readFile(file,"utf8");
+  const route="/api/v1/"+decodeURIComponent(file.href.slice(root.href.length)).replace(/\/route.ts$/,"").replace(/\[([^\]]+)\]/g,"{$1}");
+  for(const match of source.matchAll(/export\s+(?:async\s+function|const)\s+(GET|POST|PATCH|PUT|DELETE|OPTIONS)\b/g))assert.ok(specification.paths[route]?.[match[1].toLowerCase()],`${match[1]} ${route}`);
+ }
+ function check(node) {
+  if(!node||typeof node!=="object")return;
+  if(typeof node.$ref==="string"&&node.$ref.startsWith("#/")){let target=specification;for(const part of node.$ref.slice(2).split("/"))target=target?.[part];assert.ok(target,`unresolved ${node.$ref}`);}
+  for(const value of Object.values(node))check(value);
+ }
+ check(specification);
+ assert.ok(!specification.components.securitySchemes.appServiceIdentity);
+});

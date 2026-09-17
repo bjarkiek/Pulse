@@ -1,3 +1,4 @@
+import { secureHtmlResponse } from "@/lib/server/html-response";
 export const dynamic = "force-dynamic";
 
 // XSS guard: JSON.stringify alone is NOT safe inside an inline <script> — a
@@ -20,9 +21,7 @@ export async function GET(request: Request): Promise<Response> {
   const html = HANDSHAKE_HTML
     .replace("__ORIGINS__", () => jsStringLiteral(origins))
     .replace("__RETURN__", () => jsStringLiteral(returnUrl));
-  return new Response(html, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
+  return secureHtmlResponse(html, request);
 }
 
 const HANDSHAKE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Connecting…</title>

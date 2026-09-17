@@ -153,14 +153,14 @@ test("internal idea workflow: create, set published wording, publish with confir
   assert.ok(created);
   const id = created[0];
   const updateText = await update!.run(identity, {
-    id,
+    id, version: "1",
     publishedTitle: "Bulk export API",
     publishedDescription: "Export your data in bulk via API.",
   });
   assert.match(updateText, new RegExp(id));
-  const rejected = await publish!.run(identity, { id, confirmed_safe: false });
+  const rejected = await publish!.run(identity, { id, version: "2", confirmed_safe: false });
   assert.match(rejected, /safe wording confirmation/i);
-  const publishText = await publish!.run(identity, { id, confirmed_safe: true });
+  const publishText = await publish!.run(identity, { id, version: "2", confirmed_safe: true });
   assert.match(publishText, new RegExp(id));
   assert.doesNotMatch(publishText, /doesn't exist or you don't have access/);
 });
@@ -221,10 +221,10 @@ test("publish_release refuses to mutate without explicit confirmation, proceeds 
   });
   const ideaId = createText.match(/IDEA-\d+/)![0];
   await update!.run(identity, {
-    id: ideaId, publishedTitle: "Release confirmation idea",
+    id: ideaId, version: "1", publishedTitle: "Release confirmation idea",
     publishedDescription: "Customer-safe wording.",
   });
-  await publish!.run(identity, { id: ideaId, confirmed_safe: true });
+  await publish!.run(identity, { id: ideaId, version: "2", confirmed_safe: true });
   const releaseText = await createRelease!.run(identity, {
     title: "Confirmation release", date: "2026-07-15",
     summary: "Bundles the confirmation idea.", availability: "General availability",
@@ -237,7 +237,7 @@ test("publish_release refuses to mutate without explicit confirmation, proceeds 
   assert.match(unconfirmed, /confirmed: true/);
   assert.equal(getProductMemory().find((p) => p.id === ideaId)!.internalStatus, "Discovery");
 
-  const confirmed = await publishRelease!.run(identity, { id: releaseId, confirmed: true });
+  const confirmed = await publishRelease!.run(identity, { id: releaseId, version: "1", confirmed: true });
   assert.match(confirmed, new RegExp(releaseId));
   assert.equal(getProductMemory().find((p) => p.id === ideaId)!.internalStatus, "Released");
 });

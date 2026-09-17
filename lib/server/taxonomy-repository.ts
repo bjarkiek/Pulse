@@ -1,3 +1,6 @@
+import { parseInput } from "./validation";
+import { taxonomyInputSchema } from "@/lib/contracts";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
@@ -59,6 +62,7 @@ export async function saveTaxonomy(
   identity: PulseIdentity,
   input: TaxonomyValue,
 ) {
+  input = parseInput(taxonomyInputSchema, input);
   await requireInternalRole(identity, ["System admin"]);
   if (
     !kinds.includes(input.kind) ||
@@ -87,8 +91,8 @@ export async function saveTaxonomy(
     return item;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, id)
@@ -111,10 +115,10 @@ export async function saveTaxonomy(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'taxonomy.saved','TaxonomyValue',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return item;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

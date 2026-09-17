@@ -54,6 +54,17 @@ Re-run it for every release. Migrations are tracked in `dbo.SchemaMigrations` an
 applied only once each. Use `-SkipMigrations` for an image-only redeploy, and
 `-Tag <tag>` to pin a specific image tag (defaults to the git short SHA).
 
+If a deploy dies *after* the image is built — the build is by far the slowest
+step — resume it without rebuilding:
+
+```powershell
+./deploy.ps1 -NamePrefix dcpulseprod -SkipBuild
+```
+
+That reuses the image already in the registry (it verifies the tag is really
+there first) and picks up from the database step onward. Every step after the
+build is idempotent, so re-running is safe.
+
 When it finishes it prints the live URL and confirms `‹url›/api/health` returned
 200.
 
@@ -100,7 +111,8 @@ System-admin account directly in the database (the Users UI can't grant the
   never written to disk. Re-running `provision.ps1` **reuses** the existing Key
   Vault values (it does not rotate them), so adding a feature flag later won't
   invalidate sessions or break the DataCentral embed. To rotate a secret on
-  purpose, update it in Key Vault and restart the app.
+  purpose, create the new Key Vault version, update the pinned App Service reference
+  to its versioned URI, and restart/verify the app. Restart alone keeps the old pinned version.
 - **App SQL access** is granted automatically by `deploy.ps1`. It first tries
   `CREATE USER … FROM EXTERNAL PROVIDER`; if the SQL server can't read the
   directory (common in locked-down tenants), it falls back to creating the user
@@ -109,3 +121,21 @@ System-admin account directly in the database (the Users UI can't grant the
 - **Logs**: `az webapp log tail -g <prefix>-rg -n <prefix>-app`.
 - **Teardown**: `az group delete -n <prefix>-rg --yes`. (Key Vault has purge
   protection; fully removing it may require `az keyvault purge`.)
+
+## Security hardening rollout (17 September 2026)
+
+Apply migrations **001–014** using the deployment ledger before starting this release.
+Migration 013 invalidates old idempotency responses and marks pre-ETag Clean/Scanning
+attachments Failed. Those files require a fresh upload/scan; legacy approval does not
+prove byte integrity. Back up SQL first and do not rerun unguarded migrations.
+
+Follow [production-hardening.md](../docs/production-hardening.md) for required secrets,
+provider configuration, trusted proxy limits, scanner deployment and acceptance.
+Deploy `scanning.bicep` after the application endpoint is reachable; this enables billed
+Defender scanning. Configure retention scheduling, Event Grid dead-lettering and alerts.
+Verify the real browser origin in Blob CORS, including any custom hostname.
+
+Azure standalone is the supported production build. Sites/Vinext is legacy development
+tooling. Run `npm run verify`, the SQL regression suite on a disposable database, and
+production dependency/image scans. The added CI workflow has not been executed merely
+by adding its YAML. Local Windows checks do not establish Linux or live Azure acceptance.

@@ -1,3 +1,6 @@
+import { readInput } from "@/lib/server/validation";
+import { requestMutationSchema } from "@/lib/contracts";
+import { checkedMutation } from "@/lib/server/versions";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import {
@@ -35,17 +38,24 @@ export async function PATCH(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
-    const body = await request.json();
+    const body = await readInput(request, requestMutationSchema);
     const identity = await getIdentity(request);
-    const item = body.status
-      ? await updateRequestStatus(identity, id, body.status, {
-          explanation: body.explanation,
-          supportReference: body.supportReference,
-        })
-      : await editRequest(identity, id, {
-          title: body.title,
-          problem: body.problem,
-        });
+    const item = await checkedMutation(
+      identity,
+      "Requests",
+      id,
+      request.headers.get("if-match"),
+      async () =>
+        body.status
+          ? await updateRequestStatus(identity, id, body.status, {
+              explanation: body.explanation,
+              supportReference: body.supportReference,
+            })
+          : await editRequest(identity, id, {
+              title: body.title,
+              problem: body.problem,
+            }),
+    );
     return json({ item }, {}, correlation);
   } catch (error) {
     return apiError(error, correlation);

@@ -1,3 +1,5 @@
+import { readInput } from "@/lib/server/validation";
+import { releaseInputSchema } from "@/lib/contracts";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -27,7 +29,10 @@ export async function POST(request: Request) {
       "release.create",
       201,
       async () => ({
-        item: await createRelease(identity, await request.json()),
+        item: await createRelease(
+          identity,
+          await readInput(request, releaseInputSchema),
+        ),
       }),
     );
     return json(result.body, { status: result.status }, id);

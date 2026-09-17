@@ -1,3 +1,4 @@
+import { internalTranslations } from "./i18n-internal";
 // Lightweight UI localization for the customer-facing app surface.
 //
 // Keys are the English source strings exactly as they appear in JSX — so call
@@ -11,24 +12,28 @@
 export type UiLocale = "en" | "is";
 
 export const IS: Record<string, string> = {
+  ...internalTranslations,
   // --- navigation & shell ---
-  "Home": "Heim",
+  Home: "Heim",
   "Browse ideas": "Skoða hugmyndir",
-  "Roadmap": "Vegvísir",
+  Roadmap: "Vegvísir",
   "My requests": "Mínar beiðnir",
-  "Updates": "Uppfærslur",
-  "Help": "Hjálp",
+  Updates: "Uppfærslur",
+  Help: "Hjálp",
   "Pulse help": "Pulse hjálp",
   "Submit a request": "Senda inn beiðni",
   "Primary navigation": "Aðalvalmynd",
   "Open navigation": "Opna valmynd",
   "Close navigation": "Loka valmynd",
-  "Notifications": "Tilkynningar",
-  "Resolving your authorized organization…": "Staðfesti aðgang fyrirtækisins þíns…",
+  Notifications: "Tilkynningar",
+  "Resolving your authorized organization…":
+    "Staðfesti aðgang fyrirtækisins þíns…",
   "Choose an organization": "Veldu fyrirtæki",
-  "Organization": "Fyrirtæki",
-  "Pulse could not resolve your organization access.": "Pulse gat ekki staðfest aðgang fyrirtækisins þíns.",
-  "That organization context is no longer available.": "Þetta fyrirtækjasamhengi er ekki lengur í boði.",
+  Organization: "Fyrirtæki",
+  "Pulse could not resolve your organization access.":
+    "Pulse gat ekki staðfest aðgang fyrirtækisins þíns.",
+  "That organization context is no longer available.":
+    "Þetta fyrirtækjasamhengi er ekki lengur í boði.",
   "Pulse is using the local preview data.": "Pulse notar staðbundin sýnigögn.",
 
   // --- home ---
@@ -55,32 +60,34 @@ export const IS: Record<string, string> = {
   "View all": "Sjá allt",
   "Recently shipped": "Nýkomið út",
   "View release notes": "Skoða útgáfulýsingu",
-  "Released": "Útgefið",
+  Released: "Útgefið",
 
   // --- ideas ---
   "Browse customer-driven ideas": "Skoðaðu hugmyndir frá viðskiptavinum",
-  "Built from governed customer evidence": "Byggt á staðfestum ábendingum viðskiptavina",
+  "Built from governed customer evidence":
+    "Byggt á staðfestum ábendingum viðskiptavina",
   "Search ideas": "Leita í hugmyndum",
   "All statuses": "Allar stöður",
   "Filter by product area": "Sía eftir vörusviði",
   "Product area": "Vörusvið",
-  "Follow": "Fylgjast með",
-  "Following": "Fylgist með",
-  "Followers": "Fylgjendur",
+  Follow: "Fylgjast með",
+  Following: "Fylgist með",
+  Followers: "Fylgjendur",
   "No ideas match these filters": "Engar hugmyndir passa við þessar síur",
   "Try a different phrase, product area, or status.":
     "Prófaðu annað orðalag, vörusvið eða stöðu.",
   "You are now following this idea.": "Þú fylgist nú með þessari hugmynd.",
   "You will no longer receive updates.": "Þú færð ekki fleiri uppfærslur.",
-  "The follow preference could not be changed.": "Ekki tókst að breyta fylgnistillingunni.",
+  "The follow preference could not be changed.":
+    "Ekki tókst að breyta fylgnistillingunni.",
   "Related ideas": "Skyldar hugmyndir",
   "Related ideas already exist": "Skyldar hugmyndir eru þegar til",
-  "Considering": "Til skoðunar",
+  Considering: "Til skoðunar",
 
   // --- roadmap ---
   "Where the product is heading": "Hvert varan stefnir",
   "Product direction": "Stefna vörunnar",
-  "Planned": "Á áætlun",
+  Planned: "Á áætlun",
   "In progress": "Í vinnslu",
   "Recently delivered": "Nýlega afhent",
   "Latest update": "Nýjasta uppfærsla",
@@ -89,30 +96,32 @@ export const IS: Record<string, string> = {
   // --- requests list & detail ---
   "Requests from": "Beiðnir frá",
   "Search requests": "Leita í beiðnum",
-  "Search request number, title, or problem": "Leita eftir númeri, titli eða lýsingu",
+  "Search request number, title, or problem":
+    "Leita eftir númeri, titli eða lýsingu",
   "No requests match these filters": "Engar beiðnir passa við þessar síur",
   "Adjust the search or submit the requirement your team needs.":
     "Breyttu leitinni eða sendu inn þörfina sem teymið þitt vantar.",
-  "Status": "Staða",
-  "Request": "Beiðni",
-  "Submitted": "Innsend",
+  Status: "Staða",
+  Request: "Beiðni",
+  Submitted: "Innsend",
   "Under review": "Í skoðun",
   "Needs information": "Vantar upplýsingar",
-  "Declined": "Hafnað",
-  "Withdrawn": "Dregin til baka",
-  "Merged": "Sameinuð",
-  "Discussion": "Umræða",
-  "History": "Ferill",
-  "Attachments": "Viðhengi",
-  "Edit": "Breyta",
-  "Edited": "Breytt",
-  "Close": "Loka",
-  "Cancel": "Hætta við",
-  "Save": "Vista",
+  Declined: "Hafnað",
+  Withdrawn: "Dregin til baka",
+  Merged: "Sameinuð",
+  Discussion: "Umræða",
+  History: "Ferill",
+  Attachments: "Viðhengi",
+  Edit: "Breyta",
+  Edited: "Breytt",
+  Close: "Loka",
+  Cancel: "Hætta við",
+  Save: "Vista",
   "Saving…": "Vista…",
   "Reply to DataCentral or add relevant information":
     "Svaraðu DataCentral eða bættu við upplýsingum",
-  "Your response was added to the request.": "Svarið þitt var skráð á beiðnina.",
+  "Your response was added to the request.":
+    "Svarið þitt var skráð á beiðnina.",
   "Your response could not be saved.": "Ekki tókst að vista svarið þitt.",
   "Request updated. The previous revision is preserved.":
     "Beiðnin var uppfærð. Fyrri útgáfa er varðveitt.",
@@ -121,7 +130,8 @@ export const IS: Record<string, string> = {
     "Draga þessa beiðni til baka? Ferillinn verður áfram í endurskoðunarskrá.",
   "Request withdrawn. Its history remains available.":
     "Beiðnin var dregin til baka. Ferill hennar er áfram aðgengilegur.",
-  "The request could not be withdrawn.": "Ekki tókst að draga beiðnina til baka.",
+  "The request could not be withdrawn.":
+    "Ekki tókst að draga beiðnina til baka.",
   "Comment updated. The previous version is preserved.":
     "Athugasemdin var uppfærð. Fyrri útgáfa er varðveitt.",
   "The comment could not be edited.": "Ekki tókst að breyta athugasemdinni.",
@@ -142,15 +152,15 @@ export const IS: Record<string, string> = {
   "What are you trying to achieve, who is affected, and what happens today?":
     "Hverju viltu ná fram, hverja varðar það og hvað gerist í dag?",
   "Request type": "Tegund beiðni",
-  "Feature": "Nýjung",
-  "Improvement": "Umbót",
-  "Integration": "Samtenging",
-  "Compliance": "Regluvarsla",
+  Feature: "Nýjung",
+  Improvement: "Umbót",
+  Integration: "Samtenging",
+  Compliance: "Regluvarsla",
   "Business impact": "Viðskiptaáhrif",
-  "Low": "Lítil",
-  "Medium": "Miðlungs",
-  "High": "Mikil",
-  "Critical": "Krítísk",
+  Low: "Lítil",
+  Medium: "Miðlungs",
+  High: "Mikil",
+  Critical: "Krítísk",
   "Affected users": "Notendur sem málið varðar",
   "Optional estimate": "Valfrjálst mat",
   "Current workaround": "Núverandi hjáleið",
@@ -158,8 +168,8 @@ export const IS: Record<string, string> = {
   "Desired timing": "Æskileg tímasetning",
   "For example Q4 or 2026-11-01": "Til dæmis Q4 eða 2026-11-01",
   "Add screenshots or files": "Bættu við skjámyndum eða skrám",
-  "Required": "Skylda",
-  "Private": "Einkamál",
+  Required: "Skylda",
+  Private: "Einkamál",
   "Submitting…": "Sendi inn…",
 
   // --- updates & notifications ---
@@ -168,10 +178,10 @@ export const IS: Record<string, string> = {
   "Notification preferences": "Tilkynningastillingar",
   "Choose when email updates arrive for this company context.":
     "Veldu hvenær tölvupóstuppfærslur berast fyrir þetta fyrirtækjasamhengi.",
-  "Immediate": "Strax",
-  "Daily": "Daglega",
-  "Weekly": "Vikulega",
-  "Off": "Slökkt",
+  Immediate: "Strax",
+  Daily: "Daglega",
+  Weekly: "Vikulega",
+  Off: "Slökkt",
   "Preferences saved.": "Stillingar vistaðar.",
   "Could not save this preference.": "Ekki tókst að vista stillinguna.",
 
@@ -188,29 +198,29 @@ export const IS: Record<string, string> = {
   "Requests from Origo": "Beiðnir frá Origo",
   "Every request keeps its original context, status history, and link to the corresponding product idea.":
     "Hver beiðni heldur upprunalegu samhengi, stöðusögu og tengingu við viðkomandi vöruhugmynd.",
-  "All": "Allar",
-  "Active": "Virkar",
-  "Closed": "Lokaðar",
+  All: "Allar",
+  Active: "Virkar",
+  Closed: "Lokaðar",
   "Clear filters": "Hreinsa síur",
   "All areas": "Öll svið",
-  "Now": "Núna",
-  "Next": "Næst",
-  "Later": "Síðar",
+  Now: "Núna",
+  Next: "Næst",
+  Later: "Síðar",
   "Active delivery": "Í virkri afhendingu",
   "Approved and sequenced": "Samþykkt og í röð",
   "Validated, not committed": "Staðfest en ekki lofað",
-  "ideas": "hugmyndir",
-  "requests": "beiðnir",
-  "organizations": "fyrirtæki",
+  ideas: "hugmyndir",
+  requests: "beiðnir",
+  organizations: "fyrirtæki",
 
   // --- product areas (display only; stored values stay English) ---
-  "Distribution": "Dreifing",
-  "Governance": "Stjórnhættir",
-  "Authentication": "Auðkenning",
-  "Display": "Birting",
-  "Experience": "Upplifun",
-  "Embedding": "Innfelling",
-  "Administration": "Stjórnun",
+  Distribution: "Dreifing",
+  Governance: "Stjórnhættir",
+  Authentication: "Auðkenning",
+  Display: "Birting",
+  Experience: "Upplifun",
+  Embedding: "Innfelling",
+  Administration: "Stjórnun",
   "Start with the problem. DataCentral will assess the right product response.":
     "Byrjaðu á vandamálinu. DataCentral metur hvaða lausn hentar best.",
   "Short title": "Stuttur titill",
@@ -219,5 +229,12 @@ export const IS: Record<string, string> = {
 
 export function makeT(locale: string): (s: string) => string {
   if (locale !== "is") return (s) => s;
-  return (s) => IS[s] ?? s;
+  return (s) => {
+    if (IS[s]) return IS[s];
+    const [message, supportId] = s.split(" Support ID: ");
+    return (
+      (IS[message] || message) +
+      (supportId ? ` Númer fyrir aðstoð: ${supportId}` : "")
+    );
+  };
 }

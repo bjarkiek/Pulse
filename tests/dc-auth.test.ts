@@ -372,7 +372,7 @@ test("dc-auth rejects a signed payload whose timestamp is unparseable (fail clos
   assert.equal((await res.json()).error, "stale_payload");
 });
 
-test("dc-auth accepts a stale payload when DC_LAUNCH_MAX_AGE_MINUTES=0 disables the check", async () => {
+test("dc-auth rejects attempts to disable launch expiry", async () => {
   process.env.DC_APP_SECRET = TEST_SECRET;
   process.env.DC_SESSION_CHECK = "off";
   process.env.DC_LAUNCH_MAX_AGE_MINUTES = "0";
@@ -384,7 +384,7 @@ test("dc-auth accepts a stale payload when DC_LAUNCH_MAX_AGE_MINUTES=0 disables 
     };
     const dcdata = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
     const res = await dcAuthPost(dcAuthRequest({ dcData: dcdata, dcSig: sign(dcdata) }));
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 401);
   } finally {
     delete process.env.DC_LAUNCH_MAX_AGE_MINUTES;
   }

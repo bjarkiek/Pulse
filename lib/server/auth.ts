@@ -3,6 +3,7 @@ import { readSession } from "@/lib/server/session";
 import { verifyDcLaunch, DC_ONBOARD_ROLE } from "@/lib/server/datacentral";
 import { resolveUserForDcLaunch } from "@/lib/server/user-directory";
 import { isAzureSqlConfigured } from "@/lib/server/database";
+import { requireActiveAccount } from "./active-account";
 
 type ClientPrincipal = {
   claims?: Array<{ typ: string; val: string }>;
@@ -37,6 +38,12 @@ function resolveOrgHint(request: Request): string {
 }
 
 export async function getIdentity(request: Request): Promise<PulseIdentity> {
+  const identity = await resolveIdentity(request);
+  await requireActiveAccount(identity);
+  return identity;
+}
+
+async function resolveIdentity(request: Request): Promise<PulseIdentity> {
   const orgHint = resolveOrgHint(request);
 
   // ① pulse-session cookie — the primary credential once a session exists.
@@ -44,6 +51,7 @@ export async function getIdentity(request: Request): Promise<PulseIdentity> {
   if (session)
     return {
       id: session.sub,
+      sessionIssuedAt: session.iat_ms || 1,
       email: session.email,
       name: session.name,
       organizationId: orgHint,
@@ -131,8 +139,7 @@ export async function getIdentity(request: Request): Promise<PulseIdentity> {
   // that mistakenly sets PULSE_ALLOW_DEMO_IDENTITY must not grant admin either.
   const localAllowed =
     !isAzureSqlConfigured() &&
-    (process.env.NODE_ENV !== "production" ||
-      process.env.PULSE_ALLOW_DEMO_IDENTITY === "true");
+    process.env.NODE_ENV !== "production";
   if (localAllowed)
     return {
       id: "11111111-1111-4111-8111-111111111111",

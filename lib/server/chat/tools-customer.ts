@@ -1,3 +1,4 @@
+import { checkedMutation } from "../versions";
 import { z } from "zod";
 import { orgIdParam, withScope, type ChatTool } from "./tool-contract";
 import { getIdentityContext } from "../identity-repository";
@@ -82,7 +83,7 @@ export const customerTools: ChatTool[] = [
           : items;
         if (!filtered.length) return "No requests found.";
         return filtered
-          .map((item) => `${item.id} '${item.title}' — ${item.status}, area ${item.area}`)
+          .map((item) => `${item.id} '${item.title}' — ${item.status}, area ${item.area}, version ${item.version}`)
           .join("\n");
       }),
   },
@@ -109,7 +110,7 @@ export const customerTools: ChatTool[] = [
           .join("; ");
         return (
           `${request.id} '${request.title}' — ${request.status}, area ${request.area}, ` +
-          `impact ${request.impact}, visibility ${request.visibility}, owner ${request.owner}` +
+          `version ${request.version}, impact ${request.impact}, visibility ${request.visibility}, owner ${request.owner}` +
           (request.linkedIdea ? `, linked idea ${request.linkedIdea}` : "") +
           (recent ? `. Recent history: ${recent}` : "")
         );
@@ -178,6 +179,7 @@ export const customerTools: ChatTool[] = [
       "Edit the title and/or problem statement of your own request. Only allowed while status is " +
       "Submitted or Needs information. Do not retry on timeout.",
     inputSchema: {
+      version: z.string().min(1).describe("Version returned by the most recent read; re-read on conflict."),
       id: z.string().describe("Request public id, e.g. DCI-1051"),
       title: z.string().max(140).optional(),
       problem: z.string().max(5000).optional(),
@@ -187,10 +189,10 @@ export const customerTools: ChatTool[] = [
     group: "customer",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        const request = await editRequest(scoped, input.id as string, {
+        const request = await checkedMutation(scoped, "Requests", input.id as string, input.version, () => editRequest(scoped, input.id as string, {
           title: input.title as string | undefined,
           problem: input.problem as string | undefined,
-        });
+        }));
         return `Updated ${request.id} '${request.title}' (status ${request.status}).`;
       }),
   },
@@ -202,6 +204,7 @@ export const customerTools: ChatTool[] = [
       "other transitions require internal staff. Closing a request requires an explanation; routing to " +
       "support requires a supportReference. Do not retry on timeout.",
     inputSchema: {
+      version: z.string().min(1).describe("Version returned by the most recent read; re-read on conflict."),
       id: z.string().describe("Request public id, e.g. DCI-1051"),
       status: z.enum([
         "Submitted",
@@ -219,7 +222,7 @@ export const customerTools: ChatTool[] = [
     group: "customer",
     run: (identity, args) =>
       withScope(identity, args, async (scoped, input) => {
-        const result = await updateRequestStatus(
+        const result = await checkedMutation(scoped, "Requests", input.id as string, input.version, () => updateRequestStatus(
           scoped,
           input.id as string,
           input.status as string,
@@ -227,7 +230,7 @@ export const customerTools: ChatTool[] = [
             explanation: input.explanation as string | undefined,
             supportReference: input.supportReference as string | undefined,
           },
-        );
+        ));
         return `${result.id} is now ${result.status}.`;
       }),
   },

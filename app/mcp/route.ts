@@ -28,6 +28,7 @@ async function handleMcp(request: Request): Promise<Response> {
   // Per-request user binding: re-check the user is still active and resolve
   // memberships on EVERY request (stateless — no session affinity).
   const probe: PulseIdentity = {
+    sessionIssuedAt: claims.issuedAt,
     id: claims.sub, email: claims.email, name: claims.name,
     organizationId: "", role: isAzureSqlConfigured() ? "Unknown" : "System admin",
     isInternal: !isAzureSqlConfigured(),

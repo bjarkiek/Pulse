@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 export function correlationId(request: Request) {
-  return request.headers.get("x-correlation-id") || crypto.randomUUID();
+  const value = request.headers.get("x-correlation-id");
+  return value && /^[0-9a-f-]{36}$/i.test(value) ? value : crypto.randomUUID();
 }
 
 // The externally-visible origin for ABSOLUTE redirects. Behind App Service TLS
@@ -38,24 +39,36 @@ export function apiError(error: unknown, id: string) {
       ? 401
       : message === "FORBIDDEN" || message === "NOT_FOUND"
         ? 404
-        : message === "IDEMPOTENCY_IN_PROGRESS"
-          ? 409
-          : message.startsWith("INVALID_")
-            ? 400
-            : 500;
+        : message === "PAYLOAD_TOO_LARGE"
+          ? 413
+          : message === "RATE_LIMITED"
+            ? 429
+            : message === "PRECONDITION_REQUIRED"
+              ? 428
+              : message === "VERSION_CONFLICT" ||
+                  message === "PRECONDITION_FAILED"
+                ? 412
+                : message === "IDEMPOTENCY_IN_PROGRESS" ||
+                    message === "IDEMPOTENCY_CONFLICT" ||
+                    message === "ATTACHMENT_VERSION_CONFLICT"
+                  ? 409
+                  : message.startsWith("INVALID_")
+                    ? 400
+                    : 500;
   const code = status === 500 ? "INTERNAL_ERROR" : message;
   if (status === 500)
     console.error(
-      JSON.stringify({ level: "error", correlationId: id, message }),
+      JSON.stringify({
+        level: "error",
+        correlationId: id,
+        message: "operation failed",
+      }),
     );
   return json(
     {
       error: {
         code,
-        message:
-          status === 500
-            ? "The operation could not be completed."
-            : message.replaceAll("_", " ").toLowerCase(),
+        message: `${status === 401 ? "Your session expired. Your input is still here. Sign in and retry." : status === 412 ? "This item changed. Reload it and review the latest version before saving." : status === 428 ? "Reload this item before saving." : status === 500 ? "The operation could not be completed." : message.replaceAll("_", " ").toLowerCase()} Support ID: ${id}`,
         correlationId: id,
       },
     },

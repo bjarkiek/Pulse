@@ -1,3 +1,16 @@
+import { parseInput } from "./validation";
+import {
+  requestInputSchema,
+  requestEditSchema,
+  attachmentInputSchema,
+} from "@/lib/contracts";
+import {
+  atomicSql as versionReadTransaction,
+  isContentSqlActive as versionSqlActive,
+} from "./database";
+import { addVersions } from "./versions";
+import { atomicSql } from "./database";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type {
   AttachmentRecord,
   PulseIdentity,
@@ -11,6 +24,7 @@ import { requireMembership, requirePublishRole } from "./authorization";
 type StoredAttachment = AttachmentRecord & {
   organizationId: string;
   storageKey: string;
+  uploadEtag?: string;
 };
 type MemoryState = {
   requests: RequestRecord[];
@@ -95,13 +109,16 @@ async function assertMembership(identity: PulseIdentity) {
   await requireMembership(identity);
 }
 
-export async function listRequests(
+async function listRequestsCore(
   identity: PulseIdentity,
 ): Promise<RequestRecord[]> {
   await assertMembership(identity);
   if (!isContentSqlActive())
     return memory().requests.filter(
-      (item) => item.organizationId === identity.organizationId,
+      (item) =>
+        item.organizationId === identity.organizationId &&
+        (item.visibility === "Organization" ||
+          item.createdById === identity.id),
     );
   const pool = await getSqlPool();
   const result = await pool
@@ -164,7 +181,7 @@ export async function getRequestHistory(identity: PulseIdentity, id: string) {
   }));
 }
 
-export async function createRequest(
+async function createRequestCore(
   identity: PulseIdentity,
   input: Pick<
     RequestRecord,
@@ -177,6 +194,7 @@ export async function createRequest(
     desiredTiming?: string;
   },
 ) {
+  input = parseInput(requestInputSchema, input);
   await requireMembership(identity);
   if (!input.title?.trim() || input.title.length > 140)
     throw new Error("INVALID_TITLE");
@@ -257,8 +275,8 @@ export async function createRequest(
     return record;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const requestId = crypto.randomUUID();
     let linkedIdea: { id: string } | undefined;
@@ -348,10 +366,10 @@ export async function createRequest(
       .query(
         "INSERT dbo.Notifications(id,user_id,organization_id,event_type,channel,template,deduplication_key) SELECT NEWID(),@userId,@organizationId,'request.submitted',channel,'request-submitted',@dedup FROM (VALUES('In-app'),('Email')) channels(channel)",
       );
-    await transaction.commit();
+    await scope.commit();
     return record;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -444,8 +462,8 @@ export async function updateRequestStatus(
       );
     if (!authorized.recordset.length) throw new Error("NOT_FOUND");
   }
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const result = await new sql.Request(transaction)
       .input("id", sql.NVarChar(32), id)
@@ -470,8 +488,7 @@ export async function updateRequestStatus(
       await new sql.Request(transaction)
         .input("requestId", sql.UniqueIdentifier, row.id)
         .input("organizationId", sql.NVarChar(32), identity.organizationId)
-        .input("actor", sql.UniqueIdentifier, identity.id)
-        .query(`
+        .input("actor", sql.UniqueIdentifier, identity.id).query(`
           UPDATE oi SET active=CASE WHEN EXISTS(
             SELECT 1 FROM dbo.RequestIdeaLinks otherLink
             JOIN dbo.Requests otherRequest ON otherRequest.id=otherLink.request_id
@@ -514,10 +531,10 @@ export async function updateRequestStatus(
         .query(
           "INSERT dbo.Notifications(id,user_id,organization_id,event_type,channel,template,deduplication_key) SELECT NEWID(),@requester,@organizationId,@event,channel,'request-status',@dedup FROM (VALUES('In-app'),('Email')) channels(channel) WHERE NOT EXISTS(SELECT 1 FROM dbo.Notifications n WHERE n.user_id=@requester AND n.channel=channels.channel AND n.deduplication_key=@dedup)",
         );
-    await transaction.commit();
+    await scope.commit();
     return { id, status, tone: toneFor(status) };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -527,6 +544,7 @@ export async function editRequest(
   id: string,
   input: { title?: string; problem?: string },
 ) {
+  input = parseInput(requestEditSchema, input);
   const membership = await requireMembership(identity);
   const title = input.title?.trim();
   const problem = input.problem?.trim();
@@ -573,8 +591,8 @@ export async function editRequest(
     return item;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const lookup = await new sql.Request(transaction)
       .input("publicId", sql.NVarChar(32), id)
@@ -630,15 +648,23 @@ export async function editRequest(
         .query(
           "INSERT dbo.Notifications(id,user_id,organization_id,event_type,channel,template,deduplication_key) SELECT NEWID(),@owner,@organizationId,'request.edited',channel,'request-edited',@dedup FROM (VALUES('In-app'),('Email')) channels(channel)",
         );
-    await transaction.commit();
+    await scope.commit();
     return getRequest(identity, id);
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
 
 export async function requestAttachmentBytes(
+  ...args: Parameters<typeof reserveAttachmentBytes>
+) {
+  return isContentSqlActive()
+    ? atomicSql(() => reserveAttachmentBytes(...args))
+    : reserveAttachmentBytes(...args);
+}
+
+async function reserveAttachmentBytes(
   identity: PulseIdentity,
   requestId: string,
   attachment: Omit<
@@ -646,14 +672,31 @@ export async function requestAttachmentBytes(
     "id" | "requestId" | "scanState" | "createdAt"
   >,
 ) {
+  attachment = parseInput(attachmentInputSchema, attachment);
   await assertMembership(identity);
+  if (isContentSqlActive()) {
+    const lock = await (
+      await getSqlPool()
+    )
+      .request()
+      .input(
+        "resource",
+        sql.NVarChar(255),
+        `attachment-quota:${identity.organizationId}:${requestId}`,
+      )
+      .query(
+        "DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=5000; SELECT @r result",
+      );
+    if (lock.recordset[0].result < 0)
+      throw new Error("IDEMPOTENCY_IN_PROGRESS");
+  }
   const requests = await listRequests(identity);
   if (!requests.some((item) => item.id === requestId))
     throw new Error("NOT_FOUND");
   const existing = await listAttachments(identity, requestId);
   const settings = await getRuntimeSettings();
   if (
-    existing.reduce((sum, item) => sum + item.sizeBytes, 0) +
+    existing.reduce((sum, item) => sum + Number(item.sizeBytes), 0) +
       attachment.sizeBytes >
     settings.requestAttachmentMaxMb * 1024 * 1024
   )
@@ -694,7 +737,7 @@ export async function listAttachments(
   identity: PulseIdentity,
   requestId: string,
 ): Promise<StoredAttachment[]> {
-  await assertMembership(identity);
+  await getRequest(identity, requestId);
   if (!isContentSqlActive())
     return memory().attachments.filter(
       (item) =>
@@ -707,9 +750,12 @@ export async function listAttachments(
     .input("requestId", sql.NVarChar(32), requestId)
     .input("organizationId", sql.NVarChar(32), identity.organizationId)
     .query(
-      "SELECT CAST(a.id AS nvarchar(36)) id,r.public_id requestId,a.file_name fileName,a.content_type contentType,a.size_bytes sizeBytes,a.scan_state scanState,a.created_at createdAt,a.organization_id organizationId,a.storage_key storageKey FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id WHERE r.public_id=@requestId AND a.organization_id=@organizationId AND a.deleted_at IS NULL ORDER BY a.created_at",
+      "SELECT CAST(a.id AS nvarchar(36)) id,r.public_id requestId,a.file_name fileName,a.content_type contentType,a.size_bytes sizeBytes,a.scan_state scanState,a.created_at createdAt,a.organization_id organizationId,a.storage_key storageKey,a.upload_etag uploadEtag FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id WHERE r.public_id=@requestId AND a.organization_id=@organizationId AND a.deleted_at IS NULL ORDER BY a.created_at",
     );
-  return result.recordset;
+  return result.recordset.map((row) => ({
+    ...row,
+    sizeBytes: Number(row.sizeBytes),
+  }));
 }
 
 export async function getAttachment(identity: PulseIdentity, id: string) {
@@ -719,6 +765,7 @@ export async function getAttachment(identity: PulseIdentity, id: string) {
       (a) => a.id === id && a.organizationId === identity.organizationId,
     );
     if (!item) throw new Error("NOT_FOUND");
+    await getRequest(identity, item.requestId);
     return item;
   }
   const pool = await getSqlPool();
@@ -727,20 +774,27 @@ export async function getAttachment(identity: PulseIdentity, id: string) {
     .input("id", sql.UniqueIdentifier, id)
     .input("organizationId", sql.NVarChar(32), identity.organizationId)
     .query(
-      "SELECT CAST(a.id AS nvarchar(36)) id,r.public_id requestId,a.file_name fileName,a.content_type contentType,a.size_bytes sizeBytes,a.scan_state scanState,a.created_at createdAt,a.organization_id organizationId,a.storage_key storageKey FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id WHERE a.id=@id AND a.organization_id=@organizationId AND a.deleted_at IS NULL",
+      "SELECT CAST(a.id AS nvarchar(36)) id,r.public_id requestId,a.file_name fileName,a.content_type contentType,a.size_bytes sizeBytes,a.scan_state scanState,a.created_at createdAt,a.organization_id organizationId,a.storage_key storageKey,a.upload_etag uploadEtag FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id WHERE a.id=@id AND a.organization_id=@organizationId AND a.deleted_at IS NULL",
     );
   if (!result.recordset.length) throw new Error("NOT_FOUND");
-  return result.recordset[0] as StoredAttachment;
+  await getRequest(identity, result.recordset[0].requestId);
+  return {
+    ...result.recordset[0],
+    sizeBytes: Number(result.recordset[0].sizeBytes),
+  } as StoredAttachment;
 }
 
 export async function setAttachmentState(
   id: string,
   scanState: AttachmentRecord["scanState"],
+  etag?: string,
 ) {
   if (!isContentSqlActive()) {
     const item = memory().attachments.find((a) => a.id === id);
     if (!item) throw new Error("NOT_FOUND");
-    const parent = memory().requests.find((request) => request.id === item.requestId);
+    const parent = memory().requests.find(
+      (request) => request.id === item.requestId,
+    );
     item.scanState =
       scanState === "Clean" &&
       parent &&
@@ -749,14 +803,24 @@ export async function setAttachmentState(
         : scanState;
     return;
   }
-  const pool = await getSqlPool();
-  await pool
+  if (!etag || etag.length > 128) throw new Error("INVALID_ATTACHMENT_ETAG");
+  const result = await (
+    await getSqlPool()
+  )
     .request()
     .input("id", sql.UniqueIdentifier, id)
     .input("state", sql.NVarChar(32), scanState)
-    .query(
-      "UPDATE a SET scan_state=CASE WHEN @state='Clean' AND r.status IN ('Withdrawn','Closed','Routed to support') THEN 'Failed' ELSE @state END,deleted_at=CASE WHEN @state='Clean' AND r.status IN ('Withdrawn','Closed','Routed to support') THEN SYSUTCDATETIME() ELSE a.deleted_at END FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id WHERE a.id=@id",
-    );
+    .input("etag", sql.NVarChar(128), etag).query(`
+      UPDATE a SET scan_state=@state,upload_etag=@etag,scan_updated_at=SYSUTCDATETIME()
+      OUTPUT INSERTED.id
+      FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id
+      WHERE a.id=@id AND a.deleted_at IS NULL AND r.deleted_at IS NULL
+        AND r.status NOT IN ('Withdrawn','Closed','Routed to support')
+        AND ((@state='Scanning' AND a.scan_state IN ('Pending upload','Failed'))
+          OR (a.scan_state='Scanning' AND a.upload_etag=@etag)
+          OR (a.scan_state=@state AND a.upload_etag=@etag)
+          OR (@state IN ('Infected','Failed') AND a.scan_state='Clean' AND a.upload_etag=@etag));`);
+  if (!result.recordset.length) throw new Error("ATTACHMENT_VERSION_CONFLICT");
 }
 
 export function putMemoryBlob(key: string, bytes: Uint8Array) {
@@ -764,4 +828,20 @@ export function putMemoryBlob(key: string, bytes: Uint8Array) {
 }
 export function getMemoryBlob(key: string) {
   return memory().blobs.get(key);
+}
+
+export async function listRequests(
+  ...args: Parameters<typeof listRequestsCore>
+) {
+  const read = async () =>
+    addVersions("Requests", await listRequestsCore(...args));
+  return versionSqlActive() ? versionReadTransaction(read) : read();
+}
+
+export async function createRequest(
+  ...args: Parameters<typeof createRequestCore>
+) {
+  const work = async () =>
+    (await addVersions("Requests", [await createRequestCore(...args)]))[0];
+  return versionSqlActive() ? versionReadTransaction(work) : work();
 }

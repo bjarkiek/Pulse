@@ -1,113 +1,139 @@
+import { createHash } from "node:crypto";
 import type { PulseIdentity } from "@/lib/domain";
-import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import { atomicSql, getSqlPool, isAzureSqlConfigured, sql } from "./database";
+import {
+  requireInternalRole,
+  requireMembership,
+  requirePublishRole,
+} from "./authorization";
+import { getRequest } from "./request-repository";
+import { readJson } from "./validation";
 
-type StoredResult = { body: unknown; status: number };
-type PendingResult = StoredResult | null;
-
+type Entry = {
+  hash: string;
+  expires: number;
+  result: { body: unknown; status: number } | null;
+};
 declare global {
-  var pulseMemoryIdempotency: Map<string, PendingResult> | undefined;
+  var pulseMemoryIdempotency: Map<string, Entry> | undefined;
+}
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+const digest = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+
+async function authorize(identity: PulseIdentity, operation: string) {
+  await requireMembership(identity);
+  if (/^(idea\.|release\.|triage\.)/.test(operation))
+    await requirePublishRole(identity);
+  if (operation.startsWith("webhook-"))
+    await requireInternalRole(identity, ["System admin"]);
+  if (operation.startsWith("saved-view.")) await requireInternalRole(identity);
+  if (/^(attachment|comment)\.create:/.test(operation))
+    await getRequest(identity, operation.split(":")[1]);
 }
 
-function memory() {
-  globalThis.pulseMemoryIdempotency ||= new Map();
-  return globalThis.pulseMemoryIdempotency;
-}
-
-function readKey(request: Request) {
-  const key = request.headers.get("idempotency-key")?.trim();
-  if (
-    !key ||
-    key.length < 8 ||
-    key.length > 100 ||
-    !/^[A-Za-z0-9._:-]+$/.test(key)
-  )
-    throw new Error("INVALID_IDEMPOTENCY_KEY");
-  return key;
-}
-
+/** Authorization precedes both lookup and work. SQL work and response commit together. */
 export async function executeIdempotent<T>(
   request: Request,
   identity: PulseIdentity,
   operation: string,
   status: number,
   work: () => Promise<T>,
-): Promise<{ body: T; status: number; replayed: boolean }> {
-  const idempotencyKey = readKey(request);
-  const compound = `${identity.organizationId}:${operation}:${idempotencyKey}`;
+) {
+  await authorize(identity, operation);
+  const key = request.headers.get("idempotency-key")?.trim();
+  if (!key || !/^[A-Za-z0-9._:-]{8,100}$/.test(key))
+    throw new Error("INVALID_IDEMPOTENCY_KEY");
+  const payload = request.body ? await readJson(request.clone()) : null;
+  const hash = digest(
+    canonicalJson({
+      method: request.method,
+      path: new URL(request.url).pathname,
+      payload,
+      version: request.headers.get("if-match"),
+    }),
+  );
+  const organizationId = identity.organizationId;
+  const compound = `${organizationId}:${identity.id}:${operation}:${key}`;
   if (!isAzureSqlConfigured()) {
-    if (memory().has(compound)) {
-      const stored = memory().get(compound);
-      if (!stored) throw new Error("IDEMPOTENCY_IN_PROGRESS");
-      return { body: stored.body as T, status: stored.status, replayed: true };
+    const memory = (globalThis.pulseMemoryIdempotency ||= new Map());
+    for (const [k, v] of memory)
+      if (v.expires <= Date.now() && v.result) memory.delete(k);
+    const old = memory.get(compound);
+    if (old) {
+      if (old.hash !== hash) throw new Error("IDEMPOTENCY_CONFLICT");
+      if (!old.result) throw new Error("IDEMPOTENCY_IN_PROGRESS");
+      return {
+        body: old.result.body as T,
+        status: old.result.status,
+        replayed: true,
+      };
     }
-    memory().set(compound, null);
+    if (memory.size >= 5000) throw new Error("RATE_LIMITED");
+    memory.set(compound, {
+      hash,
+      expires: Date.now() + 86_400_000,
+      result: null,
+    });
     try {
       const body = await work();
-      memory().set(compound, { body, status });
+      memory.get(compound)!.result = { body: structuredClone(body), status };
       return { body, status, replayed: false };
     } catch (error) {
-      memory().delete(compound);
+      memory.delete(compound);
       throw error;
     }
   }
-
-  const pool = await getSqlPool();
-  const find = async () =>
-    pool
+  return atomicSql(async () => {
+    const pool = await getSqlPool();
+    const locked = await pool
       .request()
-      .input("organizationId", sql.NVarChar(32), identity.organizationId)
-      .input("key", sql.NVarChar(100), idempotencyKey)
-      .input("operation", sql.NVarChar(100), operation)
+      .input("resource", sql.NVarChar(255), `idempotency:${digest(compound)}`)
       .query(
-        "SELECT response_status status,response_json body FROM dbo.IdempotencyKeys WHERE organization_id=@organizationId AND idempotency_key=@key AND operation=@operation AND expires_at>SYSUTCDATETIME()",
+        "DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=0; SELECT @r result",
       );
-  const existing = await find();
-  if (existing.recordset.length) {
-    const row = existing.recordset[0];
-    if (!row.body) throw new Error("IDEMPOTENCY_IN_PROGRESS");
-    return { body: JSON.parse(row.body), status: row.status, replayed: true };
-  }
-  try {
-    await pool
-      .request()
-      .input("organizationId", sql.NVarChar(32), identity.organizationId)
-      .input("key", sql.NVarChar(100), idempotencyKey)
-      .input("operation", sql.NVarChar(100), operation)
-      .query(
-        "INSERT dbo.IdempotencyKeys(organization_id,idempotency_key,operation,expires_at) VALUES(@organizationId,@key,@operation,DATEADD(hour,24,SYSUTCDATETIME()))",
-      );
-  } catch {
-    const raced = await find();
-    if (raced.recordset[0]?.body)
+    if (locked.recordset[0].result < 0)
+      throw new Error("IDEMPOTENCY_IN_PROGRESS");
+    await authorize(identity, operation);
+    const bind = () =>
+      pool
+        .request()
+        .input("org", sql.NVarChar(32), organizationId)
+        .input("user", sql.UniqueIdentifier, identity.id)
+        .input("key", sql.NVarChar(100), key)
+        .input("op", sql.NVarChar(100), operation);
+    await bind().query(
+      "DELETE dbo.IdempotencyKeys WHERE organization_id=@org AND user_id=@user AND idempotency_key=@key AND operation=@op AND expires_at<=SYSUTCDATETIME()",
+    );
+    const previous = await bind().query(
+      "SELECT request_hash hash,response_json body,response_status status FROM dbo.IdempotencyKeys WHERE organization_id=@org AND user_id=@user AND idempotency_key=@key AND operation=@op",
+    );
+    if (previous.recordset.length) {
+      const old = previous.recordset[0];
+      if (old.hash !== hash) throw new Error("IDEMPOTENCY_CONFLICT");
+      if (!old.body) throw new Error("IDEMPOTENCY_IN_PROGRESS");
       return {
-        body: JSON.parse(raced.recordset[0].body),
-        status: raced.recordset[0].status,
+        body: JSON.parse(old.body) as T,
+        status: old.status as number,
         replayed: true,
       };
-    throw new Error("IDEMPOTENCY_IN_PROGRESS");
-  }
-  try {
+    }
     const body = await work();
-    await pool
-      .request()
-      .input("organizationId", sql.NVarChar(32), identity.organizationId)
-      .input("key", sql.NVarChar(100), idempotencyKey)
-      .input("operation", sql.NVarChar(100), operation)
-      .input("status", sql.Int, status)
+    await bind()
+      .input("hash", sql.Char(64), hash)
       .input("body", sql.NVarChar(sql.MAX), JSON.stringify(body))
+      .input("status", sql.Int, status)
       .query(
-        "UPDATE dbo.IdempotencyKeys SET response_status=@status,response_json=@body WHERE organization_id=@organizationId AND idempotency_key=@key AND operation=@operation",
+        "INSERT dbo.IdempotencyKeys(organization_id,user_id,idempotency_key,operation,request_hash,response_json,response_status,expires_at) VALUES(@org,@user,@key,@op,@hash,@body,@status,DATEADD(hour,24,SYSUTCDATETIME()))",
       );
     return { body, status, replayed: false };
-  } catch (error) {
-    await pool
-      .request()
-      .input("organizationId", sql.NVarChar(32), identity.organizationId)
-      .input("key", sql.NVarChar(100), idempotencyKey)
-      .input("operation", sql.NVarChar(100), operation)
-      .query(
-        "DELETE dbo.IdempotencyKeys WHERE organization_id=@organizationId AND idempotency_key=@key AND operation=@operation AND response_json IS NULL",
-      );
-    throw error;
-  }
+  });
 }

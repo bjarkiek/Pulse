@@ -158,7 +158,10 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
   parent: storage
   name: 'default'
-  properties: { deleteRetentionPolicy: { enabled: true, days: 7 } }
+  properties: {
+    deleteRetentionPolicy: { enabled: true, days: 7 }
+    cors: { corsRules: [{ allowedOrigins: ['https://${namePrefix}-app.azurewebsites.net'], allowedMethods: ['PUT', 'OPTIONS'], allowedHeaders: ['content-type', 'x-ms-blob-type', 'x-ms-version'], exposedHeaders: ['ETag'], maxAgeInSeconds: 300 }] }
+  }
 }
 
 resource attachments 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
@@ -242,9 +245,9 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'PULSE_PUBLIC_URL', value: 'https://${namePrefix}-app.azurewebsites.net' }
         { name: 'PULSE_ALLOW_DEMO_IDENTITY', value: 'false' }
         { name: 'PULSE_SESSION_SECRET', value: '@Microsoft.KeyVault(SecretUri=${pulseSessionSecret.properties.secretUriWithVersion})' }
-        { name: 'AUTH_ENTRA_TENANT_ID', value: entraTenantId }
+        { name: 'AUTH_ENTRA_TENANT_ID', value: empty(entraClientId) ? '' : entraTenantId }
         { name: 'AUTH_ENTRA_CLIENT_ID', value: entraClientId }
-        { name: 'AUTH_ENTRA_CLIENT_SECRET', value: '@Microsoft.KeyVault(SecretUri=${entraClientSecretResource.properties.secretUriWithVersion})' }
+        { name: 'AUTH_ENTRA_CLIENT_SECRET', value: empty(entraClientId) ? '' : '@Microsoft.KeyVault(SecretUri=${entraClientSecretResource.properties.secretUriWithVersion})' }
         { name: 'DC_APP_SECRET', value: '@Microsoft.KeyVault(SecretUri=${dcAppSecretResource.properties.secretUriWithVersion})' }
         { name: 'DC_ALLOWED_PARENT_ORIGINS', value: 'https://app.datacentral.ai' }
         { name: 'DC_FRAME_ANCESTORS', value: '\'self\' https://*.datacentral.ai' }
@@ -286,6 +289,7 @@ resource authentication 'Microsoft.Web/sites/config@2024-04-01' = if (!empty(ent
       excludedPaths: [
         '/api/health'
         '/api/v1/attachments/*/scan-result'
+        '/api/v1/internal/attachments/scan-events'
         '/api/v1/internal/jobs/notifications'
         '/api/v1/internal/jobs/retention'
         '/api/v1/internal/jobs/webhooks'

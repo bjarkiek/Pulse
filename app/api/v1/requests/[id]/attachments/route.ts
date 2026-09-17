@@ -1,3 +1,5 @@
+import { readInput } from "@/lib/server/validation";
+import { attachmentInputSchema } from "@/lib/contracts";
 import { getIdentity } from "@/lib/server/auth";
 import {
   createUploadUrl,
@@ -6,6 +8,7 @@ import {
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
 import {
+  getAttachment,
   listAttachments,
   requestAttachmentBytes,
 } from "@/lib/server/request-repository";
@@ -67,7 +70,7 @@ export async function POST(request: Request, context: Context) {
       `attachment.create:${id}`,
       201,
       async () => {
-        const body = await request.json();
+        const body = await readInput(request, attachmentInputSchema);
         const fileName = String(body.fileName).slice(0, 255);
         const extension = fileName.toLowerCase().split(".").pop() || "";
         const settings = await getRuntimeSettings();
@@ -82,23 +85,38 @@ export async function POST(request: Request, context: Context) {
           contentType: body.contentType,
           sizeBytes: body.sizeBytes,
         });
-        const target = isBlobStorageConfigured()
-          ? await createUploadUrl(attachment.storageKey)
-          : {
-              uploadUrl: `/api/v1/attachments/${attachment.id}/content`,
-              expiresAt: new Date(Date.now() + 600_000).toISOString(),
-            };
         return {
           attachment: {
             id: attachment.id,
             fileName: attachment.fileName,
             scanState: attachment.scanState,
           },
-          ...target,
         };
       },
     );
-    return json(result.body, { status: result.status }, correlation);
+    // Refresh an expired upload capability without allocating another quota reservation.
+    const attachment = await getAttachment(identity, result.body.attachment.id);
+    const target =
+      attachment.scanState === "Pending upload"
+        ? isBlobStorageConfigured()
+          ? await createUploadUrl(attachment.storageKey)
+          : {
+              uploadUrl: `/api/v1/attachments/${attachment.id}/content`,
+              expiresAt: new Date(Date.now() + 600_000).toISOString(),
+            }
+        : {};
+    return json(
+      {
+        ...result.body,
+        attachment: {
+          ...result.body.attachment,
+          scanState: attachment.scanState,
+        },
+        ...target,
+      },
+      { status: result.status },
+      correlation,
+    );
   } catch (error) {
     return apiError(error, correlation);
   }

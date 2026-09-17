@@ -1,3 +1,12 @@
+import { scoreInputSchema } from "@/lib/contracts";
+import { parseInput } from "./validation";
+import { ideaInputSchema } from "@/lib/contracts";
+import {
+  atomicSql as versionReadTransaction,
+  isContentSqlActive as versionSqlActive,
+} from "./database";
+import { addVersions } from "./versions";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity, Tone } from "@/lib/domain";
 import { requireInternalRole, requirePublishRole } from "./authorization";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
@@ -188,7 +197,7 @@ function mapSql(row: Record<string, unknown>): ProductIdea {
   };
 }
 
-export async function listInternalIdeas(identity: PulseIdentity) {
+async function listInternalIdeasCore(identity: PulseIdentity) {
   await requireInternalRole(identity);
   if (!isContentSqlActive()) return products();
   const pool = await getSqlPool();
@@ -201,7 +210,8 @@ export async function listInternalIdeas(identity: PulseIdentity) {
   return result.recordset.map(mapSql);
 }
 
-export async function createIdea(identity: PulseIdentity, input: IdeaInput) {
+async function createIdeaCore(identity: PulseIdentity, input: IdeaInput) {
+  input = parseInput(ideaInputSchema, input);
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   if (!input.internalTitle?.trim() || !input.internalDescription?.trim())
     throw new Error("INVALID_IDEA");
@@ -267,6 +277,7 @@ export async function updateIdea(
   publicId: string,
   input: IdeaInput,
 ) {
+  input = parseInput(ideaInputSchema, input);
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   validateTransition(input);
   if (!isContentSqlActive()) {
@@ -365,8 +376,8 @@ export async function publishIdea(
     return item;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const lookup = await new sql.Request(transaction)
       .input("publicId", sql.NVarChar(32), publicId)
@@ -439,12 +450,12 @@ export async function publishIdea(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'idea.published','Idea',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return (await listInternalIdeas(identity)).find(
       (item) => item.id === publicId,
     )!;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -467,9 +478,7 @@ export async function linkRequest(
       (item) =>
         item.ideaId === ideaPublicId && item.requestId === requestPublicId,
     );
-    if (
-      !alreadyLinked
-    )
+    if (!alreadyLinked)
       links().push({ ideaId: ideaPublicId, requestId: requestPublicId });
     request.linkedIdea = ideaPublicId;
     if (!alreadyLinked) idea.linkedRequests = (idea.linkedRequests || 0) + 1;
@@ -482,8 +491,8 @@ export async function linkRequest(
     return { linked: true };
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const lookup = await new sql.Request(transaction)
       .input("idea", sql.NVarChar(32), ideaPublicId)
@@ -542,10 +551,10 @@ export async function linkRequest(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,organization_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,@organizationId,'request.linked','Request',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return { linked: true };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -565,7 +574,8 @@ export async function moveRequestLink(
     const target = products().find((item) => item.id === targetIdeaPublicId);
     const link = links().find(
       (item) =>
-        item.ideaId === sourceIdeaPublicId && item.requestId === requestPublicId,
+        item.ideaId === sourceIdeaPublicId &&
+        item.requestId === requestPublicId,
     );
     if (!source || !target || !link) throw new Error("NOT_FOUND");
     link.ideaId = targetIdeaPublicId;
@@ -581,15 +591,14 @@ export async function moveRequestLink(
   }
 
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const found = await new sql.Request(transaction)
       .input("source", sql.NVarChar(32), sourceIdeaPublicId)
       .input("target", sql.NVarChar(32), targetIdeaPublicId)
       .input("request", sql.NVarChar(32), requestPublicId)
-      .input("actor", sql.UniqueIdentifier, identity.id)
-      .query(`
+      .input("actor", sql.UniqueIdentifier, identity.id).query(`
         SELECT source.id sourceId,target.id targetId,r.id requestId,r.organization_id organizationId
         FROM dbo.Ideas source CROSS JOIN dbo.Ideas target CROSS JOIN dbo.Requests r
         WHERE source.public_id=@source AND target.public_id=@target AND r.public_id=@request
@@ -646,10 +655,10 @@ export async function moveRequestLink(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,organization_id,action,entity_type,entity_id,before_json,after_json,correlation_id) VALUES(@auditId,@actor,@organizationId,'request.link.moved','Request',@entity,@before,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return { moved: true, requestId: requestPublicId, targetIdeaPublicId };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -659,6 +668,7 @@ export async function scoreIdea(
   publicId: string,
   input: ScoreInput,
 ) {
+  input = parseInput(scoreInputSchema, input);
   await requirePublishRole(identity);
   for (const value of [
     input.impact,
@@ -780,8 +790,8 @@ export async function mergeIdeas(
     return { survivor: targetPublicId, alias: sourcePublicId };
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const found = await new sql.Request(transaction)
       .input("target", sql.NVarChar(32), targetPublicId)
@@ -826,10 +836,24 @@ export async function mergeIdeas(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'idea.merged','Idea',@target,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return { survivor: targetPublicId, alias: sourcePublicId };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
+}
+
+export async function listInternalIdeas(
+  ...args: Parameters<typeof listInternalIdeasCore>
+) {
+  const read = async () =>
+    addVersions("Ideas", await listInternalIdeasCore(...args));
+  return versionSqlActive() ? versionReadTransaction(read) : read();
+}
+
+export async function createIdea(...args: Parameters<typeof createIdeaCore>) {
+  const work = async () =>
+    (await addVersions("Ideas", [await createIdeaCore(...args)]))[0];
+  return versionSqlActive() ? versionReadTransaction(work) : work();
 }

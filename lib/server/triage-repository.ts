@@ -1,3 +1,6 @@
+import { parseInput } from "./validation";
+import { triageInputSchema } from "@/lib/contracts";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
@@ -12,6 +15,7 @@ export async function bulkUpdateTriage(
     triageDueAt?: string;
   },
 ) {
+  input = parseInput(triageInputSchema, input);
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   const requestIds = [...new Set(input.requestIds || [])];
   const tagIds = [...new Set(input.tagIds || [])];
@@ -54,13 +58,12 @@ export async function bulkUpdateTriage(
   }
 
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const authorized = await new sql.Request(transaction)
       .input("ids", sql.NVarChar(sql.MAX), JSON.stringify(requestIds))
-      .input("actor", sql.UniqueIdentifier, identity.id)
-      .query(`
+      .input("actor", sql.UniqueIdentifier, identity.id).query(`
         SELECT r.id,r.public_id FROM dbo.Requests r
         JOIN dbo.Memberships m ON m.organization_id=r.organization_id AND m.user_id=@actor AND m.status='Active'
         WHERE r.public_id IN(SELECT [value] FROM OPENJSON(@ids)) AND r.deleted_at IS NULL;`);
@@ -119,10 +122,10 @@ export async function bulkUpdateTriage(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,organization_id,action,entity_type,entity_id,after_json,correlation_id) SELECT NEWID(),@actor,r.organization_id,'triage.bulk-updated','Request',r.id,@after,NEWID() FROM dbo.Requests r WHERE r.public_id IN(SELECT [value] FROM OPENJSON(@ids))",
       );
-    await transaction.commit();
+    await scope.commit();
     return { updated: requestIds.length };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

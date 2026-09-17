@@ -1,3 +1,12 @@
+import { roadmapInputSchema } from "@/lib/contracts";
+import { releaseInputSchema } from "@/lib/contracts";
+import { parseInput } from "./validation";
+import {
+  atomicSql as versionReadTransaction,
+  isContentSqlActive as versionSqlActive,
+} from "./database";
+import { addVersions } from "./versions";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole, requirePublishRole } from "./authorization";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
@@ -72,7 +81,7 @@ function memoryAudit(
   });
 }
 
-export async function listReleases(identity: PulseIdentity, internal = false) {
+async function listReleasesCore(identity: PulseIdentity, internal = false) {
   if (internal) await requireInternalRole(identity);
   if (!isContentSqlActive())
     return releases().filter((item) => internal || item.published);
@@ -102,10 +111,11 @@ export async function listReleases(identity: PulseIdentity, internal = false) {
   return [...map.values()];
 }
 
-export async function createRelease(
+async function createReleaseCore(
   identity: PulseIdentity,
   input: Omit<ReleaseRecord, "id" | "published">,
 ) {
+  input = parseInput(releaseInputSchema, input);
   await requirePublishRole(identity);
   if (
     !input.title?.trim() ||
@@ -130,8 +140,8 @@ export async function createRelease(
     .query("SELECT NEXT VALUE FOR dbo.ReleaseNumber value");
   const publicId = `REL-${number.recordset[0].value}`;
   const id = crypto.randomUUID();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, id)
@@ -176,12 +186,12 @@ export async function createRelease(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'release.created','Release',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return (await listReleases(identity, true)).find(
       (item) => item.id === publicId,
     )!;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -219,8 +229,8 @@ export async function publishRelease(
     return item;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const lookup = await new sql.Request(transaction)
       .input("publicId", sql.NVarChar(32), publicId)
@@ -261,12 +271,12 @@ export async function publishRelease(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'release.published','Release',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return (await listReleases(identity, true)).find(
       (item) => item.id === publicId,
     )!;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -281,6 +291,7 @@ export async function placeRoadmap(
     publish?: boolean;
   },
 ) {
+  input = parseInput(roadmapInputSchema, input);
   await requirePublishRole(identity);
   if (
     !["Now", "Next", "Later"].includes(input.horizon) ||
@@ -297,8 +308,8 @@ export async function placeRoadmap(
     return idea;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const idea = await new sql.Request(transaction)
       .input("publicId", sql.NVarChar(32), ideaPublicId)
@@ -332,10 +343,10 @@ export async function placeRoadmap(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'roadmap.placed','Idea',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return { ideaId: ideaPublicId, ...input };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -389,4 +400,20 @@ export async function listAudit(identity: PulseIdentity, limit = 100) {
     beforeJson: undefined,
     afterJson: undefined,
   }));
+}
+
+export async function listReleases(
+  ...args: Parameters<typeof listReleasesCore>
+) {
+  const read = async () =>
+    addVersions("Releases", await listReleasesCore(...args));
+  return versionSqlActive() ? versionReadTransaction(read) : read();
+}
+
+export async function createRelease(
+  ...args: Parameters<typeof createReleaseCore>
+) {
+  const work = async () =>
+    (await addVersions("Releases", [await createReleaseCore(...args)]))[0];
+  return versionSqlActive() ? versionReadTransaction(work) : work();
 }

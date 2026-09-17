@@ -66,6 +66,7 @@ export function chatToolErrorMessage(error: unknown): string {
   const code = error instanceof Error ? error.message : String(error);
   if (code === "FORBIDDEN" || code === "NOT_FOUND")
     return "That item doesn't exist or you don't have access to it.";
+  if (code === "PRECONDITION_FAILED" || code === "PRECONDITION_REQUIRED") return "This item changed or its version is missing. Read it again, show the changes, and ask before retrying.";
   if (code === "UNAUTHORIZED") return "You are not signed in.";
   if (code === "INVALID_ACTIVE_ORGANIZATION_REQUIRED")
     return "You belong to several organizations — pass organization_id (ask get_me for the list).";

@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { readInput } from "@/lib/server/validation";
 import { timingSafeEqual } from "node:crypto";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { processRetentionBatch } from "@/lib/server/retention-worker";
@@ -18,12 +20,13 @@ export async function POST(request: Request) {
   const id = correlationId(request);
   try {
     if (!authorized(request)) throw new Error("UNAUTHORIZED");
-    const body = await request.json().catch(() => ({}));
-    return json(
-      await processRetentionBatch(Number(body.limit || 50)),
-      {},
-      id,
-    );
+    const body = request.body
+      ? await readInput(
+          request,
+          z.object({ limit: z.number().int().min(1).max(1000).optional() }),
+        )
+      : { limit: undefined };
+    return json(await processRetentionBatch(Number(body.limit || 50)), {}, id);
   } catch (error) {
     return apiError(error, id);
   }

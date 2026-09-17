@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import type { Metadata } from "next";
 import "./globals.css";
 import EmbedAuthInstaller from "./embed-auth-installer";
@@ -9,7 +10,8 @@ export const metadata: Metadata = {
   icons: { icon: "/brand/favicon-32x32.png", shortcut: "/brand/favicon-32x32.png" },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  await headers(); // Request-time rendering is required for per-response CSP nonces.
   // suppressHydrationWarning covers THIS element only: browser extensions stamp
   // attributes onto <html> before React hydrates (e.g. data-sml-extension-installed),
   // which would otherwise trip the dev overlay with a false hydration mismatch.

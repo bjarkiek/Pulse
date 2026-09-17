@@ -1,3 +1,5 @@
+import { parseInput } from "./validation";
+import { savedViewInputSchema } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
@@ -45,6 +47,7 @@ export async function createSavedView(
   identity: PulseIdentity,
   input: Omit<SavedView, "id" | "ownerId">,
 ) {
+  input = parseInput(savedViewInputSchema, input);
   await requireInternalRole(identity);
   if (
     !input.name?.trim() ||

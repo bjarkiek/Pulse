@@ -1,3 +1,4 @@
+import { requireActiveAccount } from "../active-account";
 import type { PulseIdentity } from "@/lib/domain";
 import { getSqlPool, isAzureSqlConfigured, sql } from "../database";
 import { users } from "../admin-repository";
@@ -59,6 +60,7 @@ export async function getChatHistory(
   identity: PulseIdentity,
   take = 30,
 ): Promise<ChatMessageRecord[]> {
+  await requireActiveAccount(identity);
   if (!isAzureSqlConfigured()) {
     const list = chatMessages().get(identity.id) || [];
     return list.slice(Math.max(0, list.length - take));
@@ -75,6 +77,7 @@ export async function getChatHistory(
 }
 
 export async function clearChatHistory(identity: PulseIdentity): Promise<void> {
+  await requireActiveAccount(identity);
   if (!isAzureSqlConfigured()) {
     chatMessages().delete(identity.id);
     return;

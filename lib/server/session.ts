@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 
 export type SessionClaims = {
+  iat_ms?: number;
   sub: string;                 // dbo.Users.id (GUID) — what repositories consume
   email: string;
   name: string;
@@ -26,7 +27,7 @@ export function secret(): Uint8Array | null {
 export async function createSessionToken(claims: Omit<SessionClaims, "ver">): Promise<string> {
   const key = secret();
   if (!key) throw new Error("SESSION_NOT_CONFIGURED");
-  return new SignJWT({ ...claims, ver: 1 })
+  return new SignJWT({ ...claims, iat_ms: Date.now(), ver: 1 })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${TTL_SECONDS}s`)
@@ -48,7 +49,8 @@ export async function readSession(request: Request): Promise<SessionClaims | nul
     .find(([n]) => n === SESSION_COOKIE)?.[1];
   const auth = request.headers.get("authorization");
   const bearer = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : undefined;
-  const token = cookie ? decodeURIComponent(cookie) : bearer;
+  let token: string | undefined;
+  try { token = cookie ? decodeURIComponent(cookie) : bearer; } catch { return null; }
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, key, {

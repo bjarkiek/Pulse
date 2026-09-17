@@ -22,12 +22,15 @@ export async function POST(
     const parent = await getRequest(identity, attachment.requestId);
     if (["Withdrawn", "Closed", "Routed to support"].includes(parent.status))
       throw new Error("INVALID_ATTACHMENT_PARENT_INACTIVE");
-    if (isBlobStorageConfigured())
-      await verifyUploadedBlob(
-        attachment.storageKey,
-        Number(attachment.sizeBytes),
-      );
-    await setAttachmentState(id, "Scanning");
+    const etag = isBlobStorageConfigured()
+      ? await verifyUploadedBlob(
+          attachment.storageKey,
+          Number(attachment.sizeBytes),
+        )
+      : undefined;
+    if (attachment.scanState === "Clean" && attachment.uploadEtag === etag)
+      return json({ scanState: "Clean" }, {}, correlation);
+    await setAttachmentState(id, "Scanning", etag);
     return json({ scanState: "Scanning" }, {}, correlation);
   } catch (error) {
     return apiError(error, correlation);

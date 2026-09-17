@@ -1,4 +1,8 @@
 import sql from "mssql";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { requireLocalAdapter } from "./production-config";
+
+const transactions = new AsyncLocalStorage<sql.Transaction>();
 
 declare global {
   var pulseSqlPool: Promise<sql.ConnectionPool> | undefined;
@@ -15,7 +19,10 @@ export function isAzureSqlConfigured() {
 }
 
 export function isDemoDataActive() {
-  return globalThis.pulseShowDemoData === true;
+  return (
+    process.env.NODE_ENV !== "production" &&
+    globalThis.pulseShowDemoData === true
+  );
 }
 
 // The switch CONTENT repositories use (requests, ideas, releases, triage,
@@ -26,6 +33,7 @@ export function isDemoDataActive() {
 // keep using isAzureSqlConfigured() directly: who you are and what you may do
 // must never come from demo data.
 export function isContentSqlActive() {
+  if (!isAzureSqlConfigured()) requireLocalAdapter();
   return isAzureSqlConfigured() && !isDemoDataActive();
 }
 
@@ -45,8 +53,52 @@ export async function getSqlPool() {
     options: { encrypt: true, trustServerCertificate: false },
     pool: { min: 0, max: 20, idleTimeoutMillis: 30_000 },
   };
-  globalThis.pulseSqlPool ||= new sql.ConnectionPool(config).connect();
-  return globalThis.pulseSqlPool;
+  globalThis.pulseSqlPool ||= new sql.ConnectionPool(config)
+    .connect()
+    .catch((error) => {
+      globalThis.pulseSqlPool = undefined;
+      throw error;
+    });
+  const pool = await globalThis.pulseSqlPool;
+  const active = transactions.getStore();
+  // Every repository request joins the current unit of work, including reads.
+  return active
+    ? new Proxy(pool, {
+        get(target, key) {
+          if (key === "request") return () => new sql.Request(active);
+          return Reflect.get(target, key);
+        },
+      })
+    : pool;
+}
+
+export async function beginSqlTransaction(pool: sql.ConnectionPool) {
+  const active = transactions.getStore();
+  const transaction = active || new sql.Transaction(pool);
+  if (!active) await transaction.begin();
+  return {
+    transaction,
+    commit: async () => {
+      if (!active) await transaction.commit();
+    },
+    rollback: async () => {
+      if (!active) await transaction.rollback();
+    },
+  };
+}
+
+export async function atomicSql<T>(work: () => Promise<T>): Promise<T> {
+  if (transactions.getStore()) return work();
+  const transaction = new sql.Transaction(await getSqlPool());
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const result = await transactions.run(transaction, work);
+    await transaction.commit();
+    return result;
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    throw error;
+  }
 }
 
 export { sql };

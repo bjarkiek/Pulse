@@ -1,3 +1,5 @@
+import { enforceRateLimit } from "@/lib/server/rate-limit";
+import { readJson } from "@/lib/server/validation";
 // RFC 7591 dynamic client registration for the MCP authorization server.
 // Anonymous + CORS: browser-hosted MCP clients (claude.ai) register with a
 // preflighted cross-origin POST before they ever hold a session, so this
@@ -7,44 +9,18 @@ import { withCors, corsPreflight } from "@/lib/server/mcp/cors";
 
 export const dynamic = "force-dynamic";
 
-type RateEntry = { count: number; resetAt: number };
-
-declare global {
-  var pulseMcpOauthRateLimit: Map<string, RateEntry> | undefined;
-}
-
-// Fixed-window rate limit, own globalThis map — /oauth is deliberately outside
-// proxy.ts's CSRF/rate-limit branch (its CSRF check would 403 browser-based
-// MCP clients' cross-origin POSTs), so this in-handler limiter is the only
-// protection against registration abuse.
-const RATE_LIMIT_PER_MINUTE = 10;
-const RATE_WINDOW_MS = 60_000;
-
-function isRateLimited(request: Request): boolean {
-  globalThis.pulseMcpOauthRateLimit ||= new Map();
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const now = Date.now();
-  const current = globalThis.pulseMcpOauthRateLimit.get(ip);
-  const entry =
-    !current || current.resetAt <= now
-      ? { count: 1, resetAt: now + RATE_WINDOW_MS }
-      : { ...current, count: current.count + 1 };
-  globalThis.pulseMcpOauthRateLimit.set(ip, entry);
-  return entry.count > RATE_LIMIT_PER_MINUTE;
-}
-
 function errorResponse(status: number, error: string, error_description: string): Response {
   return withCors(Response.json({ error, error_description }, { status }));
 }
 
 export async function POST(request: Request) {
-  if (isRateLimited(request)) {
+  try { await enforceRateLimit(request, "oauth-register", 10); } catch {
     return errorResponse(429, "rate_limited", "Too many registration requests. Try again shortly.");
   }
 
   let body: unknown;
   try {
-    body = await request.json();
+    body = await readJson(request, 8192);
   } catch {
     return errorResponse(400, "invalid_client_metadata", "Request body must be valid JSON.");
   }

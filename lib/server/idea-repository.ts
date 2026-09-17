@@ -1,3 +1,6 @@
+import { atomicSql as versionReadTransaction, isContentSqlActive as versionSqlActive } from "./database";
+import { addVersions } from "./versions";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity, Tone } from "@/lib/domain";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
 
@@ -129,7 +132,7 @@ function tone(status: string): Tone {
       : "neutral";
 }
 
-export async function listIdeas(
+async function listIdeasCore(
   identity: PulseIdentity,
 ): Promise<IdeaRecord[]> {
   if (!isContentSqlActive()) return memory();
@@ -211,8 +214,8 @@ export async function toggleFollow(
       "SELECT 1 allowed FROM dbo.Memberships WHERE user_id=@userId AND organization_id=@organizationId AND status='Active'",
     );
   if (!membership.recordset.length) throw new Error("FORBIDDEN");
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     const current = await new sql.Request(transaction)
       .input("idea", sql.NVarChar(32), publicId)
@@ -247,10 +250,12 @@ export async function toggleFollow(
       .query(
         "SELECT COUNT(*) followers FROM dbo.Follows WHERE idea_id=@ideaId AND active=1",
       );
-    await transaction.commit();
+    await scope.commit();
     return { followed, followers: count.recordset[0].followers };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
+
+export async function listIdeas(...args: Parameters<typeof listIdeasCore>) { const read = async () => addVersions("Ideas", await listIdeasCore(...args)); return versionSqlActive() ? versionReadTransaction(read) : read(); }

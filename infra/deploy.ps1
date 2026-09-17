@@ -26,6 +26,11 @@
 .EXAMPLE
   # Skip the DB steps (image-only redeploy):
   ./deploy.ps1 -NamePrefix dcpulseprod -SkipMigrations
+
+.EXAMPLE
+  # Resume a deploy that failed after the image was built — reuses the image
+  # already in the registry instead of rebuilding it:
+  ./deploy.ps1 -NamePrefix dcpulseprod -SkipBuild
 #>
 [CmdletBinding()]
 param(
@@ -40,7 +45,11 @@ param(
   [string]$Tag,
 
   # Skip the SQL user/grant + migration step (image-only redeploy).
-  [switch]$SkipMigrations
+  [switch]$SkipMigrations,
+
+  # Reuse the image already in the registry instead of rebuilding it. Use this to
+  # resume a deploy that failed after the build step.
+  [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,6 +99,33 @@ function Invoke-Az {
   else                  { $out = & az @args }
   if ($LASTEXITCODE -ne 0) { throw "az $($args -join ' ') failed (exit $LASTEXITCODE)" }
   return $out
+}
+
+function Invoke-SqlRetry {
+  # Azure SQL intermittently drops a connection while it is still being set up
+  # ("an error occurred during the pre-login handshake ... The wait operation
+  # timed out"), which used to abort the whole deploy and force a full rebuild.
+  # Only connection-level failures are retried — a real SQL error (bad syntax, a
+  # failing migration) rethrows immediately rather than running four more times.
+  # Retrying is safe for every caller here: the queries are idempotent, and each
+  # migration file wraps itself in BEGIN TRAN/XACT_ABORT so a failed attempt
+  # rolls back completely before the next one starts.
+  param(
+    [Parameter(Mandatory)][scriptblock]$Action,
+    [int]$Retries = 4
+  )
+  for ($attempt = 1; ; $attempt++) {
+    try { return & $Action }
+    catch {
+      $msg = $_.Exception.Message
+      $isTransient = $msg -match 'pre-login handshake|wait operation timed out|transport-level|Timeout expired|semaphore timeout|not currently available|too busy'
+      if (-not $isTransient -or $attempt -gt $Retries) { throw }
+      $wait = [int][Math]::Min(30, [Math]::Pow(2, $attempt))
+      Write-Warning "Transient SQL error (attempt $attempt/$($Retries + 1)): $(($msg -split "`n")[0].Trim())"
+      Write-Info "retrying in ${wait}s..."
+      Start-Sleep -Seconds $wait
+    }
+  }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -160,42 +196,56 @@ $image = "$acrLoginServer/pulse:$Tag"
 # ---------------------------------------------------------------------------
 # Build the image in ACR (cloud build from the Dockerfile — no local Docker)
 # ---------------------------------------------------------------------------
-Write-Step "Building image in ACR  (pulse:$Tag)"
-$buildArgs = @(
-  'acr', 'build',
-  '--registry', $acrName,
-  '--image', "pulse:$Tag",
-  '--image', 'pulse:latest',
-  '--file', 'Dockerfile',
-  $repoRoot
-)
-# `az acr build` streams the cloud build logs, which contain the `▲ Next.js`
-# banner. az's isolated Python defaults its stdout to cp1252 on Windows and
-# crashes trying to write `▲`. Run az's own interpreter with `-X utf8` (the one
-# override isolated mode honours) so the logs stream through as UTF-8. Unlike
-# Invoke-Az this does NOT capture stdout, so build progress prints live.
-# Run from the repo root: az resolves `--file` against the CURRENT directory
-# (not the build context), so invoking the script from infra/ would otherwise
-# fail with "Unable to find 'Dockerfile'".
-Push-Location $repoRoot
-try {
-  if ($script:AzPython) {
-    & $script:AzPython -I -X utf8 -B -m azure.cli @buildArgs
-    if ($LASTEXITCODE -ne 0) { throw "az acr build failed (exit $LASTEXITCODE)" }
+if ($SkipBuild) {
+  Write-Step "Reusing the image already in ACR  (pulse:$Tag)"
+  # Confirm the tag is actually in the registry before the Web App gets pointed
+  # at it below. Without this check -SkipBuild would happily deploy an image
+  # that cannot be pulled, leaving the site down until the next full deploy.
+  $existingTags = @(Invoke-Az acr repository show-tags --name $acrName --repository pulse -o tsv) |
+    ForEach-Object { $_.Trim() }
+  if ($existingTags -notcontains $Tag) {
+    throw "Image pulse:$Tag is not in $acrName. Re-run without -SkipBuild to build it, or pass -Tag <existing-tag>."
   }
-  else {
-    # Non-MSI az (no bundled python to add -X utf8 to): suppress log streaming
-    # instead — the crash is in the log renderer, not the build. The build still
-    # runs and its exit code still reflects success/failure; you just don't get
-    # live logs. Fetch them with: az acr task logs -r <registry> --run-id <id>
-    Write-Warning 'Azure CLI bundled Python not found; building with --no-logs to avoid the console encoding crash (live build logs suppressed).'
-    Invoke-Az @buildArgs --no-logs
+  Write-Info "found $image"
+}
+else {
+  Write-Step "Building image in ACR  (pulse:$Tag)"
+  $buildArgs = @(
+    'acr', 'build',
+    '--registry', $acrName,
+    '--image', "pulse:$Tag",
+    '--image', 'pulse:latest',
+    '--file', 'Dockerfile',
+    $repoRoot
+  )
+  # `az acr build` streams the cloud build logs, which contain the `▲ Next.js`
+  # banner. az's isolated Python defaults its stdout to cp1252 on Windows and
+  # crashes trying to write `▲`. Run az's own interpreter with `-X utf8` (the one
+  # override isolated mode honours) so the logs stream through as UTF-8. Unlike
+  # Invoke-Az this does NOT capture stdout, so build progress prints live.
+  # Run from the repo root: az resolves `--file` against the CURRENT directory
+  # (not the build context), so invoking the script from infra/ would otherwise
+  # fail with "Unable to find 'Dockerfile'".
+  Push-Location $repoRoot
+  try {
+    if ($script:AzPython) {
+      & $script:AzPython -I -X utf8 -B -m azure.cli @buildArgs
+      if ($LASTEXITCODE -ne 0) { throw "az acr build failed (exit $LASTEXITCODE)" }
+    }
+    else {
+      # Non-MSI az (no bundled python to add -X utf8 to): suppress log streaming
+      # instead — the crash is in the log renderer, not the build. The build still
+      # runs and its exit code still reflects success/failure; you just don't get
+      # live logs. Fetch them with: az acr task logs -r <registry> --run-id <id>
+      Write-Warning 'Azure CLI bundled Python not found; building with --no-logs to avoid the console encoding crash (live build logs suppressed).'
+      Invoke-Az @buildArgs --no-logs
+    }
   }
+  finally {
+    Pop-Location
+  }
+  Write-Info "built and pushed $image"
 }
-finally {
-  Pop-Location
-}
-Write-Info "built and pushed $image"
 
 # ---------------------------------------------------------------------------
 # Database: app SQL user + grants, then migrations (as the Entra admin = you)
@@ -225,14 +275,15 @@ if (-not $SkipMigrations) {
   elseif ($icmd.Parameters.ContainsKey('EncryptConnection')) { $sqlCommon.EncryptConnection = $true }
 
   # Migration tracking table.
-  Invoke-Sqlcmd @sqlCommon -Query @'
+  $trackingDdl = @'
 IF OBJECT_ID('dbo.SchemaMigrations','U') IS NULL
     CREATE TABLE dbo.SchemaMigrations (
         filename   nvarchar(260) NOT NULL PRIMARY KEY,
         applied_at datetime2     NOT NULL DEFAULT SYSUTCDATETIME()
     );
 '@
-  $applied = @(Invoke-Sqlcmd @sqlCommon -Query 'SELECT filename FROM dbo.SchemaMigrations' |
+  Invoke-SqlRetry { Invoke-Sqlcmd @sqlCommon -Query $trackingDdl }
+  $applied = @(Invoke-SqlRetry { Invoke-Sqlcmd @sqlCommon -Query 'SELECT filename FROM dbo.SchemaMigrations' } |
     Select-Object -ExpandProperty filename)
 
   $files = Get-ChildItem -Path (Join-Path $migrationsDir '*.sql') | Sort-Object Name
@@ -243,9 +294,9 @@ IF OBJECT_ID('dbo.SchemaMigrations','U') IS NULL
     Write-Info "apply $($f.Name)"
     # -InputFile runs GO-separated batches on one connection, preserving the
     # file's BEGIN TRAN...COMMIT; XACT_ABORT rolls back on any error.
-    Invoke-Sqlcmd @sqlCommon -InputFile $f.FullName -AbortOnError
+    Invoke-SqlRetry { Invoke-Sqlcmd @sqlCommon -InputFile $f.FullName -AbortOnError }
     $safeName = $f.Name.Replace("'", "''")
-    Invoke-Sqlcmd @sqlCommon -Query "INSERT INTO dbo.SchemaMigrations (filename) VALUES (N'$safeName')"
+    Invoke-SqlRetry { Invoke-Sqlcmd @sqlCommon -Query "INSERT INTO dbo.SchemaMigrations (filename) VALUES (N'$safeName')" }
     $newCount++
   }
   Write-Info "$newCount migration(s) applied, $($files.Count - $newCount) already current"
@@ -258,7 +309,7 @@ IF OBJECT_ID('dbo.SchemaMigrations','U') IS NULL
   $sidBytes = ([Guid]$appPrincipalId).ToByteArray()
   $appSid = '0x' + ([System.BitConverter]::ToString($sidBytes).Replace('-', ''))
   Write-Info "granting SQL access to the app identity [$appName]"
-  Invoke-Sqlcmd @sqlCommon -Variable @("AppUser=$appName", "AppSid=$appSid") -Query @'
+  $grantSql = @'
 IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'$(AppUser)')
 BEGIN
     BEGIN TRY
@@ -278,6 +329,7 @@ SELECT @g += N'GRANT UPDATE ON OBJECT::' + QUOTENAME(SCHEMA_NAME(schema_id)) + N
 FROM sys.sequences;
 IF LEN(@g) > 0 EXEC sys.sp_executesql @g;
 '@
+  Invoke-SqlRetry { Invoke-Sqlcmd @sqlCommon -Variable @("AppUser=$appName", "AppSid=$appSid") -Query $grantSql }
   Write-Info 'SQL access granted'
 }
 else {

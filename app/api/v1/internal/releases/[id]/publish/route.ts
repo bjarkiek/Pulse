@@ -1,3 +1,4 @@
+import { checkedMutation } from "@/lib/server/versions";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -15,7 +16,15 @@ export async function POST(
       identity,
       `release.publish:${id}`,
       200,
-      async () => ({ item: await publishRelease(identity, id) }),
+      async () => ({
+        item: await checkedMutation(
+          identity,
+          "Releases",
+          id,
+          request.headers.get("if-match"),
+          () => publishRelease(identity, id),
+        ),
+      }),
     );
     return json(result.body, { status: result.status }, correlation);
   } catch (error) {

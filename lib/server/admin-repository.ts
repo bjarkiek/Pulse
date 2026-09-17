@@ -1,3 +1,7 @@
+import { parseInput } from "./validation";
+import { userInputSchema, organizationInputSchema } from "@/lib/contracts";
+import { requireInternalRole } from "./authorization";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
 
@@ -12,6 +16,7 @@ export type OrganizationRecord = {
   authentication: ("OTP" | "Entra ID")[];
 };
 export type UserRecord = {
+  tokensValidAfter?: number;
   id: string;
   name: string;
   email: string;
@@ -20,7 +25,7 @@ export type UserRecord = {
   externalSubject?: string | null;
   memberships: Array<{
     companyId: string;
-    role: "Company admin" | "Requester" | "Viewer" | "Product manager";
+    role: "Company admin" | "Requester" | "Viewer" | "Product manager" | "Internal contributor" | "System admin";
   }>;
 };
 declare global {
@@ -56,18 +61,7 @@ export function users() {
   return globalThis.pulseMemoryUsers;
 }
 async function assertAdmin(identity: PulseIdentity) {
-  if (!isAzureSqlConfigured()) {
-    if (!identity.isInternal) throw new Error("FORBIDDEN");
-    return;
-  }
-  const pool = await getSqlPool();
-  const result = await pool
-    .request()
-    .input("userId", sql.UniqueIdentifier, identity.id)
-    .query(
-      "SELECT TOP (1) 1 allowed FROM dbo.Memberships m JOIN dbo.Organizations o ON o.id=m.organization_id WHERE m.user_id=@userId AND m.status='Active' AND o.type='Internal' AND m.role='System admin'",
-    );
-  if (!result.recordset.length) throw new Error("FORBIDDEN");
+  await requireInternalRole(identity, ["System admin"]);
 }
 export async function listOrganizations(identity: PulseIdentity) {
   await assertAdmin(identity);
@@ -88,6 +82,7 @@ export async function saveOrganization(
   identity: PulseIdentity,
   item: OrganizationRecord,
 ) {
+  item = parseInput(organizationInputSchema, item);
   await assertAdmin(identity);
   if (!item.name.trim() || !item.domain.trim() || !item.authentication.length)
     throw new Error("INVALID_ORGANIZATION");
@@ -162,9 +157,17 @@ export async function listUsers(identity: PulseIdentity) {
   return [...map.values()];
 }
 export async function saveUser(identity: PulseIdentity, item: UserRecord) {
+  item = parseInput(userInputSchema, item);
   await assertAdmin(identity);
   if (!item.email.trim() || !item.name.trim() || !item.memberships.length)
     throw new Error("INVALID_USER");
+  const available = await listOrganizations(identity);
+  for (const membership of item.memberships) {
+    const organization = available.find(o => o.id === membership.companyId);
+    if (!organization) throw new Error("INVALID_ORGANIZATION");
+    if (["System admin", "Product manager", "Internal contributor"].includes(membership.role) && organization.type !== "Internal") throw new Error("INVALID_ROLE_ORGANIZATION");
+    if (!organization.authentication.includes(item.authentication)) throw new Error("INVALID_AUTHENTICATION_POLICY");
+  }
   const id = /^[0-9a-f-]{36}$/i.test(item.id) ? item.id : crypto.randomUUID();
   const saved = { ...item, id };
   if (!isAzureSqlConfigured()) {
@@ -177,7 +180,11 @@ export async function saveUser(identity: PulseIdentity, item: UserRecord) {
     // overwrite a real identity link with the caller-supplied payload).
     saved.externalSubject =
       found >= 0 ? users()[found].externalSubject : `pending:${item.email.toLowerCase()}`;
-    if (found >= 0) users()[found] = saved;
+    if (found >= 0) {
+      const previous = users()[found];
+      saved.tokensValidAfter = previous.status !== saved.status || previous.authentication !== saved.authentication ? Date.now() : previous.tokensValidAfter;
+      users()[found] = saved;
+    }
     else users().push(saved);
     globalThis.pulseMemoryAudit ||= [];
     globalThis.pulseMemoryAudit.unshift({
@@ -194,8 +201,8 @@ export async function saveUser(identity: PulseIdentity, item: UserRecord) {
     return saved;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     // A new row has no real identity yet, so it gets a 'pending:{email}'
     // placeholder subject; an existing row's external_subject is left
@@ -208,7 +215,7 @@ export async function saveUser(identity: PulseIdentity, item: UserRecord) {
       .input("auth", sql.NVarChar(32), item.authentication)
       .input("pendingSubject", sql.NVarChar(128), `pending:${item.email.toLowerCase()}`)
       .query(
-        "MERGE dbo.Users target USING(SELECT @id id) source ON target.id=source.id WHEN MATCHED THEN UPDATE SET display_name=@name,email=@email,status=@status,auth_method=@auth,updated_at=SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT(id,email,display_name,status,auth_method,external_subject) VALUES(@id,@email,@name,@status,@auth,@pendingSubject);",
+        "MERGE dbo.Users target USING(SELECT @id id) source ON target.id=source.id WHEN MATCHED THEN UPDATE SET tokens_valid_after=CASE WHEN status<>@status OR auth_method<>@auth THEN SYSUTCDATETIME() ELSE tokens_valid_after END,display_name=@name,email=@email,status=@status,auth_method=@auth,updated_at=SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT(id,email,display_name,status,auth_method,external_subject) VALUES(@id,@email,@name,@status,@auth,@pendingSubject);",
       );
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, id)
@@ -241,10 +248,10 @@ export async function saveUser(identity: PulseIdentity, item: UserRecord) {
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,after_json,correlation_id) VALUES(@auditId,@actor,'user.memberships.saved','User',@entity,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return saved;
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

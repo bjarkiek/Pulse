@@ -1,3 +1,5 @@
+import { draftInputSchema } from "@/lib/contracts";
+import { parseInput } from "./validation";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireMembership } from "./authorization";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
@@ -48,6 +50,7 @@ export async function saveRequestDraft(
   input: Partial<RequestDraft>,
 ) {
   await requireMembership(identity);
+  input = parseInput(draftInputSchema, input);
   if ((input.title || "").length > 140) throw new Error("INVALID_TITLE");
   if ((input.problem || "").length > 5000) throw new Error("INVALID_PROBLEM");
   const visibility = input.visibility || "Organization";

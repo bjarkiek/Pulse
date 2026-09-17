@@ -1,3 +1,6 @@
+import { commentInputSchema } from "@/lib/contracts";
+import { parseInput } from "./validation";
+import { beginSqlTransaction } from "@/lib/server/database";
 import type { PulseIdentity } from "@/lib/domain";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
 import { listAttachments, listRequests } from "./request-repository";
@@ -93,6 +96,7 @@ export async function addComment(
   visibility: "Customer" | "Internal",
   attachmentIds: string[] = [],
 ) {
+  ({body, visibility, attachmentIds} = parseInput(commentInputSchema, {body, visibility, attachmentIds}));
   if (!body.trim() || body.length > 5000) throw new Error("INVALID_COMMENT");
   if (visibility === "Internal" && !(await canWriteInternal(identity)))
     throw new Error("FORBIDDEN");
@@ -270,8 +274,8 @@ export async function editComment(
     return mutable.item;
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, crypto.randomUUID())
@@ -305,14 +309,14 @@ export async function editComment(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,organization_id,action,entity_type,entity_id,before_json,after_json,correlation_id) VALUES(@id,@actor,NULL,'comment.edited','Comment',@entity,@before,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return {
       id: commentId,
       body: body.trim(),
       editedAt: new Date().toISOString(),
     };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }
@@ -347,8 +351,8 @@ export async function removeComment(
     return { id: commentId, removed: true };
   }
   const pool = await getSqlPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  const scope = await beginSqlTransaction(pool);
+  const transaction = scope.transaction;
   try {
     await new sql.Request(transaction)
       .input("revisionId", sql.UniqueIdentifier, crypto.randomUUID())
@@ -380,10 +384,10 @@ export async function removeComment(
       .query(
         "INSERT dbo.AuditEvents(id,actor_user_id,action,entity_type,entity_id,before_json,after_json,correlation_id) VALUES(@id,@actor,'comment.removed','Comment',@entity,@before,@after,@correlation)",
       );
-    await transaction.commit();
+    await scope.commit();
     return { id: commentId, removed: true };
   } catch (error) {
-    await transaction.rollback();
+    await scope.rollback();
     throw error;
   }
 }

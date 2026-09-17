@@ -1,3 +1,5 @@
+import { commentInputSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { addComment, listComments } from "@/lib/server/comment-repository";
 import { apiError, correlationId, json } from "@/lib/server/http";
@@ -12,7 +14,13 @@ export async function GET(request: Request, context: Context) {
     const includeInternal =
       new URL(request.url).searchParams.get("includeInternal") === "true";
     return json(
-      { items: await listComments(await getIdentity(request), id, includeInternal) },
+      {
+        items: await listComments(
+          await getIdentity(request),
+          id,
+          includeInternal,
+        ),
+      },
       {},
       correlation,
     );
@@ -32,7 +40,7 @@ export async function POST(request: Request, context: Context) {
       `comment.create:${id}`,
       201,
       async () => {
-        const body = await request.json();
+        const body = await readInput(request, commentInputSchema);
         return {
           item: await addComment(
             identity,

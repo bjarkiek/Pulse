@@ -1,3 +1,5 @@
+import { readInput } from "@/lib/server/validation";
+import { requestInputSchema } from "@/lib/contracts";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -6,7 +8,11 @@ import { createRequest, listRequests } from "@/lib/server/request-repository";
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    return json({ items: await listRequests(await getIdentity(request)) }, {}, id);
+    return json(
+      { items: await listRequests(await getIdentity(request)) },
+      {},
+      id,
+    );
   } catch (error) {
     return apiError(error, id);
   }
@@ -21,7 +27,10 @@ export async function POST(request: Request) {
       "request.create",
       201,
       async () => ({
-        item: await createRequest(identity, await request.json()),
+        item: await createRequest(
+          identity,
+          await readInput(request, requestInputSchema),
+        ),
       }),
     );
     return json(

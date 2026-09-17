@@ -7,8 +7,11 @@
 
 import { startSlackAssistant } from "@/lib/server/slack/socket-service";
 import { getRuntimeSettings } from "@/lib/server/settings-repository";
+import { assertProductionConfiguration } from "@/lib/server/production-config";
 
 export async function start() {
+  if (process.env.NEXT_PHASE === "phase-production-build") return;
+  assertProductionConfiguration();
   // Prime the "Show demo data" runtime cache (database.ts isDemoDataActive)
   // before the first content request; until primed the app serves real data.
   // Best-effort — a failed read just means the first settings access primes it.

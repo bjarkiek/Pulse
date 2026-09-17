@@ -22,7 +22,7 @@ Copy `.env.example` to `.env.local` to connect Azure resources. Never commit the
 - Azure Blob Storage stores attachment bytes in a private container. Azure SQL stores ownership, visibility, content type, size, and scan state.
 - The App Service managed identity authenticates to SQL and Blob Storage. No database passwords or storage keys are used.
 - Key Vault stores the attachment-scanner callback secret; App Service receives only a Key Vault reference.
-- Microsoft Entra External ID is the recommended identity front door: configure email one-time passcode and Microsoft Entra federation, then enable App Service Authentication so Pulse receives verified identity headers.
+- Application-level signed sessions authenticate DataCentral HMAC/Graph launches, Entra OIDC, and provisioned email-OTP accounts. Easy Auth must allow anonymous forwarding; trusted identity headers are disabled in production. See [security and operations](docs/production-hardening.md).
 - Application Insights receives operational telemetry. Customer request text, email addresses, and filenames must not be added to telemetry.
 
 All API reads and mutations resolve the active membership server-side. A caller-supplied organization header is only a context hint and never grants access. Users with several active memberships choose a context after sign-in; Pulse stores the authorized selection in a secure, HTTP-only, same-site cookie.
@@ -39,8 +39,8 @@ Production upload sequence:
 2. The API returns a ten-minute, write-only user-delegation SAS URL.
 3. The browser uploads directly to Blob Storage.
 4. `POST /api/v1/attachments/{id}/complete` marks the file as scanning.
-5. Defender for Storage or the selected scanning service posts the result to `/scan-result` using `ATTACHMENT_SCAN_WEBHOOK_SECRET`.
-6. Download remains locked until `scan_state` is `Clean`. Every download re-checks access to the parent request.
+5. Defender for Storage sends ETag-bound verdicts through the authenticated Event Grid adapter at `/api/v1/internal/attachments/scan-events`. Deploy [scanning.bicep](infra/scanning.bicep) after the application is reachable. The alternative `/scan-result` callback requires the exact ETag.
+6. Download remains locked until `scan_state` is `Clean`. Every download rechecks parent access and uses `If-Match` against the approved ETag; replacement bytes cannot be downloaded.
 
 Blob Storage is preferred over Azure Files here: the files are application objects, not a shared SMB filesystem. Use the hot access tier initially, ZRS in production, lifecycle rules for retained or deleted content, and never enable anonymous blob access.
 
@@ -55,6 +55,13 @@ Run the versioned migrations in order against the Pulse database with an Entra a
 5. [005_webhooks.sql](database/migrations/005_webhooks.sql)
 6. [006_triage_tags.sql](database/migrations/006_triage_tags.sql)
 7. [007_draft_context.sql](database/migrations/007_draft_context.sql)
+8. [008_datacentral_auth.sql](database/migrations/008_datacentral_auth.sql)
+9. [009_chat_messages.sql](database/migrations/009_chat_messages.sql)
+10. [010_mcp_oauth.sql](database/migrations/010_mcp_oauth.sql)
+11. [011_onboarding_tours.sql](database/migrations/011_onboarding_tours.sql)
+12. [012_otp_login.sql](database/migrations/012_otp_login.sql)
+13. [013_security_boundaries.sql](database/migrations/013_security_boundaries.sql)
+14. [014_release_versions.sql](database/migrations/014_release_versions.sql)
 
 For a local Azure SQL development database, optionally run [seed-development.sql](database/seed-development.sql).
 
@@ -64,9 +71,9 @@ After deploying the App Service, create a contained database user for its manage
 CREATE USER [<app-service-name>] FROM EXTERNAL PROVIDER;
 ALTER ROLE db_datareader ADD MEMBER [<app-service-name>];
 ALTER ROLE db_datawriter ADD MEMBER [<app-service-name>];
-GRANT SELECT ON OBJECT::dbo.RequestNumber TO [<app-service-name>];
-GRANT SELECT ON OBJECT::dbo.IdeaNumber TO [<app-service-name>];
-GRANT SELECT ON OBJECT::dbo.ReleaseNumber TO [<app-service-name>];
+GRANT UPDATE ON OBJECT::dbo.RequestNumber TO [<app-service-name>];
+GRANT UPDATE ON OBJECT::dbo.IdeaNumber TO [<app-service-name>];
+GRANT UPDATE ON OBJECT::dbo.ReleaseNumber TO [<app-service-name>];
 ```
 
 Production migrations should run from a dedicated deployment identity with schema permissions; the web application identity should not own schema changes.
@@ -96,7 +103,7 @@ az deployment group create \
                mcpTokenSigningKey=<base64-64-plus-byte-key>
 ```
 
-Supplying `entraClientId` enables App Service Authentication and requires sign-in on every route except health and the separately secret-authenticated scan callback. Configure the External ID application for email one-time passcode and Entra federation before customer onboarding.
+Entra sign-in is handled by the application. If Easy Auth is present, configure `AllowAnonymous` forwarding and leave `PULSE_TRUST_EASYAUTH_HEADERS=false`; it must not intercept the DataCentral handshake, OTP, or MCP OAuth routes.
 
 `sessionSecret`, `entraClientSecret`, `dcAppSecret`, and `mcpTokenSigningKey` are `@secure()` Bicep parameters with no default — the deployment fails without them. They back the app-level session/auth layer, MCP OAuth server, and DataCentral embed described in [configInfo.md](configInfo.md); `anthropicApiKey`, `anthropicModel`, `slackBotToken`, and `slackAppToken` are optional siblings for the AI assistant and Slack bot, also covered there.
 
@@ -134,3 +141,12 @@ npm run build     # Azure-targeted standalone production build
 ```
 
 The legacy `npm run build:sites` command remains for the original Sites preview shell, but Azure deployment uses `npm run build` and the standalone container.
+
+
+## Maintained deployment and verification
+
+The supported production path is the Azure standalone Next.js container. `build:sites`, Vinext, Wrangler, and `.openai/hosting.json` are retained legacy tooling, not an alternative production acceptance path.
+
+Run `npm run verify` before release. `npm run openapi:generate` regenerates the contract from the route inventory, shared runtime schemas, and curated operation descriptions. `npm run openapi:check` fails on drift. SQL security acceptance uses `npm run test:sql` against a disposable migrated database; see [the test runbook](docs/production-hardening.md). Never point SQL fixtures at production.
+
+The frontend lives in `app/features/`, with lazy internal pages, shared controls, dialog keyboard behavior, scoped drafts, and reusable API/resource helpers. `app/page.tsx` is the route entry point.

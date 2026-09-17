@@ -1,3 +1,5 @@
+import { parseInput } from "./validation";
+import { externalLinkInputSchema } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
 import { getSqlPool, isContentSqlActive, sql } from "./database";
@@ -56,6 +58,7 @@ export async function addExternalLink(
   ideaPublicId: string,
   input: { label: string; url: string },
 ) {
+  input = parseInput(externalLinkInputSchema, input);
   await requireInternalRole(identity, ["Product manager", "System admin"]);
   if (!input.label?.trim()) throw new Error("INVALID_EXTERNAL_LINK_LABEL");
   const url = validateUrl(input.url);

@@ -1,3 +1,5 @@
+import { readJson } from "@/lib/server/validation";
+import { checkedMutation } from "@/lib/server/versions";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -16,9 +18,15 @@ export async function POST(
       `idea.publish:${id}`,
       200,
       async () => {
-        const body = await request.json();
+        const body = await readJson(request);
         return {
-          item: await publishIdea(identity, id, body.confirmedSafe === true),
+          item: await checkedMutation(
+            identity,
+            "Ideas",
+            id,
+            request.headers.get("if-match"),
+            () => publishIdea(identity, id, body.confirmedSafe === true),
+          ),
         };
       },
     );

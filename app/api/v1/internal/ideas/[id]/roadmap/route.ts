@@ -1,3 +1,6 @@
+import { checkedMutation } from "@/lib/server/versions";
+import { roadmapInputSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { placeRoadmap } from "@/lib/server/operations-repository";
@@ -8,12 +11,16 @@ export async function PUT(
   const correlation = correlationId(request);
   try {
     const { id } = await context.params;
+    const identity = await getIdentity(request);
+    const body = await readInput(request, roadmapInputSchema);
     return json(
       {
-        item: await placeRoadmap(
-          await getIdentity(request),
+        item: await checkedMutation(
+          identity,
+          "Ideas",
           id,
-          await request.json(),
+          request.headers.get("if-match"),
+          () => placeRoadmap(identity, id, body),
         ),
       },
       {},

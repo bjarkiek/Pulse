@@ -11,6 +11,15 @@ export async function processRetentionBatch(limit = 50) {
   const cutoff = new Date(Date.now() - settings.retentionDays * 86_400_000);
   const batchSize = Math.min(Math.max(limit, 1), 250);
   const pool = await getSqlPool();
+  // Claim expired quarantine records before deleting blobs. A completion racing
+  // this claim cannot make the record downloadable or revive its quota.
+  await pool.request().input("limit", sql.Int, batchSize).query(`
+    UPDATE TOP (@limit) dbo.Attachments SET scan_state='Failed',scan_updated_at=SYSUTCDATETIME()
+    WHERE deleted_at IS NULL AND scan_state='Scanning' AND scan_updated_at<DATEADD(minute,-30,SYSUTCDATETIME());
+    UPDATE TOP (@limit) dbo.Attachments SET deleted_at=SYSUTCDATETIME()
+    WHERE deleted_at IS NULL AND scan_state IN ('Pending upload','Failed','Infected')
+      AND created_at<DATEADD(hour,-24,SYSUTCDATETIME());
+  `);
   const attachments = await pool
     .request()
     .input("cutoff", sql.DateTime2, cutoff)
@@ -18,7 +27,7 @@ export async function processRetentionBatch(limit = 50) {
       SELECT TOP (@limit) CAST(a.id AS nvarchar(36)) id,a.storage_key storageKey
       FROM dbo.Attachments a
       JOIN dbo.Requests r ON r.id=a.request_id
-      WHERE (a.deleted_at IS NOT NULL AND a.deleted_at<@cutoff)
+      WHERE (a.deleted_at IS NOT NULL AND (a.deleted_at<@cutoff OR a.scan_state IN ('Pending upload','Failed','Infected')))
         OR (r.deleted_at IS NOT NULL AND r.deleted_at<@cutoff)
       ORDER BY COALESCE(a.deleted_at,r.deleted_at);`);
 
@@ -32,7 +41,7 @@ export async function processRetentionBatch(limit = 50) {
         DELETE FROM dbo.CommentAttachments WHERE attachment_id=@id;
         DELETE a OUTPUT DELETED.id
         FROM dbo.Attachments a JOIN dbo.Requests r ON r.id=a.request_id
-        WHERE a.id=@id AND ((a.deleted_at IS NOT NULL AND a.deleted_at<@cutoff)
+        WHERE a.id=@id AND ((a.deleted_at IS NOT NULL AND (a.deleted_at<@cutoff OR a.scan_state IN ('Pending upload','Failed','Infected')))
           OR (r.deleted_at IS NOT NULL AND r.deleted_at<@cutoff));`);
     attachmentsDeleted += deleted.recordset.length;
   }

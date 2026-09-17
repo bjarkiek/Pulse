@@ -7,24 +7,32 @@
 | Attachments | Allow list, 25/100 MB limits, private Blob keys, short-lived user-delegation SAS, quarantine, scanning callback, and authorization on download. |
 | Product workflow | Safe staged publication, canonical request linking/merging, score snapshots, roadmap placement, releases, notification outbox with ACS delivery/retry worker, and audit inspection. |
 | Administration | Companies, multi-company user roles, allowed authentication methods, attachment/retention/localization policy, and versioned score weights persist to SQL and emit audit events. |
-| Azure SQL | Three ordered migrations cover the core domain, drafts, revisions, links, interests, comments, releases, saved views, notification delivery state, scores, audit, and idempotency. |
-| Azure deployment | Standalone Next.js container, App Service/SQL/Blob managed identity, Key Vault references, optional External ID authentication gate, ZRS Blob Storage, Application Insights resource, TLS/security headers. |
+| Azure SQL | Fourteen ordered migrations cover the core domain, drafts, revisions, links, interests, comments, releases, saved views, notification delivery state, scores, audit, and idempotency. |
+| Azure deployment | Standalone Next.js container, App Service/SQL/Blob managed identity, Key Vault references, application-level DataCentral/Entra/OTP sessions, ZRS Blob Storage, Application Insights resource, TLS/security headers. |
 | API hardening | OpenAPI 3.1 contract, correlation IDs, tenant-safe 404s, same-origin mutation checks, rate limits, and replayable idempotent create/publish operations. |
 
 ## Security boundaries
 
-Identity and authorization are intentionally separate. In Azure, App Service Authentication validates the configured External ID application. Pulse then verifies an active `Membership` for the selected company on every data operation. Multi-membership users explicitly select an authorized context, stored in an HTTP-only cookie. Storage keys include organization/request context for operations, but opaque database UUIDs remain the authoritative identifiers.
+Identity and authorization are separate. Pulse validates signed application sessions and MCP bearer tokens, then checks the current active account, revocation timestamp, active membership, organization status, and operation permissions. Entra OIDC and provisioned email OTP are standalone login options; DataCentral supports embedded launches. Easy Auth, if present, forwards anonymously. Raw identity headers never authenticate production requests. See [production hardening](production-hardening.md).
 
-Attachments inherit request visibility and are not copied to ideas. The browser receives write-only SAS permissions; upload completion verifies the Blob size, and reads pass through Pulse so membership and scan state can be rechecked. Production storage scanning should use Defender for Storage malware scanning with an Event Grid/Function adapter that validates the event and calls the constant-time-secret-protected scan-result endpoint.
+Attachments inherit request visibility. Completion captures the uploaded ETag; authenticated scan verdicts must match it. Downloads use a conditional Blob read for the approved ETag. Atomic SQL quota reservation prevents parallel uploads exceeding the request limit. Retention processing fails timed-out scans and removes abandoned quarantine objects. The Event Grid adapter and separate scanner template are included; deployed scanner acceptance remains required.
 
 ## Local adapter
 
-When `AZURE_SQL_CONNECTION_STRING` is absent, a process-local seeded adapter is used. When `AZURE_STORAGE_ACCOUNT_NAME` is absent, attachment bytes are held in the same process and marked clean after upload. This makes local development credential-free while leaving production code paths explicit. Neither fallback is durable or suitable for production.
+Only in development, when both `AZURE_SQL_CONNECTION_STRING` and `AZURE_SQL_SERVER` are absent, a process-local seeded adapter is used. When `AZURE_STORAGE_ACCOUNT_NAME` is absent, attachment bytes are held in the same process and marked clean after upload. This makes local development credential-free while leaving production code paths explicit. Neither fallback is durable or suitable for production.
 
 ## Remaining production operations
 
 The repository is deployable, but the following environment/organizational launch gates cannot be completed in source code alone: External ID tenant and user-flow creation, outbound email provider/domain approval, Defender event wiring, private networking policy, backup-restore drills, penetration testing, WCAG audit, Icelandic copy review, and load testing against the expected tenant/data volume.
 
-## Single-instance constraint: MCP OAuth cache, proxy rate limits, and Slack Socket Mode
+## Single-instance constraints
 
-Three components require Pulse to run as a single instance. The MCP authorization-code/consent cache (`lib/server/mcp/code-cache.ts`) and the DataCentral proxy's rate limiter both keep their state in an in-memory `globalThis` map, which is correct only because Pulse runs as a single-instance App Service (P1v3, capacity 1, alwaysOn). Slack's Socket Mode integration adds a third: it holds a single persistent WebSocket connection from the process to Slack, so running multiple instances would either duplicate event handling (each instance opening its own socket and double-processing messages) or require Slack's own connection-count limits to arbitrate — neither of which Pulse's Socket Mode client coordinates across instances. If the app is ever scaled out to multiple instances, the OAuth cache and rate limiter must move to a shared store (e.g. Azure SQL or Redis), and Slack must move off Socket Mode to an HTTP Events API endpoint (or a dedicated single-instance worker) — a load-balanced deployment would otherwise let requests land on different instances and see inconsistent cache/rate-limit state or duplicated Slack event handling.
+SQL-backed rate limits are shared across web processes and keyed by verified identity or explicitly trusted ingress IP. The MCP authorization-code/consent cache is still process-local, and Slack Socket Mode still requires one active worker. Keep one application instance until those separately scoped P1 items are implemented.
+
+## Write consistency
+
+Idempotency resolves current authorization before every lookup, scopes keys to user/organization/operation, and hashes the target, body, and If-Match. SQL application locks serialize retries; business writes and replay responses commit together. Requests, ideas, and releases expose an opaque `version`; edit and publication APIs require `If-Match`. Chat/MCP tools require the same observed version. SQL locks hold the version check through the write; stale clients receive 412 and must reread.
+
+## Frontend
+
+Feature modules separate customer views, request composition/details, triage, ideas, releases, analytics, companies, users, authentication, audit, and settings. Internal screens load dynamically. Shared controls, resource loading with cancellation/retry, and dialog focus behavior are in `app/features`. User/org draft keys expire after 24 hours; server copies take precedence. Production data failures never substitute client-side sample records.

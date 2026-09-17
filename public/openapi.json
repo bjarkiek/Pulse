@@ -2,429 +2,4014 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DataCentral Pulse API",
-    "version": "1.0.0",
-    "description": "Authenticated, organization-scoped API for customer feedback and product workflow. Mutation operations documented with Idempotency-Key replay their original response."
+    "version": "1.1.0",
+    "description": "Generated route inventory and shared Zod input schemas. Application sessions, current accounts and scoped membership govern access. If-Match protects edits/publication; idempotent writes bind caller, body and target. JSON limit: 64 KiB. See docs/production-hardening.md."
   },
-  "servers": [{ "url": "/" }],
-  "security": [{ "appServiceIdentity": [] }],
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "sessionCookie": []
+    },
+    {
+      "sessionBearer": []
+    }
+  ],
   "paths": {
-    "/api/v1/openapi": {
+    "/api/v1/admin/delivery": {
       "get": {
-        "operationId": "getOpenApiSpecification",
-        "security": [],
-        "responses": { "200": { "description": "OpenAPI 3.1 document" } }
-      }
-    },
-    "/api/v1/me": {
-      "get": {
-        "operationId": "getMe",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/me/context": {
-      "post": {
-        "operationId": "setActiveOrganization",
+        "operationId": "get_api_v1_admin_delivery",
+        "x-source-file": "app/api/v1/admin/delivery/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "404": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/api/v1/requests": {
-      "get": {
-        "operationId": "listRequests",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "post": {
-        "operationId": "createRequest",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": {
-          "201": { "$ref": "#/components/responses/Ok" },
-          "400": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/api/v1/requests/draft": {
-      "get": {
-        "operationId": "getRequestDraft",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "put": {
-        "operationId": "saveRequestDraft",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "delete": {
-        "operationId": "deleteRequestDraft",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/requests/{id}": {
-      "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-      "get": {
-        "operationId": "getRequest",
-        "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "404": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
-      "patch": {
-        "operationId": "updateRequest",
+      "post": {
+        "operationId": "post_api_v1_admin_delivery",
+        "x-source-file": "app/api/v1/admin/delivery/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "404": { "$ref": "#/components/responses/Error" }
-        }
-      }
-    },
-    "/api/v1/requests/{id}/attachments": {
-      "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-      "get": {
-        "operationId": "listRequestAttachments",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "post": {
-        "operationId": "initiateAttachmentUpload",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/requests/{id}/comments": {
-      "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-      "get": {
-        "operationId": "listRequestComments",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "post": {
-        "operationId": "createRequestComment",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/requests/{id}/comments/{commentId}": {
-      "parameters": [
-        { "$ref": "#/components/parameters/PublicId" },
-        {
-          "name": "commentId",
-          "in": "path",
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
           "required": true,
-          "schema": { "type": "string", "format": "uuid" }
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
         }
-      ],
-      "patch": {
-        "operationId": "editRequestComment",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/admin/onboarding/restore": {
+      "post": {
+        "operationId": "post_api_v1_admin_onboarding_restore",
+        "x-source-file": "app/api/v1/admin/onboarding/restore/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/onboarding": {
+      "get": {
+        "operationId": "get_api_v1_admin_onboarding",
+        "x-source-file": "app/api/v1/admin/onboarding/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       },
-      "delete": {
-        "operationId": "removeRequestComment",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      "patch": {
+        "operationId": "patch_api_v1_admin_onboarding",
+        "x-source-file": "app/api/v1/admin/onboarding/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/organizations": {
+      "get": {
+        "operationId": "listOrganizations",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/organizations/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      },
+      "post": {
+        "operationId": "saveOrganization",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/organizations/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/organizationInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/settings": {
+      "get": {
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/settings/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      },
+      "patch": {
+        "operationId": "saveSettings",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/settings/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/settingsInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/taxonomy": {
+      "get": {
+        "operationId": "listTaxonomy",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/taxonomy/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      },
+      "post": {
+        "operationId": "saveTaxonomy",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/taxonomy/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/taxonomyInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "listUsers",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/users/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      },
+      "post": {
+        "operationId": "saveUser",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/admin/users/route.ts",
+        "x-authorization": "System admin",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/userInputSchema"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/attachments/{id}/complete": {
       "post": {
         "operationId": "completeAttachmentUpload",
-        "parameters": [{ "$ref": "#/components/parameters/Id" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/attachments/[id]/complete/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
       }
     },
     "/api/v1/attachments/{id}/content": {
+      "put": {
+        "operationId": "put_api_v1_attachments_id_content",
+        "x-source-file": "app/api/v1/attachments/[id]/content/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "get": {
         "operationId": "downloadAttachment",
-        "parameters": [{ "$ref": "#/components/parameters/Id" }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "description": "Clean attachment content" },
-          "409": { "$ref": "#/components/responses/Error" }
-        }
+          "200": {
+            "description": "Clean attachment content"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/attachments/[id]/content/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
       }
     },
     "/api/v1/attachments/{id}/scan-result": {
       "post": {
         "operationId": "recordAttachmentScan",
-        "security": [{ "scanWebhookSecret": [] }],
-        "parameters": [{ "$ref": "#/components/parameters/Id" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/ideas": {
-      "get": {
-        "operationId": "listPublishedIdeas",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/search/suggestions": {
-      "get": {
-        "operationId": "searchDuplicateSuggestions",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/search/suggestions/dismiss": {
-      "post": {
-        "operationId": "dismissDuplicateSuggestions",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/ideas/{id}": {
-      "get": {
-        "operationId": "getPublishedIdea",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
+        "security": [
+          {
+            "scanWebhookSecret": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "404": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/attachments/[id]/scan-result/route.ts",
+        "x-authorization": "Scanner secret",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/scanVerdictSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chat/messages": {
+      "get": {
+        "operationId": "get_api_v1_chat_messages",
+        "x-source-file": "app/api/v1/chat/messages/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_api_v1_chat_messages",
+        "x-source-file": "app/api/v1/chat/messages/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_api_v1_chat_messages",
+        "x-source-file": "app/api/v1/chat/messages/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chat/transcript": {
+      "post": {
+        "operationId": "post_api_v1_chat_transcript",
+        "x-source-file": "app/api/v1/chat/transcript/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
         }
       }
     },
     "/api/v1/ideas/{id}/follow": {
       "post": {
         "operationId": "setIdeaFollow",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/ideas/[id]/follow/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
       }
     },
-    "/api/v1/releases": {
+    "/api/v1/ideas/{id}": {
       "get": {
-        "operationId": "listPublishedReleases",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "getPublishedIdea",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/ideas/[id]/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
       }
     },
-    "/api/v1/notifications": {
+    "/api/v1/ideas": {
       "get": {
-        "operationId": "listNotifications",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "listPublishedIdeas",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/ideas/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       }
     },
-    "/api/v1/notifications/preferences": {
+    "/api/v1/internal/analytics/requests.csv": {
       "get": {
-        "operationId": "listNotificationPreferences",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "patch": {
-        "operationId": "updateNotificationPreference",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/notifications/{id}/read": {
-      "post": {
-        "operationId": "markNotificationRead",
-        "parameters": [{ "$ref": "#/components/parameters/Id" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/ideas": {
-      "get": {
-        "operationId": "listInternalIdeas",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "post": {
-        "operationId": "createIdea",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/triage": {
-      "get": {
-        "operationId": "listTriageQueue",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/triage/bulk": {
-      "post": {
-        "operationId": "bulkUpdateTriage",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/jobs/retention": {
-      "post": {
-        "operationId": "runRetentionBatch",
-        "security": [{ "jobSecret": [] }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "exportAuthorizedRequestsCsv",
+        "responses": {
+          "200": {
+            "description": "Authorized CSV result set"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/analytics/requests.csv/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       }
     },
     "/api/v1/internal/analytics/summary": {
       "get": {
         "operationId": "getAnalyticsSummary",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/analytics/summary/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       }
     },
-    "/api/v1/internal/jobs/webhooks": {
+    "/api/v1/internal/attachments/scan-events": {
       "post": {
-        "operationId": "deliverOutboundWebhooks",
-        "security": [{ "jobSecret": [] }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "post_api_v1_internal_attachments_scan_events",
+        "x-source-file": "app/api/v1/internal/attachments/scan-events/route.ts",
+        "x-authorization": "Scanner secret",
+        "security": [
+          {
+            "scanWebhookSecret": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "$ref": "#/components/schemas/ScanEvent"
+                }
+              }
+            }
+          }
+        }
       }
     },
-    "/api/v1/internal/webhooks": {
+    "/api/v1/internal/audit": {
       "get": {
-        "operationId": "listWebhookSubscriptions",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "listAudit",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/audit/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      }
+    },
+    "/api/v1/internal/ideas/{id}/external-links/{linkId}": {
+      "delete": {
+        "operationId": "delete_api_v1_internal_ideas_id_external_links_linkId_",
+        "x-source-file": "app/api/v1/internal/ideas/[id]/external-links/[linkId]/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "linkId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/external-links": {
+      "get": {
+        "operationId": "listIdeaExternalLinks",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/external-links/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
       },
       "post": {
-        "operationId": "createWebhookSubscription",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/ideas/{id}": {
-      "patch": {
-        "operationId": "updateIdea",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/ideas/{id}/publish": {
-      "post": {
-        "operationId": "publishIdea",
+        "operationId": "createIdeaExternalLink",
         "parameters": [
-          { "$ref": "#/components/parameters/PublicId" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/external-links/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/externalLinkInputSchema"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/internal/ideas/{id}/links": {
       "post": {
         "operationId": "linkRequestToIdea",
         "parameters": [
-          { "$ref": "#/components/parameters/PublicId" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/links/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
       },
       "patch": {
         "operationId": "moveRequestIdeaLink",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/ideas/{id}/external-links": {
-      "get": {
-        "operationId": "listIdeaExternalLinks",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      },
-      "post": {
-        "operationId": "createIdeaExternalLink",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/links/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/internal/ideas/{id}/merge": {
       "post": {
         "operationId": "mergeIdeas",
         "parameters": [
-          { "$ref": "#/components/parameters/PublicId" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/merge/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/publish": {
+      "post": {
+        "operationId": "publishIdea",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/publish/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/ideas/{id}/roadmap": {
+      "put": {
+        "operationId": "put_api_v1_internal_ideas_id_roadmap",
+        "x-source-file": "app/api/v1/internal/ideas/[id]/roadmap/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/roadmapInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/ideas/{id}": {
+      "patch": {
+        "operationId": "updateIdea",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ideaInputSchema"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/internal/ideas/{id}/score": {
       "post": {
         "operationId": "scoreIdea",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/[id]/score/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/scoreInputSchema"
+              }
+            }
+          }
+        }
       }
     },
-    "/api/v1/internal/ideas/{id}/roadmap": {
-      "post": {
-        "operationId": "placeIdeaOnRoadmap",
-        "parameters": [{ "$ref": "#/components/parameters/PublicId" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/releases": {
+    "/api/v1/internal/ideas": {
       "get": {
-        "operationId": "listInternalReleases",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "listInternalIdeas",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       },
       "post": {
-        "operationId": "createRelease",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "createIdea",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/ideas/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ideaInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/jobs/notifications": {
+      "post": {
+        "operationId": "processNotificationOutbox",
+        "security": [
+          {
+            "notificationJobSecret": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/jobs/notifications/route.ts",
+        "x-authorization": "Job secret",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/jobs/retention": {
+      "post": {
+        "operationId": "runRetentionBatch",
+        "security": [
+          {
+            "notificationJobSecret": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/jobs/retention/route.ts",
+        "x-authorization": "Job secret",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/jobs/webhooks": {
+      "post": {
+        "operationId": "deliverOutboundWebhooks",
+        "security": [
+          {
+            "notificationJobSecret": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/jobs/webhooks/route.ts",
+        "x-authorization": "Job secret",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/internal/releases/{id}/publish": {
       "post": {
         "operationId": "publishRelease",
         "parameters": [
-          { "$ref": "#/components/parameters/PublicId" },
-          { "$ref": "#/components/parameters/IdempotencyKey" }
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/releases/[id]/publish/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
       }
     },
-    "/api/v1/internal/audit": {
+    "/api/v1/internal/releases": {
       "get": {
-        "operationId": "listAudit",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/internal/analytics/requests.csv": {
-      "get": {
-        "operationId": "exportAuthorizedRequestsCsv",
-        "responses": { "200": { "description": "Authorized CSV result set" } }
-      }
-    },
-    "/api/v1/internal/saved-views": {
-      "get": {
-        "operationId": "listSavedViews",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "listInternalReleases",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/releases/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       },
       "post": {
-        "operationId": "createSavedView",
-        "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }],
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "createRelease",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/releases/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/releaseInputSchema"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/internal/saved-views/{id}": {
       "delete": {
         "operationId": "deleteSavedView",
-        "parameters": [{ "$ref": "#/components/parameters/Id" }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/saved-views/[id]/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
       }
     },
-    "/api/v1/internal/jobs/notifications": {
-      "post": {
-        "operationId": "processNotificationOutbox",
-        "security": [{ "notificationJobSecret": [] }],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
-      }
-    },
-    "/api/v1/admin/organizations": {
+    "/api/v1/internal/saved-views": {
       "get": {
-        "operationId": "listOrganizations",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "listSavedViews",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/saved-views/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       },
       "post": {
-        "operationId": "saveOrganization",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "createSavedView",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/saved-views/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/savedViewInputSchema"
+              }
+            }
+          }
+        }
       }
     },
-    "/api/v1/admin/users": {
+    "/api/v1/internal/triage/bulk": {
+      "post": {
+        "operationId": "bulkUpdateTriage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/triage/bulk/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/triageInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/triage": {
       "get": {
-        "operationId": "listUsers",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "listTriageQueue",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/triage/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      }
+    },
+    "/api/v1/internal/webhooks/{id}": {
+      "patch": {
+        "operationId": "patch_api_v1_internal_webhooks_id_",
+        "x-source-file": "app/api/v1/internal/webhooks/[id]/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/webhooks": {
+      "get": {
+        "operationId": "listWebhookSubscriptions",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/webhooks/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       },
       "post": {
-        "operationId": "saveUser",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "createWebhookSubscription",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/webhooks/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/webhookInputSchema"
+              }
+            }
+          }
+        }
       }
     },
-    "/api/v1/admin/settings": {
+    "/api/v1/me/context": {
+      "post": {
+        "operationId": "setActiveOrganization",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/me/context/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me": {
+      "patch": {
+        "operationId": "patch_api_v1_me",
+        "x-source-file": "app/api/v1/me/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      },
       "get": {
-        "operationId": "getSettings",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "getMe",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/me/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      }
+    },
+    "/api/v1/notifications/{id}/read": {
+      "post": {
+        "operationId": "markNotificationRead",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/notifications/[id]/read/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/notifications/preferences": {
+      "get": {
+        "operationId": "listNotificationPreferences",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/notifications/preferences/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
       },
       "patch": {
-        "operationId": "saveSettings",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "operationId": "updateNotificationPreference",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/notifications/preferences/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "listNotifications",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/notifications/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      }
+    },
+    "/api/v1/openapi": {
+      "get": {
+        "operationId": "getOpenApiSpecification",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/openapi/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "parameters": []
+      }
+    },
+    "/api/v1/releases": {
+      "get": {
+        "operationId": "listPublishedReleases",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/releases/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      }
+    },
+    "/api/v1/requests/{id}/attachments": {
+      "get": {
+        "operationId": "listRequestAttachments",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/attachments/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "initiateAttachmentUpload",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/attachments/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/attachmentInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/comments/{commentId}": {
+      "patch": {
+        "operationId": "editRequestComment",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/comments/[commentId]/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeRequestComment",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/comments/[commentId]/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/requests/{id}/comments": {
+      "get": {
+        "operationId": "listRequestComments",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/comments/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createRequestComment",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/comments/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/commentInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/requests/{id}": {
+      "get": {
+        "operationId": "getRequest",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateRequest",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/[id]/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/requestMutationSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/requests/draft": {
+      "get": {
+        "operationId": "getRequestDraft",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/draft/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      },
+      "put": {
+        "operationId": "saveRequestDraft",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/draft/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/draftInputSchema"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRequestDraft",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/draft/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/requests": {
+      "get": {
+        "operationId": "listRequests",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      },
+      "post": {
+        "operationId": "createRequest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/requests/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/requestInputSchema"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/suggestions/dismiss": {
+      "post": {
+        "operationId": "dismissDuplicateSuggestions",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/search/suggestions/dismiss/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/suggestions": {
+      "get": {
+        "operationId": "searchDuplicateSuggestions",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/search/suggestions/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": []
+      }
+    },
+    "/api/v1/tours/hide": {
+      "post": {
+        "operationId": "post_api_v1_tours_hide",
+        "x-source-file": "app/api/v1/tours/hide/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/tours/progress": {
+      "post": {
+        "operationId": "post_api_v1_tours_progress",
+        "x-source-file": "app/api/v1/tours/progress/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tours/state": {
+      "get": {
+        "operationId": "get_api_v1_tours_state",
+        "x-source-file": "app/api/v1/tours/state/route.ts",
+        "x-authorization": "Active account and authorized organization/resource",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     }
   },
   "components": {
     "securitySchemes": {
-      "appServiceIdentity": {
-        "type": "openIdConnect",
-        "openIdConnectUrl": "/.auth/me"
-      },
       "scanWebhookSecret": {
         "type": "apiKey",
         "in": "header",
@@ -434,16 +4019,16 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-pulse-job-secret"
-      }
-    },
-    "/api/v1/admin/taxonomy": {
-      "get": {
-        "operationId": "listTaxonomy",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       },
-      "post": {
-        "operationId": "saveTaxonomy",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "pulse-session"
+      },
+      "sessionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Pulse session JWT"
       }
     },
     "parameters": {
@@ -451,19 +4036,39 @@
         "name": "id",
         "in": "path",
         "required": true,
-        "schema": { "type": "string", "format": "uuid" }
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
       },
       "PublicId": {
         "name": "id",
         "in": "path",
         "required": true,
-        "schema": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" }
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Z]+-[0-9]+$"
+        }
       },
       "IdempotencyKey": {
         "name": "Idempotency-Key",
         "in": "header",
         "required": true,
-        "schema": { "type": "string", "minLength": 8, "maxLength": 100 }
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 100
+        }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "description": "Opaque version from the latest entity read. Reread on 412; missing precondition returns 428.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "responses": {
@@ -471,7 +4076,10 @@
         "description": "Successful organization-scoped response",
         "headers": {
           "x-correlation-id": {
-            "schema": { "type": "string", "format": "uuid" }
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         }
       },
@@ -479,7 +4087,9 @@
         "description": "Machine-readable, user-safe error response",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ApiError" }
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
           }
         }
       }
@@ -487,15 +4097,1009 @@
     "schemas": {
       "ApiError": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "object",
-            "required": ["code", "message", "correlationId"],
+            "required": [
+              "code",
+              "message",
+              "correlationId"
+            ],
             "properties": {
-              "code": { "type": "string" },
-              "message": { "type": "string" },
-              "correlationId": { "type": "string", "format": "uuid" }
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "correlationId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      },
+      "attachmentInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "contentType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 52428800
+          }
+        },
+        "required": [
+          "fileName",
+          "contentType",
+          "sizeBytes"
+        ]
+      },
+      "commentInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "Customer",
+              "Internal"
+            ]
+          },
+          "attachmentIds": {
+            "default": [],
+            "maxItems": 5,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        },
+        "required": [
+          "body",
+          "visibility"
+        ]
+      },
+      "draftInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 140
+          },
+          "problem": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "impact": {
+            "type": "string",
+            "enum": [
+              "Low",
+              "Medium",
+              "High",
+              "Critical"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "Private",
+              "Organization"
+            ]
+          },
+          "linkedIdeaId": {
+            "type": "string",
+            "pattern": "^IDEA-\\d+$"
+          },
+          "requestType": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "affectedUsers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "workaround": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "desiredTiming": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "externalLinkInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "format": "uri"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ]
+      },
+      "ideaInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "internalTitle": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "internalDescription": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "publishedTitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "publishedDescription": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "horizon": {
+            "type": "string",
+            "enum": [
+              "Now",
+              "Next",
+              "Later",
+              "Released"
+            ]
+          },
+          "internalStatus": {
+            "type": "string",
+            "enum": [
+              "Discovery",
+              "Candidate",
+              "Planned",
+              "In progress",
+              "Released",
+              "Not planned",
+              "Archived"
+            ]
+          },
+          "ownerId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "decisionRationale": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "decisionReason": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "deliveryReference": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "deliveryException": {
+            "type": "boolean"
+          },
+          "releaseNotes": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "availability": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "organizationInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "Customer",
+              "Partner",
+              "Internal"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Active",
+              "Onboarding",
+              "Inactive"
+            ]
+          },
+          "domain": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "users": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "requests": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "authentication": {
+            "minItems": 1,
+            "maxItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "OTP",
+                "Entra ID"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "status",
+          "domain",
+          "users",
+          "requests",
+          "authentication"
+        ]
+      },
+      "releaseInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "availability": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "documentationUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uri"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "rolloutNotes": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "ideaIds": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^IDEA-\\d+$"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "date",
+          "summary",
+          "availability",
+          "ideaIds"
+        ]
+      },
+      "requestEditSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "problem": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        }
+      },
+      "requestInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "problem": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "impact": {
+            "type": "string",
+            "enum": [
+              "Low",
+              "Medium",
+              "High",
+              "Critical"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "Private",
+              "Organization"
+            ]
+          },
+          "linkedIdeaId": {
+            "type": "string",
+            "pattern": "^IDEA-\\d+$"
+          },
+          "requestType": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "affectedUsers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "workaround": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "desiredTiming": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "title",
+          "problem",
+          "area",
+          "impact",
+          "visibility"
+        ]
+      },
+      "requestMutationSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "problem": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Submitted",
+              "Needs information",
+              "Linked",
+              "Routed to support",
+              "Closed",
+              "Withdrawn"
+            ]
+          },
+          "explanation": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "supportReference": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "roadmapInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "horizon": {
+            "type": "string",
+            "enum": [
+              "Now",
+              "Next",
+              "Later"
+            ]
+          },
+          "targetQuarter": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 50
+              },
+              {
+                "type": "number",
+                "const": 80
+              },
+              {
+                "type": "number",
+                "const": 100
+              }
+            ]
+          },
+          "publish": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "horizon"
+        ]
+      },
+      "savedViewInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "Private",
+              "Internal shared"
+            ]
+          },
+          "resourceType": {
+            "type": "string",
+            "enum": [
+              "Requests",
+              "Ideas",
+              "Roadmap"
+            ]
+          },
+          "query": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "resourceType",
+          "query"
+        ]
+      },
+      "scanVerdictSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "clean": {
+            "type": "boolean"
+          },
+          "etag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "etag"
+        ],
+        "additionalProperties": false
+      },
+      "scoreInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "impact": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "reach": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "strategicAlignment": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "commercialImpact": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "urgency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 50
+              },
+              {
+                "type": "number",
+                "const": 80
+              },
+              {
+                "type": "number",
+                "const": 100
+              }
+            ]
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 2
+              },
+              {
+                "type": "number",
+                "const": 3
+              },
+              {
+                "type": "number",
+                "const": 5
+              },
+              {
+                "type": "number",
+                "const": 8
+              },
+              {
+                "type": "number",
+                "const": 13
+              }
+            ]
+          },
+          "mandatory": {
+            "type": "boolean"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        },
+        "required": [
+          "impact",
+          "reach",
+          "strategicAlignment",
+          "commercialImpact",
+          "urgency",
+          "confidence",
+          "effort",
+          "rationale"
+        ]
+      },
+      "settingsInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "formulaVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "attachmentMaxMb": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "requestAttachmentMaxMb": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "retentionDays": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 36500
+          },
+          "defaultLocale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "is"
+            ]
+          },
+          "roadmapDisclaimer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "showDemoData": {
+            "type": "boolean"
+          },
+          "dcOnlyAccess": {
+            "default": true,
+            "type": "boolean"
+          },
+          "scoreWeights": {
+            "type": "object",
+            "properties": {
+              "impact": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "reach": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "strategy": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "commercial": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "urgency": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "impact",
+              "reach",
+              "strategy",
+              "commercial",
+              "urgency"
+            ]
+          }
+        },
+        "required": [
+          "formulaVersion",
+          "attachmentMaxMb",
+          "requestAttachmentMaxMb",
+          "retentionDays",
+          "defaultLocale",
+          "roadmapDisclaimer",
+          "showDemoData",
+          "scoreWeights"
+        ]
+      },
+      "taxonomyInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "Product area",
+              "Request type",
+              "Tag",
+              "Strategic theme",
+              "Reason category"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "value",
+          "active",
+          "sortOrder"
+        ]
+      },
+      "triageInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestIds": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^DCI-\\d+$"
+            }
+          },
+          "ownerId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "string",
+                "const": "me"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "tagIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "triageDueAt": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "requestIds"
+        ]
+      },
+      "userInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Active",
+              "Invited",
+              "Suspended"
+            ]
+          },
+          "authentication": {
+            "type": "string",
+            "enum": [
+              "OTP",
+              "Entra ID"
+            ]
+          },
+          "memberships": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "companyId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "Company admin",
+                    "Requester",
+                    "Viewer",
+                    "Product manager",
+                    "Internal contributor",
+                    "System admin"
+                  ]
+                }
+              },
+              "required": [
+                "companyId",
+                "role"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "status",
+          "authentication",
+          "memberships"
+        ]
+      },
+      "webhookInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "format": "uri"
+          },
+          "events": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          }
+        },
+        "required": [
+          "url",
+          "events"
+        ]
+      },
+      "ScanEvent": {
+        "type": "object",
+        "required": [
+          "eventType",
+          "data"
+        ],
+        "properties": {
+          "eventType": {
+            "const": "Microsoft.Security.MalwareScanningResult"
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "blobUri",
+              "eTag",
+              "scanResultType"
+            ],
+            "properties": {
+              "blobUri": {
+                "type": "string",
+                "format": "uri"
+              },
+              "eTag": {
+                "type": "string",
+                "maxLength": 126
+              },
+              "scanResultType": {
+                "enum": [
+                  "No threats found",
+                  "Malicious",
+                  "Error",
+                  "Not scanned"
+                ]
+              }
             }
           }
         }

@@ -1,0 +1,4 @@
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+ALTER TABLE dbo.Releases ADD row_version rowversion;
+COMMIT TRANSACTION;

@@ -1,3 +1,5 @@
+import { savedViewInputSchema } from "@/lib/contracts";
+import { readInput } from "@/lib/server/validation";
 import { getIdentity } from "@/lib/server/auth";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
@@ -9,7 +11,11 @@ import {
 export async function GET(request: Request) {
   const id = correlationId(request);
   try {
-    return json({ items: await listSavedViews(await getIdentity(request)) }, {}, id);
+    return json(
+      { items: await listSavedViews(await getIdentity(request)) },
+      {},
+      id,
+    );
   } catch (error) {
     return apiError(error, id);
   }
@@ -25,7 +31,10 @@ export async function POST(request: Request) {
       "saved-view.create",
       201,
       async () => ({
-        item: await createSavedView(identity, await request.json()),
+        item: await createSavedView(
+          identity,
+          await readInput(request, savedViewInputSchema),
+        ),
       }),
     );
     return json(result.body, { status: result.status }, id);

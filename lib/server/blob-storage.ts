@@ -51,12 +51,12 @@ export async function createUploadUrl(storageKey: string) {
   };
 }
 
-export async function downloadBlob(storageKey: string) {
+export async function downloadBlob(storageKey: string, etag: string) {
   const { service } = client();
   const response = await service
     .getContainerClient(containerName)
     .getBlobClient(storageKey)
-    .download();
+    .download(0, undefined, { conditions: { ifMatch: etag } });
   if (!response.readableStreamBody) throw new Error("NOT_FOUND");
   return response.readableStreamBody;
 }
@@ -72,6 +72,8 @@ export async function verifyUploadedBlob(
     .getProperties();
   if (properties.contentLength !== expectedBytes)
     throw new Error("INVALID_ATTACHMENT_SIZE");
+  if (!properties.etag) throw new Error("INVALID_ATTACHMENT_ETAG");
+  return properties.etag;
 }
 
 export async function deleteBlob(storageKey: string) {

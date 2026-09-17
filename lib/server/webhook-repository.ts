@@ -1,5 +1,6 @@
-import { promises as dns } from "node:dns";
-import { isIP } from "node:net";
+import { parseInput } from "./validation";
+import { webhookInputSchema } from "@/lib/contracts";
+import { resolvePublicUrl } from "./safe-outbound";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "./authorization";
 import { getSqlPool, isAzureSqlConfigured, sql } from "./database";
@@ -30,45 +31,17 @@ function subscriptions() {
   return globalThis.pulseMemoryWebhooks;
 }
 
-function privateAddress(address: string) {
-  if (address === "::1" || address.startsWith("fc") || address.startsWith("fd"))
-    return true;
-  if (address.includes(":")) return false;
-  const [first, second] = address.split(".").map(Number);
-  return (
-    first === 10 ||
-    first === 127 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168) ||
-    first === 0
-  );
-}
-
 export async function validateWebhookUrl(value: string) {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("INVALID_WEBHOOK_URL");
-  }
-  if (url.protocol !== "https:" || url.username || url.password)
-    throw new Error("INVALID_WEBHOOK_URL");
-  if (url.hostname === "localhost" || url.hostname.endsWith(".local"))
-    throw new Error("INVALID_WEBHOOK_URL");
-  const addresses = isIP(url.hostname)
-    ? [{ address: url.hostname }]
-    : await dns.lookup(url.hostname, { all: true }).catch(() => []);
-  if (!addresses.length || addresses.some((item) => privateAddress(item.address)))
-    throw new Error("INVALID_WEBHOOK_URL");
-  return url.toString();
+  return (await resolvePublicUrl(value)).url.toString();
 }
 
 function validateEvents(events: string[]) {
   const unique = [...new Set(events)];
   if (
     !unique.length ||
-    unique.some((event) => !(webhookEvents as readonly string[]).includes(event))
+    unique.some(
+      (event) => !(webhookEvents as readonly string[]).includes(event),
+    )
   )
     throw new Error("INVALID_WEBHOOK_EVENTS");
   return unique;
@@ -78,12 +51,15 @@ export async function listWebhookSubscriptions(identity: PulseIdentity) {
   await requireInternalRole(identity, ["System admin"]);
   if (!isAzureSqlConfigured()) return subscriptions();
   const pool = await getSqlPool();
-  const result = await pool.request().query(
-    "SELECT CAST(id AS nvarchar(36)) id,url,events_json events,active,created_at createdAt FROM dbo.WebhookSubscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC",
-  );
+  const result = await pool
+    .request()
+    .query(
+      "SELECT CAST(id AS nvarchar(36)) id,url,events_json events,active,created_at createdAt FROM dbo.WebhookSubscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC",
+    );
   return result.recordset.map((row) => ({
     ...row,
-    events: typeof row.events === "string" ? JSON.parse(row.events) : row.events,
+    events:
+      typeof row.events === "string" ? JSON.parse(row.events) : row.events,
     active: Boolean(row.active),
   }));
 }
@@ -92,6 +68,7 @@ export async function createWebhookSubscription(
   identity: PulseIdentity,
   input: { url: string; events: string[] },
 ) {
+  input = parseInput(webhookInputSchema, input);
   await requireInternalRole(identity, ["System admin"]);
   const url = await validateWebhookUrl(input.url);
   const events = validateEvents(input.events || []);
