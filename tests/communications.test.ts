@@ -2,7 +2,7 @@ import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { PulseIdentity } from "../lib/domain";
-import { resetCommunicationMemory } from "../lib/server/communications/memory";
+import { memoryContacts, resetCommunicationMemory } from "../lib/server/communications/memory";
 import {
   DEFAULT_COMMUNICATION_SETTINGS,
   getCommunicationSettings,
@@ -412,20 +412,36 @@ test("contacts: import creates rows with the chosen topics and reports duplicate
   assert.deepEqual(result.skipped, [{ line: 1, reason: "duplicate" }]);
 });
 
-test("contacts: editing keeps one row, preserves the source and audits the previous topics as 'before'", async () => {
+test("contacts: editing keeps one row, keeps who added it and audits the previous topics as 'before'", async () => {
   await seedOrganizations();
-  const created = await saveContact(PM, { id: "", organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
-  const edited = await saveContact(PM, { id: created.id, organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna Á", locale: "is", topics: ["product-updates", "product-updates", "service-notices"] });
+  const created = await saveCompanyContact(COMPANY_ADMIN, { email: "cio@origo.is", displayName: "CIO", locale: "en", topics: ["general"] });
+  assert.equal(created.source, "Company admin");
+  // A Product manager (whose own source would be "Admin") edits the Company admin's row.
+  const edited = await saveContact(PM, { id: created.id, organizationId: "ORG-001", email: "cio@origo.is", displayName: "CIO Á", locale: "is", topics: ["product-updates", "product-updates", "service-notices"] });
   assert.equal(edited.id, created.id);
-  assert.equal(edited.source, "Admin");
-  assert.equal(edited.createdAt, created.createdAt);
+  assert.equal(edited.source, "Company admin", "the source stays with whoever added the contact, not the editor");
   assert.deepEqual(edited.topics, ["product-updates", "service-notices"], "duplicate topics collapse");
-  assert.deepEqual((await listContacts(PM, "ORG-002")).map((c) => [c.displayName, c.locale]), [["Anna Á", "is"]]);
+  assert.deepEqual((await listContacts(PM, "ORG-001")).map((c) => [c.displayName, c.locale]), [["CIO Á", "is"]]);
   const audit = globalThis.pulseMemoryAudit?.[0];
   assert.equal(audit?.action, "communication.contact.saved");
   assert.deepEqual(audit?.before, { topics: ["general"] });
   assert.deepEqual((audit?.after as { topics: string[] }).topics, ["product-updates", "service-notices"]);
-  assert.ok(!JSON.stringify(globalThis.pulseMemoryAudit).includes("anna@advania.is"), "audit rows never carry e-mail addresses");
+  assert.ok(!JSON.stringify(globalThis.pulseMemoryAudit).includes("cio@origo.is"), "audit rows never carry e-mail addresses");
+});
+
+test("contacts: editing keeps the status and source a webhook set and the original creation time", async () => {
+  await seedOrganizations();
+  const id = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+  memoryContacts().push({
+    id, organizationId: "ORG-002", userId: null, email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"],
+    status: "Unsubscribed", source: "Webhook", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const edited = await saveContact(PM, { id, organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna Á", locale: "is", topics: ["product-updates"] });
+  assert.equal(edited.status, "Unsubscribed", "an edit never re-subscribes a contact");
+  assert.equal(edited.source, "Webhook");
+  assert.equal(edited.createdAt, "2026-01-01T00:00:00.000Z");
+  assert.ok(edited.updatedAt > "2026-01-01T00:00:00.000Z", "updatedAt moves forward");
+  assert.deepEqual((await listContacts(PM, "ORG-002")).map((c) => [c.displayName, c.status]), [["Anna Á", "Unsubscribed"]]);
 });
 
 test("contacts: input is validated and Company admins cannot name another organisation", async () => {
