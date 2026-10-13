@@ -446,6 +446,60 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
     },
+    "/api/v1/internal/communications/contacts": {
+      "get": {
+        "operationId": "listCommunicationContacts",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "saveCommunicationContact",
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/contacts/{contactId}": {
+      "patch": {
+        "operationId": "updateCommunicationContact",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "delete": {
+        "operationId": "removeCommunicationContact",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/suppressions": {
+      "get": {
+        "operationId": "listCommunicationSuppressions",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "addCommunicationSuppression",
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      },
+      "delete": {
+        "operationId": "removeCommunicationSuppression",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/communications/contacts": {
+      "get": {
+        "operationId": "listCompanyContacts",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "saveCompanyContact",
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/communications/contacts/{contactId}": {
+      "patch": {
+        "operationId": "updateCompanyContact",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "delete": {
+        "operationId": "removeCompanyContact",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
     "parameters": {
       "Id": {
         "name": "id",
