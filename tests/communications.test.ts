@@ -2,7 +2,7 @@ import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { PulseIdentity } from "../lib/domain";
-import { memoryContacts, resetCommunicationMemory } from "../lib/server/communications/memory";
+import { memoryCommunications, memoryContacts, memoryDeliveries, resetCommunicationMemory } from "../lib/server/communications/memory";
 import {
   DEFAULT_COMMUNICATION_SETTINGS,
   getCommunicationSettings,
@@ -30,7 +30,14 @@ import {
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
 import { loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
 import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
-import type { AudienceSpec, CommunicationTopic } from "../lib/server/communications/types";
+import type { AudienceSpec, CommunicationTopic, DeliveryRecord } from "../lib/server/communications/types";
+import {
+  createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication, listCommunications,
+  prefillFromRelease, previewCommunication, updateCommunication,
+} from "../lib/server/communications/campaign-repository";
+import { sql } from "../lib/server/database";
+import { createRelease, publishRelease } from "../lib/server/operations-repository";
+import { createIdea, listInternalIdeas } from "../lib/server/product-repository";
 import { setUserLocaleById } from "../lib/server/identity-repository";
 import {
   listNotificationPreferences, notificationEventTypes, saveNotificationPreference, type NotificationEventType,
@@ -971,4 +978,500 @@ test("audience: the SQL loader sends its queries one at a time, as a transaction
     delete process.env.AZURE_SQL_SERVER;
     globalThis.pulseSqlPool = undefined;
   }
+});
+
+// Module scope: the send, worker and webhook tests of later tasks reuse it.
+const draftInput = {
+  templateKey: "product-update" as const, topic: "product-updates" as const, title: "3.0.0 announcement",
+  content: productUpdate, audience: { organizations: "all-customers" as const, includeOnboarding: false, includeTestOrganizations: false, includeMembers: true, memberRoles: null, includeContacts: true, includeInternalCopy: false },
+};
+
+test("campaigns: create/list/get/update/duplicate/delete with publish-role gating and versions", async () => {
+  await assert.rejects(createCommunication(CONTRIBUTOR, draftInput), /FORBIDDEN/);
+  const created = await createCommunication(PM, draftInput);
+  assert.match(created.id, /^COM-\d{3}$/);
+  assert.equal(created.status, "Draft");
+  assert.equal(created.version, "1");
+  assert.equal((await listCommunications(CONTRIBUTOR)).length, 1);
+  const updated = await updateCommunication(PM, created.id, { ...draftInput, title: "Renamed" });
+  assert.equal(updated.title, "Renamed");
+  const copy = await duplicateCommunication(PM, created.id);
+  assert.notEqual(copy.id, created.id);
+  assert.equal(copy.status, "Draft");
+  assert.equal(copy.title, "Renamed (copy)");
+  await deleteCommunication(PM, copy.id);
+  await assert.rejects(getCommunication(PM, copy.id), /NOT_FOUND/);
+  assert.equal(globalThis.pulseMemoryAudit?.some((a) => a.action === "communication.created"), true);
+});
+
+test("campaigns: preview renders the stored content for the requested locale", async () => {
+  const created = await createCommunication(PM, draftInput);
+  const preview = await previewCommunication(CONTRIBUTOR, created.id, "is");
+  assert.equal(preview.subject, "DataCentral 3.0.0 (is)");
+  assert.match(preview.html, /Vöruuppfærsla/);
+});
+
+test("campaigns: pre-fill from a published release", async () => {
+  const idea = await createIdea(PM, { internalTitle: "Admin report", internalDescription: "Built-in admin report", area: "Administration" } as never);
+  const release = await createRelease(PM, { title: "DataCentral 3.0.0", date: "2026-10-01", summary: "Better visibility.", availability: "General availability", documentationUrl: "https://docs.datacentral.ai/3-0", ideaIds: [idea.id] });
+  await publishRelease(PM, release.id);
+  const prefill = await prefillFromRelease(PM, release.id);
+  assert.equal(prefill.templateKey, "product-update");
+  assert.equal(prefill.content.subject.en, "DataCentral 3.0.0");
+  const body = prefill.content.body.en as { title: string; intro: string; sections: Array<{ heading: string }>; cta?: { url: string } };
+  assert.equal(body.title, "DataCentral 3.0.0");
+  assert.equal(body.intro, "Better visibility.");
+  assert.equal(body.sections[0].heading, "Admin report");
+  assert.equal(body.cta?.url, "https://docs.datacentral.ai/3-0");
+  const created = await createCommunication(PM, { fromReleaseId: release.id });
+  assert.equal(created.releaseId, release.id);
+});
+
+/** A release with one idea per entry, the way the pre-fill finds them; `publish: false` leaves the ideas without release notes. */
+async function makeRelease(ideas: Array<{ title: string; description: string }>, { publish = true, documentationUrl }: { publish?: boolean; documentationUrl?: string } = {}) {
+  const ideaIds: string[] = [];
+  for (const idea of ideas)
+    ideaIds.push((await createIdea(PM, { internalTitle: idea.title, internalDescription: idea.description, area: "Administration" } as never)).id);
+  const release = await createRelease(PM, { title: "DataCentral 3.1.0", date: "2026-11-01", summary: "Summary.", availability: "General availability", ...(documentationUrl ? { documentationUrl } : {}), ideaIds });
+  if (publish) await publishRelease(PM, release.id);
+  return release;
+}
+
+test("campaigns: any internal role reads, only the publish roles write, and an unknown id is NOT_FOUND", async () => {
+  const created = await createCommunication(PM, draftInput);
+  assert.equal((await getCommunication(CONTRIBUTOR, created.id)).title, "3.0.0 announcement");
+  assert.equal((await previewCommunication(CONTRIBUTOR, created.id, "en")).subject, "DataCentral 3.0.0");
+  for (const customer of [COMPANY_ADMIN, REQUESTER]) {
+    await assert.rejects(listCommunications(customer), /FORBIDDEN/);
+    await assert.rejects(getCommunication(customer, created.id), /FORBIDDEN/);
+    await assert.rejects(previewCommunication(customer, created.id, "en"), /FORBIDDEN/);
+    await assert.rejects(createCommunication(customer, draftInput), /FORBIDDEN/);
+  }
+  await assert.rejects(updateCommunication(CONTRIBUTOR, created.id, { ...draftInput, title: "Hijacked" }), /FORBIDDEN/);
+  await assert.rejects(duplicateCommunication(CONTRIBUTOR, created.id), /FORBIDDEN/);
+  await assert.rejects(deleteCommunication(CONTRIBUTOR, created.id), /FORBIDDEN/);
+  await assert.rejects(createCommunication(CONTRIBUTOR, { fromReleaseId: "REL-404" }), /FORBIDDEN/, "the role is checked before the release is looked up");
+  await assert.rejects(updateCommunication(CONTRIBUTOR, "COM-404", draftInput), /FORBIDDEN/, "the role is checked before the campaign is looked up");
+  await assert.rejects(duplicateCommunication(CONTRIBUTOR, "COM-404"), /FORBIDDEN/, "the role is checked before the campaign is looked up");
+  await assert.rejects(deleteCommunication(CONTRIBUTOR, "COM-404"), /FORBIDDEN/, "the role is checked before the campaign is looked up");
+  assert.deepEqual((await listCommunications(ADMIN)).map((c) => c.title), ["3.0.0 announcement"], "the refused writes changed nothing");
+  assert.equal((await createCommunication(ADMIN, draftInput)).createdBy, "Bjarki", "a System admin writes too");
+  for (const id of ["COM-404", "REL-1", "", "COM-1; DROP TABLE dbo.Communications"]) {
+    await assert.rejects(getCommunication(PM, id), /NOT_FOUND/, id);
+    await assert.rejects(previewCommunication(PM, id, "en"), /NOT_FOUND/, id);
+    await assert.rejects(updateCommunication(PM, id, draftInput), /NOT_FOUND/, id);
+    await assert.rejects(duplicateCommunication(PM, id), /NOT_FOUND/, id);
+    await assert.rejects(deleteCommunication(PM, id), /NOT_FOUND/, id);
+  }
+});
+
+test("campaigns: only a Draft is editable, only a Draft or Cancelled campaign is deletable, and a copy is always a fresh Draft", async () => {
+  const created = await createCommunication(PM, draftInput);
+  const stored = memoryCommunications().find((c) => c.id === created.id)!;
+  for (const status of ["Scheduled", "Sending", "Sent", "Cancelled"] as const) {
+    stored.status = status;
+    await assert.rejects(updateCommunication(PM, created.id, { ...draftInput, title: "Late edit" }), /INVALID_COMMUNICATION_NOT_EDITABLE/, status);
+    assert.equal(stored.title, "3.0.0 announcement", `${status}: nothing was written`);
+  }
+  for (const status of ["Scheduled", "Sending", "Sent"] as const) {
+    stored.status = status;
+    await assert.rejects(deleteCommunication(PM, created.id), /INVALID_COMMUNICATION_NOT_DELETABLE/, status);
+    assert.equal(memoryCommunications().length, 1, `${status}: the campaign is still there`);
+  }
+  Object.assign(stored, { status: "Sent", recipientCount: 42, scheduledAt: "2026-10-14T09:00:00.000Z", startedAt: "2026-10-14T09:00:01.000Z", completedAt: "2026-10-14T09:05:00.000Z", cancelledAt: "2026-10-14T09:06:00.000Z" });
+  const copy = await duplicateCommunication(PM, created.id);
+  assert.deepEqual(
+    [copy.status, copy.recipientCount, copy.scheduledAt, copy.startedAt, copy.completedAt, copy.cancelledAt],
+    ["Draft", 0, undefined, undefined, undefined, undefined], "a copy carries none of the sending history",
+  );
+  assert.deepEqual([copy.templateKey, copy.topic, copy.content, copy.audience], [stored.templateKey, stored.topic, stored.content, stored.audience], "but all of the content");
+  stored.status = "Cancelled";
+  await deleteCommunication(PM, created.id);
+  await deleteCommunication(PM, copy.id);
+  assert.deepEqual(memoryCommunications(), []);
+});
+
+test("campaigns: an edit replaces template, topic, content and audience, keeps the id, creator and release link, and invalid input changes nothing", async () => {
+  const release = await makeRelease([{ title: "Admin report", description: "Built-in admin report." }]);
+  const created = await createCommunication(PM, { fromReleaseId: release.id });
+  const edited = await updateCommunication(ADMIN, created.id, {
+    templateKey: "plain", topic: "general", title: "Plain note",
+    content: { subject: { en: "Hello" }, body: { en: { title: "Hi", paragraphs: ["One"] } } },
+    audience: { ...draftInput.audience, organizations: ["ORG-001"], includeContacts: false },
+  });
+  assert.deepEqual([edited.templateKey, edited.topic, edited.title, edited.content.subject.en], ["plain", "general", "Plain note", "Hello"]);
+  assert.deepEqual([edited.audience.organizations, edited.audience.includeContacts], [["ORG-001"], false]);
+  assert.deepEqual([edited.id, edited.status, edited.createdBy, edited.createdAt, edited.releaseId], [created.id, "Draft", "Product Manager", created.createdAt, release.id]);
+  assert.ok(edited.updatedAt >= created.updatedAt);
+  await assert.rejects(updateCommunication(PM, created.id, { ...draftInput, title: "" }), /INVALID_INPUT/);
+  await assert.rejects(updateCommunication(PM, created.id, { ...draftInput, content: { subject: { en: "s" }, body: { en: { title: "no sections or intro" } } } }), /INVALID_INPUT/);
+  await assert.rejects(updateCommunication(PM, created.id, { ...draftInput, audience: undefined } as never), /INVALID_INPUT/);
+  const kept = await getCommunication(PM, created.id);
+  assert.deepEqual([kept.templateKey, kept.title, kept.content.subject.en, kept.audience.organizations], ["plain", "Plain note", "Hello", ["ORG-001"]], "the draft is as the last good edit left it");
+});
+
+test("campaigns: every change is audited, without the subject, the body or the links", async () => {
+  const created = await createCommunication(PM, draftInput);
+  await updateCommunication(PM, created.id, { ...draftInput, title: "Renamed" });
+  const copy = await duplicateCommunication(PM, created.id);
+  await deleteCommunication(PM, copy.id);
+  const audit = [...(globalThis.pulseMemoryAudit ?? [])].reverse().filter((a) => a.entityType === "Communication");
+  assert.deepEqual(audit.map((a) => [a.action, a.entityId, a.actor]), [
+    ["communication.created", created.id, "Product Manager"],
+    ["communication.updated", created.id, "Product Manager"],
+    ["communication.created", copy.id, "Product Manager"],
+    ["communication.duplicated", copy.id, "Product Manager"],
+    ["communication.deleted", copy.id, "Product Manager"],
+  ]);
+  assert.deepEqual(audit[1].before, { title: "3.0.0 announcement" });
+  assert.deepEqual(audit[1].after, { title: "Renamed" });
+  assert.deepEqual(audit[3].after, { from: created.id });
+  const text = JSON.stringify(audit);
+  for (const copyText of ["DataCentral 3.0.0 is now available", "New built-in Admin Report", "Explore DataCentral", "docs.datacentral.ai"])
+    assert.ok(!text.includes(copyText), `the audit trail must not carry: ${copyText}`);
+});
+
+test("campaigns: deleting a campaign also drops its deliveries from memory, and nobody else's", async () => {
+  const first = await createCommunication(PM, draftInput);
+  const second = await createCommunication(PM, draftInput);
+  const delivery = (communicationId: string, email: string): DeliveryRecord => ({
+    id: crypto.randomUUID(), communicationId, organizationId: null, email, displayName: null, locale: "en", source: "Test", state: "Queued", attemptCount: 0, createdAt: new Date().toISOString(),
+  });
+  memoryDeliveries().push(delivery(first.id, "a@datacentral.ai"), delivery(second.id, "b@datacentral.ai"), delivery(first.id, "c@datacentral.ai"));
+  await deleteCommunication(PM, first.id);
+  assert.deepEqual(memoryDeliveries().map((d) => d.email), ["b@datacentral.ai"]);
+});
+
+test("campaigns: the list is newest first and leaves out deleted campaigns; reads hand out copies, never the store", async () => {
+  const first = await createCommunication(PM, { ...draftInput, title: "First" });
+  const second = await createCommunication(PM, { ...draftInput, title: "Second" });
+  const third = await createCommunication(PM, { ...draftInput, title: "Third" });
+  await deleteCommunication(PM, second.id);
+  const list = await listCommunications(CONTRIBUTOR);
+  assert.deepEqual(list.map((c) => [c.id, c.title]), [[third.id, "Third"], [first.id, "First"]]);
+  list[0].title = "Tampered";
+  list[0].content.subject.en = "Tampered";
+  const item = await getCommunication(CONTRIBUTOR, third.id);
+  item.audience.includeMembers = false;
+  assert.deepEqual([(await getCommunication(PM, third.id)).title, (await getCommunication(PM, third.id)).content.subject.en, (await getCommunication(PM, third.id)).audience.includeMembers], ["Third", "DataCentral 3.0.0", true]);
+  assert.equal((await getCommunication(PM, third.id)).stats.recipients, 0, "a campaign nobody was sent has empty stats");
+  assert.deepEqual((await getCommunication(PM, third.id)).stats.byOrganization, []);
+});
+
+test("campaigns: the preview takes sign-off and footer from the settings for its locale, the logo from the public URL and the unsubscribe tag from the unsubscribe group", async () => {
+  const created = await createCommunication(PM, draftInput);
+  const original = process.env.PULSE_PUBLIC_URL;
+  delete process.env.PULSE_PUBLIC_URL;
+  try {
+    const en = await previewCommunication(PM, created.id, "en");
+    const is = await previewCommunication(PM, created.id, "is");
+    assert.match(en.html, /Best,<br><strong>The DataCentral Team<\/strong>/);
+    assert.match(is.html, /Kær kveðja,<br><strong>DataCentral teymið<\/strong>/);
+    assert.match(en.html, /DataCentral ehf\. · Reykjavík, Iceland/);
+    assert.match(is.html, /DataCentral ehf\. · Reykjavík &middot;/);
+    assert.match(en.html, /src="http:\/\/localhost:3000\/email\/datacentral-logo\.png"/, "the public URL defaults to the local server");
+    assert.ok(!en.html.includes("asm_group_unsubscribe") && !en.text.includes("asm_group_unsubscribe"), "no unsubscribe group, no unsubscribe tag");
+
+    process.env.PULSE_PUBLIC_URL = "https://pulse.example.com//";
+    await saveCommunicationSettings(ADMIN, {
+      ...DEFAULT_COMMUNICATION_SETTINGS, unsubscribeGroupId: 42,
+      boilerplate: { ...DEFAULT_COMMUNICATION_SETTINGS.boilerplate, en: { ...DEFAULT_COMMUNICATION_SETTINGS.boilerplate.en, signOff: "Cheers,\nThe Pulse crew", supportEmail: "help@datacentral.ai" } },
+    });
+    const configured = await previewCommunication(PM, created.id, "en");
+    assert.match(configured.html, /src="https:\/\/pulse\.example\.com\/email\/datacentral-logo\.png"/, "trailing slashes of the public URL are dropped");
+    assert.match(configured.html, /<%asm_group_unsubscribe_raw_url%>/);
+    assert.match(configured.text, /<%asm_group_unsubscribe_raw_url%>/);
+    assert.match(configured.html, /Cheers,<br><strong>The Pulse crew<\/strong>/);
+    assert.match(configured.html, /help@datacentral\.ai/);
+    assert.match((await previewCommunication(PM, created.id, "is")).html, /support@datacentral\.ai/, "the other locale keeps its own boilerplate");
+  } finally {
+    if (original === undefined) delete process.env.PULSE_PUBLIC_URL; else process.env.PULSE_PUBLIC_URL = original;
+  }
+});
+
+test("campaigns: pre-fill uses the published wording, then the internal text, and the release notes once the release is published", async () => {
+  // Not published yet, so the ideas have no release notes: the second idea's published wording and the first one's internal text are what is left.
+  const release = await makeRelease([{ title: "Admin report", description: "Built-in admin report." }, { title: "Local time", description: "Internal wording." }], { publish: false });
+  const second = (await listInternalIdeas(PM)).find((i) => i.id === release.ideaIds[1])!;
+  Object.assign(second, { publishedTitle: "Times in your time zone", publishedDescription: "Dates and times now follow your local time." });
+  type Prefilled = { subtitle: string; sections: Array<{ heading: string; body: string }>; cta?: unknown };
+  const draft = (await prefillFromRelease(PM, release.id)).content.body.en as Prefilled;
+  assert.deepEqual(draft.sections, [
+    { heading: "Admin report", body: "Built-in admin report." },
+    { heading: "Times in your time zone", body: "Dates and times now follow your local time." },
+  ]);
+  assert.equal(draft.subtitle, "General availability");
+  assert.equal("cta" in draft, false, "no documentation URL, no call to action");
+  await publishRelease(PM, release.id);
+  const published = (await prefillFromRelease(PM, release.id)).content.body.en as Prefilled;
+  assert.deepEqual(published.sections.map((s) => [s.heading, s.body]), [["Admin report", "Summary."], ["Times in your time zone", "Summary."]], "the release notes beat every other wording");
+});
+
+test("campaigns: pre-fill gives a release whose ideas are gone one section of its own, and an unknown release is NOT_FOUND", async () => {
+  const release = await createRelease(PM, { title: "DataCentral 3.2.0", date: "2026-12-01", summary: "A short release.", availability: "Preview", documentationUrl: "https://docs.datacentral.ai/3-2", ideaIds: ["IDEA-9999"] });
+  const prefill = await prefillFromRelease(PM, release.id);
+  const body = prefill.content.body.en as { sections: unknown; cta: unknown };
+  assert.deepEqual(body.sections, [{ heading: "DataCentral 3.2.0", body: "A short release." }]);
+  assert.deepEqual(body.cta, { label: "Open the release notes", url: "https://docs.datacentral.ai/3-2" });
+  assert.deepEqual(prefill.content.subject, { en: "DataCentral 3.2.0" });
+  await assert.rejects(prefillFromRelease(PM, "REL-404"), /NOT_FOUND/);
+  await assert.rejects(createCommunication(PM, { fromReleaseId: "REL-404" }), /NOT_FOUND/);
+});
+
+test("campaigns: creating from a release records the link, and what the caller sends wins over the pre-fill", async () => {
+  const release = await makeRelease([{ title: "Admin report", description: "Built-in admin report." }]);
+  const plain = await createCommunication(PM, { fromReleaseId: release.id });
+  assert.deepEqual([plain.templateKey, plain.topic, plain.title, plain.content.subject.en, plain.releaseId], ["product-update", "product-updates", "DataCentral 3.1.0", "DataCentral 3.1.0", release.id]);
+  assert.deepEqual(plain.audience, draftInput.audience, "the audience defaults to every customer with the schema defaults");
+  const titled = await createCommunication(PM, { fromReleaseId: release.id, title: "Our own title", audience: { ...draftInput.audience, organizations: ["ORG-001"] } });
+  assert.deepEqual([titled.title, titled.content.subject.en, titled.audience.organizations, titled.releaseId], ["Our own title", "DataCentral 3.1.0", ["ORG-001"], release.id]);
+  const worded = await createCommunication(PM, { fromReleaseId: release.id, content: productUpdate });
+  assert.deepEqual([worded.title, worded.content.subject.en, worded.releaseId], ["DataCentral 3.1.0", "DataCentral 3.0.0", release.id]);
+  const unworded = await createCommunication(PM, { fromReleaseId: release.id, content: undefined });
+  assert.deepEqual([unworded.content.subject.en, unworded.releaseId], ["DataCentral 3.1.0", release.id], "a content that is left out (undefined) leaves the pre-fill alone");
+  await assert.rejects(createCommunication(PM, {}), /INVALID_INPUT/, "without a release the input has to be complete");
+  assert.equal((await listCommunications(PM)).length, 4, "the failed create left nothing behind");
+});
+
+test("campaigns: a create or an edit takes the draft fields only, never an id, status or sending history from the client", async () => {
+  const extras = { id: "COM-777", status: "Sent", recipientCount: 99, createdBy: "Someone else", scheduledAt: "2026-10-14T09:00:00.000Z", startedAt: "2026-10-14T09:00:01.000Z", releaseId: "REL-9" };
+  const created = await createCommunication(PM, { ...draftInput, ...extras } as never);
+  assert.deepEqual([created.id, created.status, created.recipientCount, created.createdBy, created.scheduledAt, created.startedAt, created.releaseId], ["COM-001", "Draft", 0, "Product Manager", undefined, undefined, undefined]);
+  const edited = await updateCommunication(PM, created.id, { ...draftInput, title: "Renamed", ...extras } as never);
+  assert.deepEqual([edited.id, edited.title, edited.status, edited.recipientCount, edited.createdBy, edited.scheduledAt, edited.startedAt, edited.releaseId], ["COM-001", "Renamed", "Draft", 0, "Product Manager", undefined, undefined, undefined]);
+  assert.deepEqual((await listCommunications(PM)).map((c) => c.id), ["COM-001"]);
+});
+
+test("campaigns: a copy of a campaign whose title is at the limit still fits it, and never ends in half an emoji", async () => {
+  const created = await createCommunication(PM, { ...draftInput, title: "T".repeat(200) });
+  const copy = await duplicateCommunication(PM, created.id);
+  assert.equal(copy.title, `${"T".repeat(193)} (copy)`);
+  assert.equal(copy.title.length, 200);
+  const emoji = await createCommunication(PM, { ...draftInput, title: `${"T".repeat(192)}\u{1F600}\u{1F600}` }); // the cut falls inside the first emoji
+  assert.equal((await duplicateCommunication(PM, emoji.id)).title, `${"T".repeat(192)} (copy)`);
+});
+
+type SqlCall = { text: string; inputs: Record<string, unknown>; inTransaction: boolean };
+type SqlAnswer = { recordset?: Array<Record<string, unknown>>; rowsAffected?: number[] };
+type SqlAnswers = Array<[RegExp, SqlAnswer | ((inputs: Record<string, unknown>) => SqlAnswer)]>;
+/**
+ * Runs `work` against a stand-in for Azure SQL: the repository's real SQL branch executes, `atomicSql` included, because
+ * `sql.Transaction` and `sql.Request` are swapped for recorders. A statement is answered by the first matching entry of
+ * `answers`; the account and membership checks are answered as an active Product manager. Like SQL Server, a statement
+ * that names a parameter nobody bound fails. `events` is the transaction's life: begin, then commit or rollback.
+ */
+async function withFakeSql<T>(answers: SqlAnswers, work: (calls: SqlCall[], events: string[]) => Promise<T>): Promise<T> {
+  const calls: SqlCall[] = [];
+  const events: string[] = [];
+  const known: SqlAnswers = [
+    ...answers,
+    [/FROM dbo\.Users WHERE id=@id/, { recordset: [{ status: "Active", authMethod: "OTP", tokensValidAfter: null }] }],
+    [/FROM dbo\.Memberships m JOIN dbo\.Organizations o/, { recordset: [{ role: "Product manager", allowedAuth: '["OTP","Entra ID"]' }] }],
+  ];
+  class FakeRequest {
+    private inputs: Record<string, unknown> = {};
+    constructor(private readonly transaction?: unknown) {} // set when the request was made for a transaction, as `getSqlPool()` does inside `atomicSql`
+    input(name: string, ...typeAndValue: unknown[]) { this.inputs[name] = typeAndValue[typeAndValue.length - 1]; return this; }
+    async query(text: string) {
+      for (const [, name] of text.matchAll(/(?<!@)@(\w+)/g)) if (!(name in this.inputs)) throw new Error(`Must declare the scalar variable "@${name}".`);
+      calls.push({ text, inputs: this.inputs, inTransaction: Boolean(this.transaction) });
+      const entry = known.find(([pattern]) => pattern.test(text))?.[1] ?? {};
+      const answer = typeof entry === "function" ? entry(this.inputs) : entry;
+      return { recordset: answer.recordset ?? [], rowsAffected: answer.rowsAffected ?? [answer.recordset?.length ?? 0] };
+    }
+  }
+  class FakeTransaction {
+    async begin() { events.push("begin"); }
+    async commit() { events.push("commit"); }
+    async rollback() { events.push("rollback"); }
+  }
+  const real = { Request: sql.Request, Transaction: sql.Transaction };
+  Object.assign(sql, { Request: FakeRequest, Transaction: FakeTransaction });
+  process.env.AZURE_SQL_SERVER = "fake-sql-server";
+  globalThis.pulseSqlPool = Promise.resolve({ request: () => new FakeRequest() } as unknown as import("mssql").ConnectionPool);
+  try {
+    return await work(calls, events);
+  } finally {
+    Object.assign(sql, real);
+    delete process.env.AZURE_SQL_SERVER;
+    globalThis.pulseSqlPool = undefined;
+  }
+}
+const SQL_UUID = "AAAAAAAA-0000-4000-8000-0000000000C1";
+const sqlRow = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, templateKey: "product-update", topic: "product-updates", title: "3.0.0 announcement", contentJson: JSON.stringify(productUpdate), audienceJson: JSON.stringify(draftInput.audience),
+  status: "Draft", scheduledAt: null, startedAt: null, completedAt: null, cancelledAt: null, recipientCount: 0, releaseId: null,
+  createdBy: "Product Manager", createdAt: "2026-10-13T09:00:00.0000000", updatedAt: "2026-10-13T09:30:00.0000000", ...extra,
+});
+/** What the database answers for a campaign that exists: its row (found by `@id`), its uuid and its row version. */
+const sqlCampaign = (id: string, extra: Record<string, unknown> = {}): SqlAnswers => [
+  [/OPENJSON/, (inputs) => ({ recordset: (JSON.parse(String(inputs.ids)) as string[]).map((value) => ({ id: value, version: `0x${value.replace(/\D/g, "").padStart(16, "0")}` })) })],
+  [/SELECT CAST\(id AS nvarchar\(36\)\) id FROM dbo\.Communications/, (inputs) => ({ recordset: inputs.id === id ? [{ id: SQL_UUID }] : [] })],
+  [/FROM dbo\.Communications c JOIN dbo\.Users u[\s\S]*WHERE c\.public_id=@id/, (inputs) => ({ recordset: inputs.id === id ? [sqlRow(id, extra)] : [] })],
+];
+const sqlWrites = (calls: SqlCall[]) => calls.filter((c) => /^\s*(UPDATE|INSERT)/.test(c.text));
+
+test("campaigns, SQL: reads map the rows and attach row versions, and an id that cannot exist never reaches the database", async () => {
+  const answers: SqlAnswers = [
+    [/ORDER BY c\.created_at DESC/, { recordset: [sqlRow("COM-008", { title: "Newer" }), sqlRow("COM-007", { status: "Scheduled", scheduledAt: "2026-10-14T09:00:00.0000000", releaseId: "REL-3" })] }],
+    ...sqlCampaign("COM-007"),
+  ];
+  await withFakeSql(answers, async (calls) => {
+    const list = await listCommunications(CONTRIBUTOR);
+    assert.deepEqual(list.map((c) => [c.id, c.title, c.status, c.version, c.scheduledAt, c.releaseId]), [
+      ["COM-008", "Newer", "Draft", "0x0000000000000008", undefined, undefined],
+      ["COM-007", "3.0.0 announcement", "Scheduled", "0x0000000000000007", "2026-10-14T09:00:00.0000000", "REL-3"],
+    ]);
+    assert.deepEqual(list[0].content, productUpdate, "the JSON columns come back as objects");
+    assert.deepEqual(list[0].audience, draftInput.audience);
+    assert.match(calls.find((c) => /ORDER BY/.test(c.text))!.text, /WHERE c\.deleted_at IS NULL ORDER BY c\.created_at DESC/);
+
+    const item = await getCommunication(CONTRIBUTOR, "COM-007");
+    assert.deepEqual([item.id, item.createdBy, item.createdAt, item.updatedAt, item.recipientCount, item.version], ["COM-007", "Product Manager", "2026-10-13T09:00:00.0000000", "2026-10-13T09:30:00.0000000", 0, "0x0000000000000007"]);
+    assert.match(calls.find((c) => /WHERE c\.public_id=@id/.test(c.text))!.text, /WHERE c\.public_id=@id AND c\.deleted_at IS NULL$/, "a deleted campaign is gone");
+    assert.equal((await previewCommunication(CONTRIBUTOR, "COM-007", "is")).subject, "DataCentral 3.0.0 (is)");
+    await assert.rejects(getCommunication(CONTRIBUTOR, "COM-404"), /NOT_FOUND/, "a well-formed id that is not there");
+
+    const seen = calls.length;
+    for (const id of ["", "COM-", "com-7", "REL-7", "COM-7; DROP TABLE dbo.Communications", `COM-${"9".repeat(40)}`]) {
+      await assert.rejects(getCommunication(CONTRIBUTOR, id), /NOT_FOUND/, id);
+      await assert.rejects(previewCommunication(CONTRIBUTOR, id, "en"), /NOT_FOUND/, id);
+      await assert.rejects(findCommunicationUuid(id), /NOT_FOUND/, id);
+    }
+    assert.deepEqual(calls.slice(seen).filter((c) => /dbo\.Communications/.test(c.text)), [], "no statement about campaigns was sent");
+    assert.equal(await findCommunicationUuid("COM-007"), SQL_UUID);
+    assert.match(calls.at(-1)!.text, /FROM dbo\.Communications WHERE public_id=@id AND deleted_at IS NULL$/, "the uuid of a deleted campaign is not handed out");
+  });
+});
+
+test("campaigns, SQL: a create is one insert with a sequence number and its audit row in one transaction", async () => {
+  await withFakeSql([[/^\s*INSERT dbo\.Communications\(/, { recordset: [{ publicId: "COM-008" }], rowsAffected: [1] }], ...sqlCampaign("COM-008")], async (calls, events) => {
+    const created = await createCommunication(PM, draftInput);
+    assert.deepEqual([created.id, created.version, created.status], ["COM-008", "0x0000000000000008", "Draft"]);
+    const [insert, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.match(insert.text, /CONCAT\('COM-',FORMAT\(NEXT VALUE FOR dbo\.CommunicationNumber,'000'\)\)/);
+    assert.match(insert.text, /OUTPUT INSERTED\.public_id publicId/);
+    assert.deepEqual([insert.inputs.template, insert.inputs.topic, insert.inputs.title, insert.inputs.release, insert.inputs.actor], ["product-update", "product-updates", "3.0.0 announcement", null, PM.id]);
+    assert.deepEqual(JSON.parse(String(insert.inputs.content)), productUpdate);
+    assert.deepEqual(JSON.parse(String(insert.inputs.audience)), draftInput.audience);
+    assert.deepEqual([audit.inputs.action, audit.inputs.actor, audit.inputs.entity, audit.inputs.before], ["communication.created", PM.id, insert.inputs.id, null]);
+    assert.deepEqual(JSON.parse(String(audit.inputs.after)), { publicId: "COM-008", templateKey: "product-update", topic: "product-updates" });
+    assert.match(audit.text, /^INSERT dbo\.AuditEvents\(id,actor_user_id,action,entity_type,entity_id,before_json,after_json,correlation_id\) VALUES\(@auditId,@actor,@action,'Communication',@entity,@before,@after,@correlation\)$/);
+    assert.ok(sqlWrites(calls).every((c) => c.inTransaction), "both writes ran inside the transaction");
+    assert.deepEqual(events, ["begin", "commit"]);
+  });
+  await withFakeSql([], async (calls, events) => {
+    await assert.rejects(createCommunication(PM, { ...draftInput, title: "" }), /INVALID_INPUT/);
+    assert.deepEqual([sqlWrites(calls).length, events], [0, []], "invalid input opens no transaction and writes nothing");
+  });
+});
+
+test("campaigns, SQL: creating from a release pre-fills from the release and ideas read through SQL, and records the release", async () => {
+  const release = { id: "REL-3", title: "DataCentral 3.0.0", date: "2026-10-01", summary: "Better visibility.", availability: "General availability", documentationUrl: "https://docs.datacentral.ai/3-0", rolloutNotes: null, published: true, ideaId: "IDEA-5" };
+  const idea = {
+    id: "IDEA-5", title: "Admin report", description: "Built-in admin report", internalTitle: "Admin report (internal)", internalDescription: "Built-in admin report", publishedTitle: "Admin report", publishedDescription: null,
+    area: "Administration", status: "Released", internalStatus: "Released", horizon: "Released", publishState: "Published", releaseNotes: "Better visibility.", updatedAt: "2026-10-01T00:00:00.000Z",
+  };
+  const answers: SqlAnswers = [
+    [/^\s*INSERT dbo\.Communications\(/, { recordset: [{ publicId: "COM-008" }], rowsAffected: [1] }],
+    [/FROM dbo\.Releases r LEFT JOIN/, { recordset: [release] }],
+    [/FROM dbo\.Ideas i LEFT JOIN/, { recordset: [idea] }],
+    ...sqlCampaign("COM-008", { releaseId: "REL-3" }),
+  ];
+  await withFakeSql(answers, async (calls) => {
+    const created = await createCommunication(PM, { fromReleaseId: "REL-3" });
+    assert.equal(created.releaseId, "REL-3");
+    const [insert, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.deepEqual([insert.inputs.release, insert.inputs.title, insert.inputs.template, insert.inputs.topic], ["REL-3", "DataCentral 3.0.0", "product-update", "product-updates"]);
+    const content = JSON.parse(String(insert.inputs.content));
+    assert.equal(content.subject.en, "DataCentral 3.0.0");
+    assert.deepEqual(content.body.en.sections, [{ heading: "Admin report", body: "Better visibility." }]);
+    assert.equal(content.body.en.cta.url, "https://docs.datacentral.ai/3-0");
+    assert.equal(JSON.parse(String(audit.inputs.after)).releaseId, "REL-3");
+    await assert.rejects(createCommunication(PM, { fromReleaseId: "REL-404" }), /NOT_FOUND/);
+    assert.equal(sqlWrites(calls).length, 2, "an unknown release writes nothing");
+  });
+});
+
+test("campaigns, SQL: an edit is one guarded UPDATE with its audit row in one transaction, and a draft that stopped being one is not written", async () => {
+  const update: SqlAnswers = [[/^\s*UPDATE dbo\.Communications/, { rowsAffected: [1] }], ...sqlCampaign("COM-007")];
+  await withFakeSql(update, async (calls, events) => {
+    const saved = await updateCommunication(PM, "COM-007", { ...draftInput, title: "Renamed" });
+    assert.deepEqual([saved.id, saved.version], ["COM-007", "0x0000000000000007"]);
+    const [write, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.match(write.text, /SET template_key=@template,topic=@topic,title=@title,content_json=@content,audience_json=@audience,\s+updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\) WHERE public_id=@id AND status='Draft' AND deleted_at IS NULL$/);
+    assert.deepEqual([write.inputs.id, write.inputs.template, write.inputs.topic, write.inputs.title, write.inputs.actor], ["COM-007", "product-update", "product-updates", "Renamed", PM.id]);
+    assert.deepEqual(JSON.parse(String(write.inputs.content)), productUpdate);
+    assert.deepEqual(JSON.parse(String(write.inputs.audience)), draftInput.audience);
+    assert.deepEqual([audit.inputs.action, audit.inputs.entity], ["communication.updated", SQL_UUID]);
+    assert.deepEqual(JSON.parse(String(audit.inputs.before)), { title: "3.0.0 announcement" });
+    assert.deepEqual(JSON.parse(String(audit.inputs.after)), { title: "Renamed" });
+    assert.ok(sqlWrites(calls).every((c) => c.inTransaction), "both writes ran inside the transaction");
+    assert.deepEqual(events, ["begin", "commit"]);
+  });
+  await withFakeSql([[/^\s*UPDATE dbo\.Communications/, { rowsAffected: [0] }], ...sqlCampaign("COM-007")], async (calls, events) => {
+    await assert.rejects(updateCommunication(PM, "COM-007", draftInput), /NOT_FOUND/, "the UPDATE matched no Draft row");
+    assert.deepEqual(events, ["begin", "rollback"]);
+    assert.equal(sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).length, 0, "no audit row for a write that did not happen");
+  });
+  await withFakeSql(sqlCampaign("COM-007", { status: "Sent" }), async (calls, events) => {
+    await assert.rejects(updateCommunication(PM, "COM-007", draftInput), /INVALID_COMMUNICATION_NOT_EDITABLE/);
+    assert.deepEqual([sqlWrites(calls).length, events], [0, []], "a sent campaign is refused before anything is written");
+  });
+  await withFakeSql(sqlCampaign("COM-007"), async (calls) => {
+    await assert.rejects(updateCommunication(PM, "COM-404", draftInput), /NOT_FOUND/);
+    assert.equal(sqlWrites(calls).length, 0);
+  });
+});
+
+test("campaigns, SQL: a duplicate commits the copy and both of its audit rows together", async () => {
+  const answers: SqlAnswers = [ // the first matching entry answers, so the two campaigns' rows and uuids come before the generic ones
+    [/^\s*INSERT dbo\.Communications\(/, { recordset: [{ publicId: "COM-009" }], rowsAffected: [1] }],
+    [/SELECT CAST\(id AS nvarchar\(36\)\) id FROM dbo\.Communications/, (inputs) => ({ recordset: [{ id: inputs.id === "COM-009" ? "BBBBBBBB-0000-4000-8000-0000000000C2" : SQL_UUID }] })],
+    [/FROM dbo\.Communications c JOIN dbo\.Users u[\s\S]*WHERE c\.public_id=@id/, (inputs) => ({ recordset: [sqlRow(String(inputs.id), inputs.id === "COM-009" ? {} : { status: "Sent" })] })],
+    ...sqlCampaign("COM-007"),
+  ];
+  await withFakeSql(answers, async (calls, events) => {
+    const copy = await duplicateCommunication(PM, "COM-007");
+    assert.deepEqual([copy.id, copy.status, copy.version], ["COM-009", "Draft", "0x0000000000000009"]);
+    const [insert, created, duplicated, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.deepEqual([insert.inputs.title, insert.inputs.release, insert.inputs.actor], ["3.0.0 announcement (copy)", null, PM.id]);
+    assert.deepEqual(JSON.parse(String(insert.inputs.content)), productUpdate, "the copy has the content of the source");
+    assert.deepEqual([created.inputs.action, created.inputs.entity], ["communication.created", insert.inputs.id]);
+    assert.deepEqual([duplicated.inputs.action, duplicated.inputs.entity, duplicated.inputs.actor], ["communication.duplicated", "BBBBBBBB-0000-4000-8000-0000000000C2", PM.id]);
+    assert.deepEqual(JSON.parse(String(duplicated.inputs.after)), { from: "COM-007" });
+    assert.ok(sqlWrites(calls).every((c) => c.inTransaction), "all three writes ran inside the transaction");
+    assert.deepEqual(events, ["begin", "commit"], "one transaction for the copy and its audit rows");
+  });
+});
+
+test("campaigns, SQL: a delete is one guarded soft-delete with its audit row, and only a Draft or Cancelled campaign is touched", async () => {
+  const softDelete: SqlAnswers = [[/^\s*UPDATE dbo\.Communications/, { rowsAffected: [1] }]];
+  for (const status of ["Draft", "Cancelled"]) {
+    await withFakeSql([...softDelete, ...sqlCampaign("COM-007", { status })], async (calls, events) => {
+      assert.equal(await deleteCommunication(PM, "COM-007"), undefined);
+      const [write, audit, ...more] = sqlWrites(calls);
+      assert.equal(more.length, 0, status);
+      assert.match(write.text, /SET deleted_at=SYSUTCDATETIME\(\),updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\) WHERE public_id=@id AND status IN \('Draft','Cancelled'\) AND deleted_at IS NULL/);
+      assert.deepEqual([write.inputs.id, write.inputs.actor], ["COM-007", PM.id], status);
+      assert.deepEqual([audit.inputs.action, audit.inputs.entity, audit.inputs.before, audit.inputs.after], ["communication.deleted", SQL_UUID, null, "{}"], status);
+      assert.ok(sqlWrites(calls).every((c) => c.inTransaction), `${status}: both writes ran inside the transaction`);
+      assert.deepEqual(events, ["begin", "commit"], status);
+    });
+  }
+  for (const status of ["Scheduled", "Sending", "Sent"]) {
+    await withFakeSql([...softDelete, ...sqlCampaign("COM-007", { status })], async (calls, events) => {
+      await assert.rejects(deleteCommunication(PM, "COM-007"), /INVALID_COMMUNICATION_NOT_DELETABLE/, status);
+      assert.deepEqual([sqlWrites(calls).length, events], [0, []], `${status}: nothing is written`);
+    });
+  }
+  await withFakeSql([[/^\s*UPDATE dbo\.Communications/, { rowsAffected: [0] }], ...sqlCampaign("COM-007")], async (calls, events) => {
+    await assert.rejects(deleteCommunication(PM, "COM-007"), /NOT_FOUND/, "the UPDATE matched no row");
+    assert.deepEqual(events, ["begin", "rollback"]);
+    assert.equal(sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).length, 0);
+  });
 });
