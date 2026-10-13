@@ -817,6 +817,31 @@ test("audience: the size limit allows exactly the limit and counts sendable rows
   assert.deepEqual(security.breakdown.suppressed, { Bounced: 1, Unsubscribed: 1 }, "but never the suppression list");
 });
 
+test("audience: a member who is Off in any selected organisation is suppressed whichever of their rows comes first; a mandatory topic ignores Off", () => {
+  const offAt = (organizationId: string, extra: Partial<AudienceInput["members"][number]> = {}) => member("u1", organizationId, "Multi@Origo.is", { preference: "Off", ...extra }); // the other row says multi@origo.is
+  const onAt = (organizationId: string, extra: Partial<AudienceInput["members"][number]> = {}) => member("u1", organizationId, "multi@origo.is", extra);
+  const bothOrders = (off: AudienceInput["members"][number], on: AudienceInput["members"][number]): Array<[string, AudienceInput["members"]]> =>
+    [["Off row first", [off, on]], ["Off row last", [on, off]]];
+  const run = (audience: AudienceSpec, topic: CommunicationTopic, members: AudienceInput["members"]) =>
+    resolveAudience(audience, topic, { organizations: orgs, members, contacts: [], suppressions: new Map() }, openSettings);
+  const states = (result: ReturnType<typeof run>) => result.recipients.map((r) => `${r.state}:${r.suppressedReason ?? ""}`);
+  const bothSelected = { ...spec, includeOnboarding: true }; // ORG-001 and ORG-002
+
+  for (const [order, members] of bothOrders(offAt("ORG-001"), onAt("ORG-002"))) {
+    const product = run(bothSelected, "product-updates", members);
+    assert.deepEqual(states(product), ["Suppressed:PreferenceOff"], order);
+    assert.equal(product.breakdown.members, 1, `${order}: one address, however many memberships`);
+    assert.deepEqual(product.breakdown.suppressed, { PreferenceOff: 1 }, `${order}: reported once`);
+    assert.deepEqual(states(run(bothSelected, "security-advisories", members)), ["Queued:"], `${order}: a mandatory topic ignores Off`);
+  }
+  // ORG-002 is Onboarding, so the default audience does not select it: an Off there is not an Off in this audience.
+  for (const [order, members] of bothOrders(offAt("ORG-002"), onAt("ORG-001")))
+    assert.deepEqual(states(run(spec, "product-updates", members)), ["Queued:"], `${order}: an Off outside the audience does not count`);
+  // The Viewer row is Off but this audience takes Company admins only; the address is still Off in a selected organisation.
+  for (const [order, members] of bothOrders(offAt("ORG-001", { role: "Viewer" }), onAt("ORG-002", { role: "Company admin" })))
+    assert.deepEqual(states(run({ ...bothSelected, memberRoles: ["Company admin"] }, "product-updates", members)), ["Suppressed:PreferenceOff"], `${order}: an Off row counts where the role filter drops it`);
+});
+
 test("topics: every communication topic maps to a registered notification event type with the same mandatory flag", async () => {
   // Compile-time half: a topic whose event type is no NotificationEventType stops `tsc`, not only this test.
   const eventTypes: readonly NotificationEventType[] = COMMUNICATION_TOPICS.map(topicEventType);
