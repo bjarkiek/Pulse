@@ -20,6 +20,11 @@ import {
   communicationTestSendSchema,
   productUpdateBodySchema,
 } from "../lib/contracts";
+import {
+  importCompanyContacts, importContacts, listCompanyContacts, listContacts, parseContactLines, removeContact,
+  saveCompanyContact, saveContact, removeCompanyContact,
+} from "../lib/server/communications/contact-repository";
+import { listUsers, organizations } from "../lib/server/admin-repository";
 
 export const ADMIN: PulseIdentity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -346,4 +351,134 @@ test("idempotency: communication.* operations require a publish role", async () 
 
 test("versions: Communications is a versioned entity", async () => {
   await assert.rejects(checkedMutation(PM, "Communications", "COM-001", null, async () => ({})), /PRECONDITION_REQUIRED/);
+});
+
+/** Seeds the default users (bjarki@uidata.com, member of ORG-001), ORG-001 (Origo) and ORG-002 (Advania). */
+async function seedOrganizations() {
+  await listUsers(ADMIN); // seeds the default users only; the organisation store is seeded by organizations()
+  organizations().push({ // first call seeds ORG-001 (Origo), then ORG-002 joins it
+    id: "ORG-002", name: "Advania", type: "Customer", status: "Active", domain: "advania.is",
+    users: 0, requests: 0, authentication: ["OTP"],
+  });
+}
+
+test("contacts: Product managers add contacts to any company; e-mails are normalised; duplicates rejected", async () => {
+  await seedOrganizations();
+  const saved = await saveContact(PM, { organizationId: "ORG-002", email: "Anna@Advania.IS", displayName: "Anna", locale: "is", topics: ["product-updates"] });
+  assert.equal(saved.email, "anna@advania.is");
+  assert.equal(saved.source, "Admin");
+  await assert.rejects(
+    saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Dup", locale: "en", topics: ["general"] }),
+    /INVALID_CONTACT_EXISTS/,
+  );
+  assert.equal((await listContacts(CONTRIBUTOR, "ORG-002")).length, 1);
+  await assert.rejects(saveContact(CONTRIBUTOR, { organizationId: "ORG-002", email: "x@advania.is", displayName: "X", locale: "en", topics: ["general"] }), /FORBIDDEN/);
+  await assert.rejects(saveContact(PM, { organizationId: "ORG-404", email: "x@y.is", displayName: "X", locale: "en", topics: ["general"] }), /NOT_FOUND/);
+});
+
+test("contacts: Company admins manage only their own company; requesters cannot", async () => {
+  await seedOrganizations();
+  const mine = await saveCompanyContact(COMPANY_ADMIN, { email: "cio@origo.is", displayName: "CIO", locale: "en", topics: ["product-updates", "service-notices"] });
+  assert.equal(mine.organizationId, "ORG-001");
+  assert.equal(mine.source, "Company admin");
+  const other = await saveContact(PM, { organizationId: "ORG-002", email: "other@advania.is", displayName: "Other", locale: "en", topics: ["general"] });
+  await assert.rejects(saveCompanyContact(COMPANY_ADMIN, { id: other.id, email: "other@advania.is", displayName: "Hijack", locale: "en", topics: ["general"] }), /NOT_FOUND/);
+  await assert.rejects(removeCompanyContact(COMPANY_ADMIN, other.id), /NOT_FOUND/);
+  assert.deepEqual((await listCompanyContacts(COMPANY_ADMIN)).map((c) => c.email), ["cio@origo.is"]);
+  await assert.rejects(listCompanyContacts(REQUESTER), /FORBIDDEN/);
+  await removeCompanyContact(COMPANY_ADMIN, mine.id);
+  assert.equal((await listCompanyContacts(COMPANY_ADMIN)).length, 0);
+  assert.equal(globalThis.pulseMemoryAudit?.[0]?.action, "communication.contact.removed");
+});
+
+test("contacts: paste import parses 'Name, email' and 'email' lines, skips invalid and duplicate rows, caps at 250", () => {
+  const parsed = parseContactLines("Anna Á, Anna@advania.is\nbjorn@advania.is\nnot an email\n Anna Á , anna@advania.is ");
+  assert.deepEqual(parsed.rows, [
+    { displayName: "Anna Á", email: "anna@advania.is" },
+    { displayName: "bjorn", email: "bjorn@advania.is" },
+  ]);
+  assert.deepEqual(parsed.errors, [3, 4]);
+  const many = parseContactLines(Array.from({ length: 300 }, (_, i) => `u${i}@x.is`).join("\n"));
+  assert.equal(many.rows.length, 250);
+});
+
+test("contacts: import creates rows with the chosen topics and reports duplicates", async () => {
+  await seedOrganizations();
+  await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  const result = await importContacts(PM, "ORG-002", "Anna, anna@advania.is\nBjörn, bjorn@advania.is", ["product-updates"]);
+  assert.equal(result.created.length, 1);
+  assert.deepEqual(result.created[0].topics, ["product-updates"]);
+  assert.equal(result.created[0].source, "Import");
+  assert.deepEqual(result.skipped, [{ line: 1, reason: "duplicate" }]);
+});
+
+test("contacts: editing keeps one row, preserves the source and audits the previous topics as 'before'", async () => {
+  await seedOrganizations();
+  const created = await saveContact(PM, { id: "", organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  const edited = await saveContact(PM, { id: created.id, organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna Á", locale: "is", topics: ["product-updates", "product-updates", "service-notices"] });
+  assert.equal(edited.id, created.id);
+  assert.equal(edited.source, "Admin");
+  assert.equal(edited.createdAt, created.createdAt);
+  assert.deepEqual(edited.topics, ["product-updates", "service-notices"], "duplicate topics collapse");
+  assert.deepEqual((await listContacts(PM, "ORG-002")).map((c) => [c.displayName, c.locale]), [["Anna Á", "is"]]);
+  const audit = globalThis.pulseMemoryAudit?.[0];
+  assert.equal(audit?.action, "communication.contact.saved");
+  assert.deepEqual(audit?.before, { topics: ["general"] });
+  assert.deepEqual((audit?.after as { topics: string[] }).topics, ["product-updates", "service-notices"]);
+  assert.ok(!JSON.stringify(globalThis.pulseMemoryAudit).includes("anna@advania.is"), "audit rows never carry e-mail addresses");
+});
+
+test("contacts: input is validated and Company admins cannot name another organisation", async () => {
+  await seedOrganizations();
+  const valid = { organizationId: "ORG-002", email: "x@advania.is", displayName: "X", locale: "en" as const, topics: ["general" as const] };
+  await assert.rejects(saveContact(PM, { ...valid, email: "not-an-email" }), /INVALID_INPUT/);
+  await assert.rejects(saveContact(PM, { ...valid, displayName: "" }), /INVALID_INPUT/);
+  await assert.rejects(saveContact(PM, { ...valid, topics: [] }), /INVALID_INPUT/);
+  await assert.rejects(saveContact(PM, { ...valid, id: "not-a-uuid" }), /INVALID_INPUT/);
+  await assert.rejects(saveCompanyContact(COMPANY_ADMIN, { ...valid, email: "not-an-email" }), /INVALID_INPUT/);
+  const tampered = { ...valid, email: "cio@origo.is" }; // a body that still carries organizationId: ORG-002
+  const saved = await saveCompanyContact(COMPANY_ADMIN, tampered);
+  assert.equal(saved.organizationId, "ORG-001", "the active membership wins over any organizationId in the body");
+  assert.equal((await listContacts(PM, "ORG-002")).length, 0);
+});
+
+test("contacts: removal needs a publish role; Company admin import is scoped to the active organisation", async () => {
+  await seedOrganizations();
+  const contact = await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  await assert.rejects(removeContact(CONTRIBUTOR, contact.id), /FORBIDDEN/);
+  await assert.rejects(removeContact(COMPANY_ADMIN, contact.id), /FORBIDDEN/);
+  await removeContact(PM, contact.id);
+  assert.equal((await listContacts(CONTRIBUTOR, "ORG-002")).length, 0);
+  assert.equal(globalThis.pulseMemoryAudit?.[0]?.action, "communication.contact.removed");
+  await assert.rejects(removeContact(PM, contact.id), /NOT_FOUND/);
+
+  await assert.rejects(importCompanyContacts(REQUESTER, "asa@origo.is", ["general"]), /FORBIDDEN/);
+  await assert.rejects(importCompanyContacts(PM, "asa@origo.is", ["general"]), /FORBIDDEN/);
+  const imported = await importCompanyContacts(COMPANY_ADMIN, "Ása, asa@origo.is\ngunnar@origo.is", ["service-notices"]);
+  assert.deepEqual(imported.created.map((c) => [c.organizationId, c.source, c.topics]), [
+    ["ORG-001", "Company admin", ["service-notices"]],
+    ["ORG-001", "Company admin", ["service-notices"]],
+  ]);
+  assert.deepEqual(imported.skipped, []);
+  assert.deepEqual((await listCompanyContacts(COMPANY_ADMIN)).map((c) => c.email), ["asa@origo.is", "gunnar@origo.is"]);
+});
+
+test("contacts: paste parsing applies the contact schema's address rules and records the physical line of every accepted row", () => {
+  const parsed = parseContactLines("\nCarl, carl@advania.c\nDóra; dora@advania.is\n\tEyja\teyja@advania.is\n.dot@advania.is\nGunnar, gunnar@advania.is.");
+  assert.deepEqual(parsed.rows.map((r) => r.email), ["dora@advania.is", "eyja@advania.is"]);
+  assert.deepEqual(parsed.rowLines, [3, 4]);
+  assert.deepEqual(parsed.errors, [2, 5, 6]);
+});
+
+test("contacts: import reports physical line numbers and skips addresses the contact schema rejects without aborting", async () => {
+  await seedOrganizations();
+  await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  const result = await importContacts(PM, "ORG-002", "\nnot an email\nAnna, anna@advania.is\nCarl, carl@advania.c\nDóra, dora@advania.is", ["general"]);
+  assert.deepEqual(result.created.map((c) => c.email), ["dora@advania.is"]);
+  assert.deepEqual(result.skipped, [
+    { line: 2, reason: "invalid" },
+    { line: 3, reason: "duplicate" },
+    { line: 4, reason: "invalid" },
+  ]);
+  assert.equal((await listContacts(PM, "ORG-002")).length, 2, "the existing contact and the one new row");
 });

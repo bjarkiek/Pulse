@@ -338,3 +338,20 @@ export const communicationInputSchema = z
   });
 export const communicationSendInputSchema = z.object({ scheduledAt: z.iso.datetime().optional() }).strict();
 export const communicationTestSendSchema = z.object({ extraRecipients: z.array(emailAddress).max(5).default([]) }).strict();
+const topicEnum = z.enum(["product-updates", "service-notices", "security-advisories", "general"]);
+export const communicationContactInputSchema = z.object({
+  id: z.union([z.uuid(), z.literal("")]).optional(),
+  organizationId: z.string().min(1).max(32),
+  email: emailAddress,
+  displayName: shortText.min(1),
+  locale: z.enum(["en", "is"]).default("en"),
+  topics: z.array(topicEnum).min(1).max(4),
+  note: z.string().trim().max(500).optional(),
+});
+/** Customer self-service never names the organisation; it is the active membership. */
+export const companyContactInputSchema = communicationContactInputSchema.omit({ organizationId: true });
+export const communicationContactImportSchema = z.object({
+  organizationId: z.string().min(1).max(32).optional(),
+  lines: z.string().min(1).max(16000),
+  topics: z.array(topicEnum).min(1).max(4).default(["product-updates", "service-notices"]),
+});

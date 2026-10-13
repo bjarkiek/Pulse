@@ -4248,6 +4248,110 @@
           "visibility"
         ]
       },
+      "communicationContactImportSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "organizationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "lines": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
+          },
+          "topics": {
+            "default": [
+              "product-updates",
+              "service-notices"
+            ],
+            "minItems": 1,
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "product-updates",
+                "service-notices",
+                "security-advisories",
+                "general"
+              ]
+            }
+          }
+        },
+        "required": [
+          "lines"
+        ]
+      },
+      "communicationContactInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "organizationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "locale": {
+            "default": "en",
+            "type": "string",
+            "enum": [
+              "en",
+              "is"
+            ]
+          },
+          "topics": {
+            "minItems": 1,
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "product-updates",
+                "service-notices",
+                "security-advisories",
+                "general"
+              ]
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "organizationId",
+          "email",
+          "displayName",
+          "topics"
+        ]
+      },
       "communicationInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -4631,6 +4735,67 @@
           }
         },
         "additionalProperties": false
+      },
+      "companyContactInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "locale": {
+            "default": "en",
+            "type": "string",
+            "enum": [
+              "en",
+              "is"
+            ]
+          },
+          "topics": {
+            "minItems": 1,
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "product-updates",
+                "service-notices",
+                "security-advisories",
+                "general"
+              ]
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "email",
+          "displayName",
+          "topics"
+        ]
       },
       "draftInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
