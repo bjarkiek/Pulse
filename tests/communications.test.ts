@@ -248,7 +248,7 @@ test("templates: plain announcement renders every paragraph, the CTA and a custo
   );
   assert.match(rendered.html, /Announcement/);
   assert.match(rendered.html, /<h1[^>]*>Rotate your API keys<\/h1>/);
-  assert.match(rendered.html, /<p [^>]*>First <strong>paragraph<\/strong>\.<\/p>/);
+  assert.match(rendered.html, /<p style="[^"]*font-family:'IBM Plex Sans'[^"]*">First <strong>paragraph<\/strong>\.<\/p>/, "paragraphs carry the brand body font");
   assert.match(rendered.html, /<p [^>]*>Second<br>line\.<\/p>/);
   assert.match(rendered.html, /<a href="https:\/\/app\.datacentral\.ai"[^>]*>Open Pulse<\/a>/);
   assert.match(rendered.html, /Regards,<br><strong>Security<\/strong>/);
