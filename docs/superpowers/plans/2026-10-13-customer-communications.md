@@ -892,7 +892,7 @@ test("html: escapes HTML and only renders https links", () => {
   const html = renderInline("Hello **world** [docs](https://docs.datacentral.ai/a?b=1&c=2) [bad](javascript:alert(1)) <script>x</script>");
   assert.match(html, /<strong>world<\/strong>/);
   assert.match(html, /<a href="https:\/\/docs\.datacentral\.ai\/a\?b=1&amp;c=2"/);
-  assert.ok(!html.includes("javascript:"), "non-https links stay literal text");
+  assert.ok(!html.includes('href="javascript:'), "non-https links stay literal (escaped) text, never an href");
   assert.ok(!html.includes("<script>"));
   assert.equal(inlineToText("Hello **world** [docs](https://x.test)"), "Hello world docs (https://x.test)");
 });
@@ -1777,58 +1777,46 @@ git commit -m "feat(communications): global suppression list"
 ```ts
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createSessionToken, SESSION_COOKIE } from "../lib/server/session";
 import { resetCommunicationMemory } from "../lib/server/communications/memory";
-import { listUsers } from "../lib/server/admin-repository";
 import { GET as internalContactsGet, POST as internalContactsPost } from "../app/api/v1/internal/communications/contacts/route";
-import { GET as companyContactsGet, POST as companyContactsPost } from "../app/api/v1/communications/contacts/route";
+import { GET as companyContactsGet } from "../app/api/v1/communications/contacts/route";
 
-// identities are seeded users; roles come from memory memberships (admin-repository users()) plus
-// the identity role stamped from the session's org hint — see lib/server/auth.ts.
-async function cookieFor(email: string, name: string, sub: string) {
-  const token = await createSessionToken({ sub, email, name, ext: "dev:local", amr: "entra" });
-  return `${SESSION_COOKIE}=${token}`;
-}
-function req(path: string, cookie: string, init: RequestInit & { org?: string } = {}) {
+// Memory mode (no AZURE_SQL_*, NODE_ENV !== production): an anonymous request resolves to the
+// demo fallback identity in lib/server/auth.ts — the seeded System admin (ORG-001, isInternal).
+// Route tests therefore exercise the real admin code paths without a session cookie, while
+// customer-role paths (Company admin) are covered at the repository level in communications.test.ts.
+function req(path: string, init: RequestInit = {}) {
   return new Request(`http://localhost${path}`, {
     ...init,
-    headers: {
-      cookie, host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin",
-      "content-type": "application/json", ...(init.org ? { "x-pulse-organization-id": init.org } : {}), ...(init.headers || {}),
-    },
+    headers: { host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin", "content-type": "application/json", ...(init.headers || {}) },
   });
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   delete process.env.AZURE_SQL_CONNECTION_STRING;
   delete process.env.AZURE_SQL_SERVER;
-  process.env.PULSE_SESSION_SECRET = "communications-route-tests-secret-32chars!!";
   globalThis.pulseMemoryUsers = undefined;
   globalThis.pulseMemoryOrganizations = undefined;
   globalThis.pulseMemoryAudit = undefined;
+  globalThis.pulseMemoryIdempotency = undefined;
   resetCommunicationMemory();
-  await listUsers({ id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com", name: "Bjarki", organizationId: "ORG-INTERNAL", role: "System admin", isInternal: true } as never);
-  globalThis.pulseMemoryUsers!.push({
-    id: "55555555-5555-4555-8555-555555555555", name: "Origo Admin", email: "admin@origo.is", status: "Active",
-    authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Company admin" }],
-  });
 });
 
-test("routes: company contacts list is scoped to the active organisation and needs Company admin", async () => {
-  // memory-mode getIdentity stamps role "Unknown"; the repository resolves it through requireMembership → identity.role,
-  // so route tests in memory mode exercise the plumbing (auth, parsing, response shape), not the role decision itself.
-  const cookie = await cookieFor("admin@origo.is", "Origo Admin", "55555555-5555-4555-8555-555555555555");
-  const response = await companyContactsGet(req("/api/v1/communications/contacts", cookie, { org: "ORG-001" }));
-  assert.ok([200, 404].includes(response.status));
-  assert.equal(response.headers.get("cache-control"), "no-store");
+test("routes: internal contacts list, create and validation (demo System admin identity)", async () => {
+  const bad = await internalContactsPost(req("/api/v1/internal/communications/contacts", { method: "POST", body: JSON.stringify({ organizationId: "ORG-001", email: "not-an-email", displayName: "x", topics: [] }) }));
+  assert.equal(bad.status, 400);
+  const created = await internalContactsPost(req("/api/v1/internal/communications/contacts", { method: "POST", body: JSON.stringify({ organizationId: "ORG-001", email: "cio@origo.is", displayName: "CIO", locale: "is", topics: ["product-updates"] }) }));
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).item.email, "cio@origo.is");
+  const list = await internalContactsGet(req("/api/v1/internal/communications/contacts?organizationId=ORG-001"));
+  assert.equal(list.status, 200);
+  assert.equal(list.headers.get("cache-control"), "no-store");
+  assert.equal((await list.json()).items.length, 1);
 });
 
-test("routes: internal contacts POST validates the body with the shared schema", async () => {
-  const cookie = await cookieFor("bjarki@uidata.com", "Bjarki", "11111111-1111-4111-8111-111111111111");
-  const bad = await internalContactsPost(req("/api/v1/internal/communications/contacts", cookie, { method: "POST", body: JSON.stringify({ organizationId: "ORG-001", email: "not-an-email", displayName: "x", topics: [] }) }));
-  assert.ok([400, 404].includes(bad.status));
-  const list = await internalContactsGet(req("/api/v1/internal/communications/contacts?organizationId=ORG-001", cookie));
-  assert.ok([200, 404].includes(list.status));
+test("routes: company contacts need a Company admin membership (the demo admin is not one → 404)", async () => {
+  const response = await companyContactsGet(req("/api/v1/communications/contacts"));
+  assert.equal(response.status, 404);
 });
 ```
 
@@ -2502,12 +2490,12 @@ test("send: requires enabled settings and a provider, freezes the audience and m
   await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_COMMUNICATIONS_DISABLED/);
   await enableSending();
   const estimate = await audienceEstimate(PM, created.id);
-  assert.equal(estimate.sendable, 3); // jon (ORG-001 member), cio (contact), anna (ORG-002 member)
+  assert.equal(estimate.sendable, 4); // bjarki + jon (ORG-001 members), cio (contact, is), anna (ORG-002 member)
   const sent = await sendCommunication(PM, created.id, {});
   assert.equal(sent.status, "Sending");
-  assert.equal(sent.recipientCount, 3);
+  assert.equal(sent.recipientCount, 4);
   const deliveries = await listDeliveries(CONTRIBUTOR, created.id, { page: 1, pageSize: 50 });
-  assert.equal(deliveries.total, 3);
+  assert.equal(deliveries.total, 4);
   assert.ok(deliveries.items.every((d) => d.state === "Queued"));
   assert.equal(deliveries.items.find((d) => d.email === "cio@origo.is")?.locale, "is");
   await assert.rejects(updateCommunication(PM, created.id, draftInput), /INVALID_COMMUNICATION_NOT_EDITABLE/);
@@ -2533,7 +2521,7 @@ test("send: schedule, unschedule and cancel; cancel keeps accepted rows", async 
   assert.equal(cancelled.status, "Cancelled");
   const rows = (await listDeliveries(PM, sending.id, { page: 1, pageSize: 10 })).items;
   assert.equal(rows.filter((r) => r.state === "Accepted").length, 1);
-  assert.equal(rows.filter((r) => r.state === "Cancelled").length, 2);
+  assert.equal(rows.filter((r) => r.state === "Cancelled").length, 3);
 });
 
 test("send: an all-suppressed audience completes immediately as Sent with zero recipients", async () => {
@@ -2545,7 +2533,7 @@ test("send: an all-suppressed audience completes immediately as Sent with zero r
   assert.equal(sent.status, "Sent");
   assert.equal(sent.recipientCount, 0);
   const stats = await communicationStats(created.id);
-  assert.equal(stats.suppressed, 3);
+  assert.equal(stats.suppressed, 4);
 });
 
 test("test send: queues Test rows for the caller and internal extras only; never counts in stats", async () => {
@@ -2569,7 +2557,7 @@ test("deliveries: retry dead letters requeues only Dead letter rows", async () =
   await store.markFailed(batch!.deliveries.map((d) => d.id), "HTTP_400", null);
   assert.equal((await communicationStats(created.id)).deadLettered, 3);
   assert.deepEqual(await retryDeadLetters(PM, created.id), { requeued: 3 });
-  assert.equal((await communicationStats(created.id)).queued, 3);
+  assert.equal((await communicationStats(created.id)).queued, 4, "3 requeued English rows plus the never-claimed Icelandic row");
 });
 ```
 
@@ -2953,17 +2941,29 @@ git commit -m "feat(communications): audience freeze, send/schedule/cancel, test
 import { GET as communicationsGet, POST as communicationsPost } from "../app/api/v1/internal/communications/route";
 import { GET as previewGet } from "../app/api/v1/internal/communications/[id]/preview/route";
 
-test("routes: communications require a session (401 without one)", async () => {
-  const anonymous = await communicationsGet(new Request("http://localhost/api/v1/internal/communications"));
-  assert.equal(anonymous.status, 401);
-  const preview = await previewGet(new Request("http://localhost/api/v1/internal/communications/COM-001/preview?locale=en"), { params: Promise.resolve({ id: "COM-001" }) });
-  assert.equal(preview.status, 401);
-});
+const plainDraft = {
+  templateKey: "plain", topic: "general", title: "Route test",
+  content: { subject: { en: "Hello" }, body: { en: { title: "Hi", paragraphs: ["One"] } } },
+  audience: { organizations: "all-customers" },
+};
 
-test("routes: create rejects a missing Idempotency-Key with 400", async () => {
-  const cookie = await cookieFor("bjarki@uidata.com", "Bjarki", "11111111-1111-4111-8111-111111111111");
-  const response = await communicationsPost(req("/api/v1/internal/communications", cookie, { method: "POST", body: JSON.stringify({ templateKey: "plain" }) }));
-  assert.ok([400, 404].includes(response.status));
+test("routes: create needs an Idempotency-Key, then list and preview work (demo System admin identity)", async () => {
+  const missingKey = await communicationsPost(req("/api/v1/internal/communications", { method: "POST", body: JSON.stringify(plainDraft) }));
+  assert.equal(missingKey.status, 400);
+  const created = await communicationsPost(req("/api/v1/internal/communications", { method: "POST", headers: { "idempotency-key": "route-test-create-1" }, body: JSON.stringify(plainDraft) }));
+  assert.equal(created.status, 201);
+  const id = (await created.json()).item.id as string;
+  assert.match(id, /^COM-\d{3}$/);
+  const list = await communicationsGet(req("/api/v1/internal/communications"));
+  assert.equal(list.status, 200);
+  assert.equal((await list.json()).items.length, 1);
+  const preview = await previewGet(req(`/api/v1/internal/communications/${id}/preview?locale=is`), { params: Promise.resolve({ id }) });
+  assert.equal(preview.status, 200);
+  assert.match(preview.headers.get("content-type") ?? "", /^text\/html/);
+  assert.match(preview.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+  assert.match(await preview.text(), /Tilkynning/);
+  const missing = await previewGet(req("/api/v1/internal/communications/COM-999/preview"), { params: Promise.resolve({ id: "COM-999" }) });
+  assert.equal(missing.status, 404);
 });
 ```
 
@@ -3178,7 +3178,7 @@ test("worker: sends one request per locale with ≤500 recipients, marks Accepte
   assert.equal(calls.length, 2, "en and is batches");
   assert.ok(calls.every((c) => c.recipients.every((r) => r.customArgs.communicationId === id && r.customArgs.deliveryId)));
   assert.deepEqual(calls[0].categories, ["pulse", "pulse-product-updates", id]);
-  assert.equal(result.accepted, 3);
+  assert.equal(result.accepted, 4);
   assert.deepEqual(result.completed, [id]);
   assert.equal((await getCommunication(PM, id)).status, "Sent");
   assert.ok((await listDeliveries(PM, id, {})).items.every((d) => d.state === "Accepted" && d.providerMessageId));
@@ -3188,7 +3188,8 @@ test("worker: honours Retry-After when it exceeds the backoff; non-retryable err
   const id = await readyCampaign();
   const start = Date.now();
   const throttled = await processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter: 900 }]).transport, now: () => new Date(start) });
-  assert.equal(throttled.retried, 3 - (await listDeliveries(PM, id, { state: "Queued" })).total);
+  assert.equal(throttled.retried, 3, "the English batch of three was throttled");
+  assert.equal((await listDeliveries(PM, id, { state: "Queued" })).total, 1, "the Icelandic row is never claimed after the 429 stop");
   const retry = (await listDeliveries(PM, id, { state: "Retry" })).items[0];
   assert.ok(new Date(retry.nextAttemptAt!).getTime() >= start + 900_000);
   for (const d of globalThis.pulseMemoryCommunicationDeliveries!) d.nextAttemptAt = new Date(0).toISOString();
@@ -3204,7 +3205,7 @@ test("worker: five retryable failures dead-letter; master switch off skips; dail
     await processCommunicationBatch(500, { transport: fakeTransport(script).transport });
     for (const d of globalThis.pulseMemoryCommunicationDeliveries!) d.nextAttemptAt = new Date(0).toISOString();
   }
-  assert.equal((await communicationStats(id)).deadLettered, 3);
+  assert.equal((await communicationStats(id)).deadLettered, 4);
   await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: false });
   assert.equal((await processCommunicationBatch(500, { transport: fakeTransport().transport })).skipped, true);
   const second = await createCommunication(PM, draftInput);
@@ -3212,7 +3213,7 @@ test("worker: five retryable failures dead-letter; master switch off skips; dail
   await sendCommunication(PM, second.id, {});
   const capped = await processCommunicationBatch(500, { transport: fakeTransport().transport });
   assert.equal(capped.capReached, true);
-  assert.equal((await communicationStats(second.id)).queued, 1);
+  assert.equal((await communicationStats(second.id)).queued, 2, "cap of 2 leaves two of four recipients queued");
 });
 
 test("worker: promotes due scheduled campaigns and prefixes test sends", async () => {
@@ -3224,7 +3225,7 @@ test("worker: promotes due scheduled campaigns and prefixes test sends", async (
   const { transport, calls } = fakeTransport();
   const result = await processCommunicationBatch(500, { transport });
   assert.deepEqual(result.promoted, [created.id]);
-  assert.equal(result.accepted, 3);
+  assert.equal(result.accepted, 4);
   const draft = await createCommunication(PM, draftInput);
   await testSendCommunication(PM, draft.id, []);
   await processCommunicationBatch(500, { transport });
@@ -3455,7 +3456,9 @@ test("webhook: event mapping", () => {
 test("webhook: applies delivery states, bounce suppresses the address, duplicates and unknown ids are no-ops", async () => {
   const id = await readyCampaign();
   await processCommunicationBatch(500, { transport: fakeTransport().transport });
-  const [jon, cio] = (await listDeliveries(PM, id, {})).items;
+  const items = (await listDeliveries(PM, id, {})).items;
+  const jon = items.find((d) => d.email === "jon@origo.is")!;
+  const cio = items.find((d) => d.email === "cio@origo.is")!;
   const events = parseEvents(JSON.stringify([
     { sg_event_id: "e1", event: "delivered", email: jon.email, timestamp: 1, deliveryId: jon.id, communicationId: id },
     { sg_event_id: "e2", event: "open", email: jon.email, timestamp: 2, deliveryId: jon.id, communicationId: id },
@@ -4790,7 +4793,7 @@ git commit -m "docs(communications): help manual section, internal tour and seed
 ## Execution notes
 
 - **Order:** Tasks 1–3 (foundations) → 4–6 (contacts) → 7–10 (campaigns) → 11–13 (delivery, webhook, settings) → 14–17 (UI) → 18 (docs). Tasks 4/5, 7/8 and 14/16 are independent pairs and can run in parallel once their prerequisites are merged.
-- **Memory mode caveat:** `getIdentity` stamps `role: "Unknown"` and repositories decide roles through `requireMembership`/`requireInternalRole`, which in memory mode trust `identity.role`. Repository tests therefore pass explicit identities; route tests in memory mode can only assert plumbing (401/400/404/503, headers, response shape) and the anonymous webhook. Role decisions are covered at the repository level.
+- **Memory mode caveat:** in memory mode an anonymous request resolves to the demo fallback identity (`lib/server/auth.ts` step ④: the seeded System admin, ORG-001, `isInternal`), and repositories decide roles through `requireMembership`/`requireInternalRole`, which in memory mode trust `identity.role`. Route tests therefore run admin paths without a session and assert concrete statuses; customer-role decisions (Company admin) are covered at the repository level with explicit identities. The seeded admin (`bjarki@uidata.com`, member of ORG-001) is part of every "all customers" audience in tests — the counts in Tasks 9, 11 and 12 include it.
 - **Uncommitted work in the tree:** the working copy already carries unrelated changes to `app/features/delivery-status.tsx`, `app/help/route.ts`, `lib/server/tour-catalog.ts`, `app/tour-host.tsx`, `app/globals.css`, `scripts/capture-help-screenshots.mjs` and the help screenshots. Rebase or stash them before starting; Tasks 11, 14, 15, 16 and 18 touch the same files.
 - **SQL branches:** every repository function has a memory path with tests and a SQL path written against migration 015. The `npm run test:sql` acceptance suite is the gate for the SQL branches; run it against a disposable database before release.
 - **Deferred to the spec's §15 roadmap:** AI drafting/translation, database-backed template presets, approval workflow, customer-visible archive, login-free preference centre, DataCentral tenant-admin import, per-company engagement export, assistant/MCP tools, shared transport for OTP/notifications.
