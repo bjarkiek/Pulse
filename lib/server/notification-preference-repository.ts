@@ -11,6 +11,10 @@ export const notificationEventTypes = [
   "comment.mention",
   "idea.status-changed",
   "release.published",
+  "communication.product-updates",
+  "communication.service-notices",
+  "communication.security-advisories",
+  "communication.general",
 ] as const;
 
 export type NotificationEventType = (typeof notificationEventTypes)[number];
@@ -24,6 +28,7 @@ export type NotificationPreference = {
 const mandatoryEvents = new Set<NotificationEventType>([
   "request.needs-information",
   "comment.mention",
+  "communication.security-advisories",
 ]);
 
 declare global {

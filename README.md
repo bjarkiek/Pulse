@@ -62,6 +62,7 @@ Run the versioned migrations in order against the Pulse database with an Entra a
 12. [012_otp_login.sql](database/migrations/012_otp_login.sql)
 13. [013_security_boundaries.sql](database/migrations/013_security_boundaries.sql)
 14. [014_release_versions.sql](database/migrations/014_release_versions.sql)
+15. [015_customer_communications.sql](database/migrations/015_customer_communications.sql)
 
 For a local Azure SQL development database, optionally run [seed-development.sql](database/seed-development.sql).
 
@@ -74,6 +75,7 @@ ALTER ROLE db_datawriter ADD MEMBER [<app-service-name>];
 GRANT UPDATE ON OBJECT::dbo.RequestNumber TO [<app-service-name>];
 GRANT UPDATE ON OBJECT::dbo.IdeaNumber TO [<app-service-name>];
 GRANT UPDATE ON OBJECT::dbo.ReleaseNumber TO [<app-service-name>];
+GRANT UPDATE ON OBJECT::dbo.CommunicationNumber TO [<app-service-name>];
 ```
 
 Production migrations should run from a dedicated deployment identity with schema permissions; the web application identity should not own schema changes.

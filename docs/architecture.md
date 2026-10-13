@@ -7,7 +7,7 @@
 | Attachments | Allow list, 25/100 MB limits, private Blob keys, short-lived user-delegation SAS, quarantine, scanning callback, and authorization on download. |
 | Product workflow | Safe staged publication, canonical request linking/merging, score snapshots, roadmap placement, releases, notification outbox with ACS delivery/retry worker, and audit inspection. |
 | Administration | Companies, multi-company user roles, allowed authentication methods, attachment/retention/localization policy, and versioned score weights persist to SQL and emit audit events. |
-| Azure SQL | Fourteen ordered migrations cover the core domain, drafts, revisions, links, interests, comments, releases, saved views, notification delivery state, scores, audit, and idempotency. |
+| Azure SQL | Fifteen ordered migrations cover the core domain, drafts, revisions, links, interests, comments, releases, saved views, notification delivery state, scores, audit, idempotency, and customer communications. |
 | Azure deployment | Standalone Next.js container, App Service/SQL/Blob managed identity, Key Vault references, application-level DataCentral/Entra/OTP sessions, ZRS Blob Storage, Application Insights resource, TLS/security headers. |
 | API hardening | OpenAPI 3.1 contract, correlation IDs, tenant-safe 404s, same-origin mutation checks, rate limits, and replayable idempotent create/publish operations. |
 

@@ -230,3 +230,31 @@ export const roadmapInputSchema = z.object({
   confidence: confidence.optional(),
   publish: z.boolean().optional(),
 });
+const emailAddress = z.string().trim().toLowerCase().max(320).email();
+const domainName = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z]{2,63}$/);
+const boilerplateSchema = z.object({
+  signOff: z.string().trim().min(1).max(200),
+  footer: z.string().trim().max(500),
+  supportEmail: emailAddress,
+});
+export const communicationSettingsInputSchema = z
+  .object({
+    enabled: z.boolean(),
+    fromName: z.string().trim().min(1).max(100),
+    fromEmail: z.union([emailAddress, z.literal("")]),
+    replyTo: z.union([emailAddress, z.literal("")]),
+    dataResidency: z.enum(["global", "eu"]),
+    unsubscribeGroupId: z.number().int().positive().nullable(),
+    sandboxMode: z.boolean(),
+    safeMode: z.object({ enabled: z.boolean(), allowedDomains: z.array(domainName).max(50) }),
+    tracking: z.object({ opens: z.boolean(), clicks: z.boolean() }),
+    dailyCap: z.number().int().min(1).max(1_000_000),
+    maxRecipientsPerCampaign: z.number().int().min(1).max(100_000),
+    categoriesPrefix: z.string().trim().regex(/^[a-z0-9-]{1,40}$/),
+    boilerplate: z.object({ en: boilerplateSchema, is: boilerplateSchema }),
+  })
+  .refine((v) => !v.enabled || v.fromEmail !== "", { message: "fromEmail required when enabled" });
