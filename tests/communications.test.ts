@@ -24,6 +24,9 @@ import {
   importCompanyContacts, importContacts, listCompanyContacts, listContacts, parseContactLines, removeContact,
   saveCompanyContact, saveContact, removeCompanyContact,
 } from "../lib/server/communications/contact-repository";
+import {
+  addSuppression, listSuppressions, loadSuppressionMap, releaseAddress, removeSuppression, suppressAddress,
+} from "../lib/server/communications/suppression-repository";
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
 
 export const ADMIN: PulseIdentity = {
@@ -537,4 +540,152 @@ test("contacts: import reports physical line numbers and skips addresses the con
     { line: 4, reason: "invalid" },
   ]);
   assert.equal((await listContacts(PM, "ORG-002")).length, 2, "the existing contact and the one new row");
+});
+
+test("suppressions: System admin manages manually; others read only; contacts are flagged", async () => {
+  await seedOrganizations();
+  const contact = await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  await assert.rejects(addSuppression(PM, { email: "anna@advania.is" }), /FORBIDDEN/);
+  const added = await addSuppression(ADMIN, { email: "Anna@Advania.is", note: "asked by phone" });
+  assert.equal(added.email, "anna@advania.is");
+  assert.equal(added.reason, "Manual");
+  assert.equal((await listSuppressions(CONTRIBUTOR)).length, 1);
+  assert.equal((await listContacts(PM, "ORG-002")).find((c) => c.id === contact.id)?.status, "Unsubscribed");
+  await removeSuppression(ADMIN, "anna@advania.is");
+  assert.equal((await loadSuppressionMap()).size, 0);
+});
+
+test("suppressions: webhook path upserts by reason and release only removes a matching reason", async () => {
+  await suppressAddress("bounce@origo.is", "Bounced", "Webhook", "550 user unknown");
+  await suppressAddress("bounce@origo.is", "Unsubscribed", "Webhook");
+  assert.equal((await loadSuppressionMap()).get("bounce@origo.is"), "Unsubscribed");
+  await releaseAddress("bounce@origo.is", "Bounced"); // reason mismatch → stays
+  assert.equal((await loadSuppressionMap()).get("bounce@origo.is"), "Unsubscribed");
+  await releaseAddress("bounce@origo.is", "Unsubscribed");
+  assert.equal((await loadSuppressionMap()).has("bounce@origo.is"), false);
+});
+
+test("suppressions: only a System admin writes, every internal role reads, customers do not, and bad input or an unknown address is refused", async () => {
+  await assert.rejects(addSuppression(PM, { email: "a@origo.is" }), /FORBIDDEN/);
+  await assert.rejects(addSuppression(CONTRIBUTOR, { email: "a@origo.is" }), /FORBIDDEN/);
+  await assert.rejects(addSuppression(COMPANY_ADMIN, { email: "a@origo.is" }), /FORBIDDEN/);
+  await assert.rejects(addSuppression(ADMIN, { email: "not-an-email" }), /INVALID_INPUT/);
+  await assert.rejects(addSuppression(ADMIN, { email: "a@origo.is", note: "x".repeat(501) }), /INVALID_INPUT/);
+  await assert.rejects(addSuppression(ADMIN, { email: "a@origo.is", reason: "Bounced" } as never), /INVALID_INPUT/, "the schema is strict");
+  assert.equal((await loadSuppressionMap()).size, 0, "refused calls store nothing");
+  await addSuppression(ADMIN, { email: "a@origo.is" });
+  await assert.rejects(removeSuppression(PM, "a@origo.is"), /FORBIDDEN/);
+  await assert.rejects(removeSuppression(CONTRIBUTOR, "a@origo.is"), /FORBIDDEN/);
+  await assert.rejects(removeSuppression(COMPANY_ADMIN, "a@origo.is"), /FORBIDDEN/);
+  await assert.rejects(removeSuppression(ADMIN, "nobody@origo.is"), /NOT_FOUND/);
+  for (const reader of [ADMIN, PM, CONTRIBUTOR]) assert.equal((await listSuppressions(reader)).length, 1);
+  await assert.rejects(listSuppressions(COMPANY_ADMIN), /FORBIDDEN/);
+  await assert.rejects(listSuppressions(REQUESTER), /FORBIDDEN/);
+  assert.deepEqual([...(await loadSuppressionMap()).keys()], ["a@origo.is"], "refused removals changed nothing");
+});
+
+test("suppressions: contacts follow the list in every organisation; Bounced flags Bounced, any other reason Unsubscribed; a matching release or a removal re-activates", async () => {
+  await seedOrganizations();
+  const contact = (organizationId: string, email: string) => ({ organizationId, email, displayName: "X", locale: "en" as const, topics: ["general" as const] });
+  await saveContact(PM, contact("ORG-002", "shared@advania.is"));
+  await saveContact(PM, contact("ORG-001", "shared@advania.is"));
+  await saveContact(PM, contact("ORG-002", "other@advania.is"));
+  const statuses = async () => Object.fromEntries((await listContacts(PM)).map((c) => [`${c.organizationId} ${c.email}`, c.status]));
+  const shared = (status: string) => ({ "ORG-002 shared@advania.is": status, "ORG-001 shared@advania.is": status, "ORG-002 other@advania.is": "Active" });
+  await suppressAddress("  Shared@Advania.IS ", "Bounced", "Webhook");
+  assert.deepEqual(await statuses(), shared("Bounced"), "a bounce flags the address in every organisation and no other address");
+  await suppressAddress("shared@advania.is", "SpamReport", "Webhook");
+  assert.deepEqual(await statuses(), shared("Unsubscribed"), "any other reason reads as unsubscribed");
+  await releaseAddress("shared@advania.is", "Bounced");
+  assert.deepEqual(await statuses(), shared("Unsubscribed"), "a release for another reason leaves the contacts alone");
+  await releaseAddress("SHARED@advania.is", "SpamReport");
+  assert.deepEqual(await statuses(), shared("Active"), "a matching release re-activates, whatever the case of the address");
+  await addSuppression(ADMIN, { email: "shared@advania.is" });
+  assert.deepEqual(await statuses(), shared("Unsubscribed"));
+  await removeSuppression(ADMIN, "shared@advania.is");
+  assert.deepEqual(await statuses(), shared("Active"), "removing the suppression re-activates");
+});
+
+test("suppressions: removing an address that is not on the list changes nothing and is not audited", async () => {
+  await seedOrganizations();
+  const contact = await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  memoryContacts().find((c) => c.id === contact.id)!.status = "Unsubscribed"; // flagged by something other than the list
+  const audited = globalThis.pulseMemoryAudit?.length;
+  await assert.rejects(removeSuppression(ADMIN, "anna@advania.is"), /NOT_FOUND/);
+  assert.equal((await listContacts(PM, "ORG-002"))[0].status, "Unsubscribed");
+  assert.equal(globalThis.pulseMemoryAudit?.length, audited);
+});
+
+test("suppressions: flagging and re-activating a contact move its updatedAt, as the SQL statements do, and a release that matches nothing does not", async () => {
+  await seedOrganizations();
+  const id = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+  const old = "2026-01-01T00:00:00.000Z";
+  memoryContacts().push({
+    id, organizationId: "ORG-002", userId: null, email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"],
+    status: "Active", source: "Admin", createdAt: old, updatedAt: old,
+  });
+  const row = () => memoryContacts().find((c) => c.id === id)!;
+  await suppressAddress("anna@advania.is", "Unsubscribed", "Webhook");
+  assert.equal(row().status, "Unsubscribed");
+  assert.ok(row().updatedAt > old, "flagging moves updatedAt");
+  row().updatedAt = old;
+  await releaseAddress("anna@advania.is", "Bounced");
+  assert.equal(row().status, "Unsubscribed");
+  assert.equal(row().updatedAt, old, "a release for another reason touches nothing");
+  await releaseAddress("anna@advania.is", "Unsubscribed");
+  assert.equal(row().status, "Active");
+  assert.ok(row().updatedAt > old, "re-activating moves updatedAt");
+  await addSuppression(ADMIN, { email: "anna@advania.is" });
+  row().updatedAt = old;
+  await removeSuppression(ADMIN, "anna@advania.is");
+  assert.equal(row().status, "Active");
+  assert.ok(row().updatedAt > old, "removing a suppression moves updatedAt");
+});
+
+test("suppressions: audit rows record the action and the reason but never the address or the note, and the webhook path writes none", async () => {
+  await addSuppression(ADMIN, { email: "anna@advania.is", note: "asked by phone" });
+  await removeSuppression(ADMIN, "anna@advania.is");
+  const [removed, added] = globalThis.pulseMemoryAudit ?? [];
+  assert.equal(added?.action, "communication.suppression.added");
+  assert.equal(added?.entityType, "CommunicationSuppression");
+  assert.deepEqual(added?.after, { reason: "Manual" });
+  assert.equal(removed?.action, "communication.suppression.removed");
+  assert.equal(removed?.entityType, "CommunicationSuppression");
+  assert.deepEqual(removed?.after, {});
+  const trail = JSON.stringify(globalThis.pulseMemoryAudit);
+  assert.ok(!trail.includes("anna@advania.is") && !trail.includes("asked by phone"), "audit rows never carry the address or the note");
+  await suppressAddress("bounce@origo.is", "Bounced", "Webhook", "550 user unknown");
+  await releaseAddress("bounce@origo.is", "Bounced");
+  assert.equal(globalThis.pulseMemoryAudit?.length, 2, "the webhook and worker path has no actor and writes no audit row");
+});
+
+test("suppressions: the list is newest first and an update keeps the row's place and creation time", async () => {
+  await suppressAddress("first@origo.is", "Bounced", "Webhook", "550 user unknown");
+  await suppressAddress("second@origo.is", "SpamReport", "Webhook");
+  await addSuppression(ADMIN, { email: "third@origo.is" });
+  const listed = await listSuppressions(ADMIN);
+  assert.deepEqual(listed.map((s) => s.email), ["third@origo.is", "second@origo.is", "first@origo.is"], "newest first, like ORDER BY created_at DESC in SQL");
+  assert.deepEqual(listed.map((s) => [s.reason, s.source]), [["Manual", "Admin"], ["SpamReport", "Webhook"], ["Bounced", "Webhook"]]);
+  assert.equal(listed[2].note, "550 user unknown");
+  await suppressAddress("first@origo.is", "Unsubscribed", "Webhook");
+  const again = await listSuppressions(ADMIN);
+  assert.deepEqual(again.map((s) => s.email), ["third@origo.is", "second@origo.is", "first@origo.is"], "an update does not move the row");
+  assert.equal(again[2].createdAt, listed[2].createdAt, "an update keeps the creation time");
+  assert.equal(again[2].reason, "Unsubscribed");
+  assert.equal(again[2].note, undefined, "the newest event replaces the note along with the reason");
+});
+
+test("suppressions: addresses are normalised and a note fits its column: cut at 500 characters, blank means none", async () => {
+  await suppressAddress("  Mixed@Case.IS ", "Bounced", "Webhook", "x".repeat(600));
+  await suppressAddress("blank@case.is", "Bounced", "Webhook", "");
+  const manual = await addSuppression(ADMIN, { email: "Manual@Case.is", note: "   " });
+  assert.equal(manual.email, "manual@case.is");
+  assert.equal(manual.note, undefined, "a blank note is no note");
+  const byEmail = Object.fromEntries((await listSuppressions(ADMIN)).map((s) => [s.email, s]));
+  assert.deepEqual(Object.keys(byEmail).sort(), ["blank@case.is", "manual@case.is", "mixed@case.is"]);
+  assert.equal(byEmail["mixed@case.is"].note?.length, 500, "the table column holds 500 characters");
+  assert.equal(byEmail["blank@case.is"].note, undefined);
+  assert.equal(byEmail["manual@case.is"].note, undefined);
+  await releaseAddress(" MIXED@case.is", "Bounced");
+  assert.equal((await loadSuppressionMap()).has("mixed@case.is"), false, "a release matches whatever the case or padding of the address");
 });

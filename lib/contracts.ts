@@ -355,3 +355,5 @@ export const communicationContactImportSchema = z.object({
   lines: z.string().min(1).max(16000),
   topics: z.array(topicEnum).min(1).max(4).default(["product-updates", "service-notices"]),
 });
+/** A System admin suppresses an address by hand; a removal reuses it through `.pick({ email: true })`. */
+export const communicationSuppressionInputSchema = z.object({ email: emailAddress, note: z.string().trim().max(500).optional() }).strict();
