@@ -1551,3 +1551,29 @@ test("campaigns, SQL: a delete is one guarded soft-delete with its audit row, an
     assert.equal(sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).length, 0);
   });
 });
+
+test("campaigns, demo data: with SQL configured and the demo-data switch on, campaigns, versions, releases and ideas live in memory together; accounts and settings still use SQL", async () => {
+  await withFakeSql([], async (calls, events) => {
+    globalThis.pulseShowDemoData = true;
+    try {
+      const created = await createCommunication(PM, draftInput);
+      assert.deepEqual([created.id, created.version], ["COM-001", "1"], "a memory campaign with a memory version");
+      await updateCommunication(PM, created.id, { ...draftInput, title: "Renamed" });
+      const copy = await duplicateCommunication(PM, created.id);
+      assert.deepEqual((await listCommunications(CONTRIBUTOR)).map((c) => [c.id, c.title]), [[copy.id, "Renamed (copy)"], [created.id, "Renamed"]]);
+      assert.equal((await getCommunication(CONTRIBUTOR, created.id)).title, "Renamed");
+      assert.equal((await previewCommunication(CONTRIBUTOR, created.id, "en")).subject, "DataCentral 3.0.0");
+      const release = await makeRelease([{ title: "Admin report", description: "Built-in admin report." }]);
+      assert.equal((await createCommunication(PM, { fromReleaseId: release.id })).releaseId, release.id);
+      await deleteCommunication(PM, copy.id);
+      await assert.rejects(getCommunication(PM, copy.id), /NOT_FOUND/);
+      assert.deepEqual(memoryCommunications().map((c) => c.id), [created.id, "COM-003"], "the campaigns are in the memory store");
+      assert.deepEqual(calls.filter((c) => /dbo\.(Communications|AuditEvents|Releases|Ideas)|OPENJSON/.test(c.text)), [], "no campaign, release, idea, audit or version statement reached SQL");
+      assert.deepEqual(events, [], "and no transaction was opened");
+      assert.ok(calls.some((c) => /FROM dbo\.Users WHERE id=@id/.test(c.text)), "who the caller is was still asked of SQL");
+      assert.ok(calls.some((c) => /FROM dbo\.Settings/.test(c.text)), "and so were the settings the preview reads");
+    } finally {
+      globalThis.pulseShowDemoData = undefined;
+    }
+  });
+});

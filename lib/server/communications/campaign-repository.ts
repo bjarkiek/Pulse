@@ -2,7 +2,7 @@ import { communicationInputSchema, httpsUrl } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
 import type { z } from "zod";
 import { requireInternalRole, requirePublishRole } from "../authorization";
-import { atomicSql, getSqlPool, isAzureSqlConfigured, sql } from "../database";
+import { atomicSql, getSqlPool, isContentSqlActive, sql } from "../database";
 import { listReleases } from "../operations-repository";
 import { listInternalIdeas } from "../product-repository";
 import { parseInput } from "../validation";
@@ -13,6 +13,10 @@ import { renderCommunication, type RenderedEmail } from "./templates/index";
 import type { CommunicationRecord, CommunicationStats, EmailLocale } from "./types";
 
 export type CommunicationInput = z.infer<typeof communicationInputSchema>;
+
+// Campaigns follow the content switch (`isContentSqlActive`), like releases, ideas and `addVersions` do: with "Show demo data" on, campaigns,
+// their versions and the releases they are drafted from all live in memory together. Who the caller is, the settings, contacts and
+// suppressions are identity-adjacent and keep following `isAzureSqlConfigured` in their own modules.
 
 const EMPTY_STATS: CommunicationStats = { recipients: 0, queued: 0, accepted: 0, delivered: 0, bounced: 0, dropped: 0, deadLettered: 0, suppressed: 0, cancelled: 0, opened: 0, clicked: 0, byOrganization: [] };
 
@@ -54,7 +58,7 @@ export async function findCommunicationUuid(publicId: string): Promise<string> {
 
 async function loadOne(publicId: string): Promise<CommunicationRecord> {
   if (!PUBLIC_ID.test(publicId)) throw new Error("NOT_FOUND");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memoryCommunications().find((c) => c.id === publicId);
     if (!item) throw new Error("NOT_FOUND");
     return structuredClone(item);
@@ -119,7 +123,7 @@ export async function prefillFromRelease(identity: PulseIdentity, releaseId: str
 
 export async function listCommunications(identity: PulseIdentity): Promise<CommunicationRecord[]> {
   await requireInternalRole(identity);
-  if (!isAzureSqlConfigured()) return addVersions("Communications", structuredClone(memoryCommunications()).reverse());
+  if (!isContentSqlActive()) return addVersions("Communications", structuredClone(memoryCommunications()).reverse());
   const result = await (await getSqlPool()).request().query(`${SELECT} WHERE c.deleted_at IS NULL ORDER BY c.created_at DESC`);
   return addVersions("Communications", result.recordset.map(fromRow));
 }
@@ -138,7 +142,7 @@ export async function createCommunication(identity: PulseIdentity, input: Partia
     content: input.content ?? (base as { content?: unknown }).content,
   });
   const now = new Date().toISOString();
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const record: CommunicationRecord = {
       id: nextMemoryPublicId(), templateKey: parsed.templateKey, topic: parsed.topic, title: parsed.title, content: structuredClone(parsed.content) as CommunicationRecord["content"],
       audience: parsed.audience, status: "Draft", recipientCount: 0, releaseId: parsed.fromReleaseId, createdBy: identity.name, createdAt: now, updatedAt: now,
@@ -167,7 +171,7 @@ export async function updateCommunication(identity: PulseIdentity, id: string, i
   const parsed = parseInput(communicationInputSchema, input);
   const current = await loadOne(id);
   if (current.status !== "Draft") throw new Error("INVALID_COMMUNICATION_NOT_EDITABLE");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const item = memoryCommunications().find((c) => c.id === id)!;
     Object.assign(item, { templateKey: parsed.templateKey, topic: parsed.topic, title: parsed.title, content: structuredClone(parsed.content), audience: parsed.audience, updatedAt: new Date().toISOString() });
     memoryAuditEvent(identity, "communication.updated", "Communication", id, { title: item.title }, { title: current.title });
@@ -198,7 +202,7 @@ export async function duplicateCommunication(identity: PulseIdentity, id: string
   await requirePublishRole(identity);
   const source = await loadOne(id);
   const input = { templateKey: source.templateKey, topic: source.topic, title: copyTitle(source.title), content: source.content as CommunicationInput["content"], audience: source.audience };
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const copy = await createCommunication(identity, input);
     memoryAuditEvent(identity, "communication.duplicated", "Communication", copy.id, { from: id });
     return copy;
@@ -215,7 +219,7 @@ export async function deleteCommunication(identity: PulseIdentity, id: string) {
   await requirePublishRole(identity);
   const current = await loadOne(id);
   if (!["Draft", "Cancelled"].includes(current.status)) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
-  if (!isAzureSqlConfigured()) {
+  if (!isContentSqlActive()) {
     const store = memoryCommunications();
     store.splice(store.findIndex((c) => c.id === id), 1);
     const deliveries = memoryDeliveries();
