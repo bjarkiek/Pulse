@@ -474,12 +474,28 @@ test("contacts: input is validated and Company admins cannot name another organi
   await assert.rejects(saveContact(PM, { ...valid, email: "not-an-email" }), /INVALID_INPUT/);
   await assert.rejects(saveContact(PM, { ...valid, displayName: "" }), /INVALID_INPUT/);
   await assert.rejects(saveContact(PM, { ...valid, topics: [] }), /INVALID_INPUT/);
-  await assert.rejects(saveContact(PM, { ...valid, id: "not-a-uuid" }), /INVALID_INPUT/);
   await assert.rejects(saveCompanyContact(COMPANY_ADMIN, { ...valid, email: "not-an-email" }), /INVALID_INPUT/);
   const tampered = { ...valid, email: "cio@origo.is" }; // a body that still carries organizationId: ORG-002
   const saved = await saveCompanyContact(COMPANY_ADMIN, tampered);
   assert.equal(saved.organizationId, "ORG-001", "the active membership wins over any organizationId in the body");
   assert.equal((await listContacts(PM, "ORG-002")).length, 0);
+});
+
+test("contacts: a malformed contact id is NOT_FOUND on edit and removal and never reaches the store", async () => {
+  await seedOrganizations();
+  const valid = { organizationId: "ORG-001", email: "cio@origo.is", displayName: "CIO", locale: "en" as const, topics: ["general" as const] };
+  // A row stored under a malformed id (impossible in production) shows the id is refused before any lookup; SQL would otherwise fail in the driver.
+  memoryContacts().push({
+    id: "not-a-uuid", organizationId: "ORG-001", userId: null, email: "cio@origo.is", displayName: "CIO", locale: "en", topics: ["general"],
+    status: "Active", source: "Admin", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  await assert.rejects(saveContact(PM, { ...valid, id: "not-a-uuid" }), /NOT_FOUND/);
+  await assert.rejects(saveCompanyContact(COMPANY_ADMIN, { ...valid, id: "not-a-uuid" }), /NOT_FOUND/);
+  await assert.rejects(removeContact(PM, "not-a-uuid"), /NOT_FOUND/);
+  await assert.rejects(removeCompanyContact(COMPANY_ADMIN, "not-a-uuid"), /NOT_FOUND/);
+  await assert.rejects(removeContact(PM, ""), /NOT_FOUND/);
+  assert.deepEqual(memoryContacts().map((c) => [c.id, c.displayName]), [["not-a-uuid", "CIO"]], "the row was neither edited nor removed");
+  await assert.rejects(removeContact(CONTRIBUTOR, "not-a-uuid"), /FORBIDDEN/, "authorisation still comes first");
 });
 
 test("contacts: removal needs a publish role; Company admin import is scoped to the active organisation", async () => {

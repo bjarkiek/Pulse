@@ -1,5 +1,6 @@
 import { communicationContactInputSchema, companyContactInputSchema, communicationContactImportSchema } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
+import { z } from "zod";
 import { organizations, users } from "../admin-repository";
 import { requireInternalRole, requireMembership, requirePublishRole } from "../authorization";
 import { beginSqlTransaction, getSqlPool, isAzureSqlConfigured, sql } from "../database";
@@ -70,8 +71,16 @@ async function assertOrganizationExists(organizationId: string) {
   if (!result.recordset.length) throw new Error("NOT_FOUND");
 }
 
+const contactIdSchema = z.uuid();
+const isContactId = (value: unknown) => contactIdSchema.safeParse(value).success;
+/** An edit names its contact by id; an id that is not a UUID cannot exist, so it is NOT_FOUND (404), not an input error and never a SQL driver error. Empty or missing means create. */
+function assertEditId(id: string | undefined) {
+  if (id && !isContactId(id)) throw new Error("NOT_FOUND");
+}
+
 /** Shared write path; callers have already authorised and fixed organizationId. */
 async function upsertContact(identity: PulseIdentity, input: ContactInput, source: ContactSource): Promise<ContactRecord> {
+  assertEditId(input.id);
   const parsed = parseInput(communicationContactInputSchema, input);
   await assertOrganizationExists(parsed.organizationId);
   const now = new Date().toISOString();
@@ -130,6 +139,7 @@ async function upsertContact(identity: PulseIdentity, input: ContactInput, sourc
 }
 
 async function softDelete(identity: PulseIdentity, contactId: string, organizationId: string | null) {
+  if (!isContactId(contactId)) throw new Error("NOT_FOUND");
   if (!isAzureSqlConfigured()) {
     const store = memoryContacts();
     const index = store.findIndex((c) => c.id === contactId && (!organizationId || c.organizationId === organizationId));
@@ -201,6 +211,7 @@ export async function listCompanyContacts(identity: PulseIdentity) {
 }
 export async function saveCompanyContact(identity: PulseIdentity, input: Omit<ContactInput, "organizationId">) {
   const organizationId = await requireCompanyAdmin(identity);
+  assertEditId(input.id);
   parseInput(companyContactInputSchema, input);
   return upsertContact(identity, { ...input, organizationId }, "Company admin");
 }
