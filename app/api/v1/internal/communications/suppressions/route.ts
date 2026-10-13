@@ -1,4 +1,4 @@
-import { communicationSuppressionInputSchema } from "@/lib/contracts";
+import { communicationSuppressionInputSchema, communicationSuppressionRemoveSchema } from "@/lib/contracts";
 import { getIdentity } from "@/lib/server/auth";
 import { addSuppression, listSuppressions, removeSuppression } from "@/lib/server/communications/suppression-repository";
 import { apiError, correlationId, json } from "@/lib/server/http";
@@ -26,7 +26,7 @@ export async function DELETE(request: Request) {
   const id = correlationId(request);
   try {
     const identity = await getIdentity(request);
-    const { email } = await readInput(request, communicationSuppressionInputSchema.pick({ email: true }));
+    const { email } = await readInput(request, communicationSuppressionRemoveSchema);
     await removeSuppression(identity, email);
     return json({ ok: true }, {}, id);
   } catch (error) {

@@ -1,4 +1,4 @@
-import { communicationContactImportSchema, companyContactInputSchema } from "@/lib/contracts";
+import { communicationContactImportSchema, companyContactCreateSchema } from "@/lib/contracts";
 import { getIdentity } from "@/lib/server/auth";
 import { importCompanyContacts, listCompanyContacts, saveCompanyContact } from "@/lib/server/communications/contact-repository";
 import { apiError, correlationId, json } from "@/lib/server/http";
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     return apiError(error, id);
   }
 }
-/** Body is either a single contact (companyContactInputSchema) or an import ({ lines, topics }). */
+/** Body is either a new contact (companyContactCreateSchema) or an import ({ lines, topics }). A POST always creates: an id in the body is ignored. */
 export async function POST(request: Request) {
   const id = correlationId(request);
   try {
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       const input = parseInput(importBodySchema, body);
       return json(await importCompanyContacts(identity, input.lines, input.topics), { status: 201 }, id);
     }
-    return json({ item: await saveCompanyContact(identity, parseInput(companyContactInputSchema, body)) }, { status: 201 }, id);
+    return json({ item: await saveCompanyContact(identity, parseInput(companyContactCreateSchema, body)) }, { status: 201 }, id);
   } catch (error) {
     return apiError(error, id);
   }

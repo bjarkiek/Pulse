@@ -350,10 +350,18 @@ export const communicationContactInputSchema = z.object({
 });
 /** Customer self-service never names the organisation; it is the active membership. */
 export const companyContactInputSchema = communicationContactInputSchema.omit({ organizationId: true });
+/**
+ * Request body of a create (POST) and of an edit (PATCH). A create never names a contact and the contact an edit changes is named by
+ * the URL, so `id` is not part of either; the schema is not strict, so a stray `id` is dropped rather than acted on.
+ */
+export const communicationContactCreateSchema = communicationContactInputSchema.omit({ id: true });
+export const companyContactCreateSchema = companyContactInputSchema.omit({ id: true });
 export const communicationContactImportSchema = z.object({
   organizationId: z.string().min(1).max(32).optional(),
   lines: z.string().min(1).max(16000),
   topics: z.array(topicEnum).min(1).max(4).default(["product-updates", "service-notices"]),
 });
-/** A System admin suppresses an address by hand; a removal reuses it through `.pick({ email: true })`. */
+/** A System admin suppresses an address by hand. */
 export const communicationSuppressionInputSchema = z.object({ email: emailAddress, note: z.string().trim().max(500).optional() }).strict();
+/** Lifting a suppression names the address only. */
+export const communicationSuppressionRemoveSchema = communicationSuppressionInputSchema.pick({ email: true });

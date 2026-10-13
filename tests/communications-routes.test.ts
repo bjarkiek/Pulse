@@ -1,5 +1,6 @@
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createSessionToken } from "../lib/server/session";
 import { resetCommunicationMemory } from "../lib/server/communications/memory";
 import { GET as internalContactsGet, POST as internalContactsPost } from "../app/api/v1/internal/communications/contacts/route";
@@ -78,6 +79,17 @@ test("routes: the organisation filter narrows the list and the caller's correlat
   assert.equal(error.correlationId, correlation);
 });
 
+test("routes: an organisation filter, when given, is 1 to 32 characters; an empty or longer one is 400, not a query", async () => {
+  for (const filter of ["", "x".repeat(33)]) {
+    const refused = await internalContactsGet(send("GET", `${INTERNAL_CONTACTS}?organizationId=${filter}`));
+    assert.equal(refused.status, 400, `a filter of ${filter.length} characters`);
+    assert.equal((await refused.json()).error.code, "INVALID_INPUT");
+  }
+  const longest = await internalContactsGet(send("GET", `${INTERNAL_CONTACTS}?organizationId=${"x".repeat(32)}`));
+  assert.equal(longest.status, 200);
+  assert.deepEqual(await longest.json(), { items: [] });
+});
+
 test("routes: an edit and a removal go through the contact id in the URL, which wins over any id in the body", async () => {
   const { id } = await createContact();
   const stranger = "99999999-9999-4999-8999-999999999999";
@@ -114,6 +126,23 @@ test("routes: editing a contact that does not exist, or whose id is malformed, i
   const listed = (await (await internalContactsGet(send("GET", INTERNAL_CONTACTS))).json()).items;
   assert.equal(listed.length, 1, "none of the refused calls changed the list");
   assert.equal(listed[0].displayName, "CIO");
+});
+
+test("routes: a POST always creates; an id in the body is ignored and never edits or chooses the id of a contact", async () => {
+  const a = await createContact({ email: "a@origo.is", displayName: "Alpha", topics: ["general"] });
+  const edit = await internalContactsPost(send("POST", INTERNAL_CONTACTS, contact({ id: a.id, email: "b@origo.is", displayName: "Beta", topics: ["service-notices"] })));
+  assert.equal(edit.status, 201);
+  const b = (await edit.json()).item;
+  assert.notEqual(b.id, a.id, "the contact named by the body id is not the one that was written");
+  assert.equal(b.email, "b@origo.is");
+  const stranger = "99999999-9999-4999-8999-999999999999";
+  const chosen = await internalContactsPost(send("POST", INTERNAL_CONTACTS, contact({ id: stranger, email: "c@origo.is", displayName: "Gamma" })));
+  assert.equal(chosen.status, 201, "an id that names no contact is no reason to refuse a create");
+  assert.notEqual((await chosen.json()).item.id, stranger);
+  const listed = (await (await internalContactsGet(send("GET", INTERNAL_CONTACTS))).json()).items as Array<{ id: string; email: string; displayName: string; topics: string[] }>;
+  assert.equal(listed.length, 3);
+  const first = listed.find((c) => c.id === a.id);
+  assert.deepEqual([first?.email, first?.displayName, first?.topics], ["a@origo.is", "Alpha", ["general"]], "the contact the body id named is unchanged");
 });
 
 test("routes: a body with pasted lines imports contacts and reports what was skipped; the organisation is required", async () => {
@@ -194,4 +223,24 @@ test("routes: a signed-in user who is not internal staff is refused by every int
   const listed = (await (await internalContactsGet(send("GET", INTERNAL_CONTACTS))).json()).items;
   assert.deepEqual(listed.map((c: { email: string; displayName: string }) => [c.email, c.displayName]), [["cio@origo.is", "CIO"]]);
   assert.deepEqual((await (await suppressionsGet(send("GET", SUPPRESSIONS))).json()).items, []);
+});
+
+test("openapi: the request bodies of the contact and suppression operations list only the fields their routes accept", () => {
+  const spec = JSON.parse(readFileSync(new URL("../public/openapi.json", import.meta.url), "utf8"));
+  const fields = (path: string, method: string): string[] => {
+    const ref: string = spec.paths[path][method].requestBody.content["application/json"].schema.$ref;
+    return Object.keys(spec.components.schemas[ref.split("/").pop() as string].properties).sort();
+  };
+  const contactFields = ["displayName", "email", "locale", "note", "topics"];
+  const internal = "/api/v1/internal/communications/contacts";
+  const company = "/api/v1/communications/contacts";
+  const suppressions = "/api/v1/internal/communications/suppressions";
+  // No id: a POST always creates and the contact an edit changes is named by the URL. Customers never name the organisation.
+  assert.deepEqual(fields(internal, "post"), [...contactFields, "organizationId"].sort());
+  assert.deepEqual(fields(`${internal}/{contactId}`, "patch"), [...contactFields, "organizationId"].sort());
+  assert.deepEqual(fields(company, "post"), contactFields);
+  assert.deepEqual(fields(`${company}/{contactId}`, "patch"), contactFields);
+  // A suppression carries an optional note; lifting one names the address only.
+  assert.deepEqual(fields(suppressions, "post"), ["email", "note"]);
+  assert.deepEqual(fields(suppressions, "delete"), ["email"]);
 });

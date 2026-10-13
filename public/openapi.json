@@ -1023,7 +1023,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/companyContactInputSchema"
+                "$ref": "#/components/schemas/companyContactCreateSchema"
               }
             }
           }
@@ -1166,7 +1166,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/companyContactInputSchema"
+                "$ref": "#/components/schemas/companyContactCreateSchema"
               }
             }
           }
@@ -1537,7 +1537,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/communicationContactInputSchema"
+                "$ref": "#/components/schemas/communicationContactCreateSchema"
               }
             }
           }
@@ -1680,7 +1680,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/communicationContactInputSchema"
+                "$ref": "#/components/schemas/communicationContactCreateSchema"
               }
             }
           }
@@ -1813,7 +1813,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/communicationSuppressionInputSchema"
+                "$ref": "#/components/schemas/communicationSuppressionRemoveSchema"
               }
             }
           }
@@ -4783,6 +4783,60 @@
           "visibility"
         ]
       },
+      "communicationContactCreateSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "organizationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "locale": {
+            "default": "en",
+            "type": "string",
+            "enum": [
+              "en",
+              "is"
+            ]
+          },
+          "topics": {
+            "minItems": 1,
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "product-updates",
+                "service-notices",
+                "security-advisories",
+                "general"
+              ]
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "organizationId",
+          "email",
+          "displayName",
+          "topics"
+        ]
+      },
       "communicationContactImportSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -5273,6 +5327,22 @@
         ],
         "additionalProperties": false
       },
+      "communicationSuppressionRemoveSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "additionalProperties": false
+      },
       "communicationTestSendSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -5290,6 +5360,54 @@
           }
         },
         "additionalProperties": false
+      },
+      "companyContactCreateSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email",
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "locale": {
+            "default": "en",
+            "type": "string",
+            "enum": [
+              "en",
+              "is"
+            ]
+          },
+          "topics": {
+            "minItems": 1,
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "product-updates",
+                "service-notices",
+                "security-advisories",
+                "general"
+              ]
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "email",
+          "displayName",
+          "topics"
+        ]
       },
       "companyContactInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
