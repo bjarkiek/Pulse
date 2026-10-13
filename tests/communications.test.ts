@@ -28,6 +28,13 @@ import {
   addSuppression, listSuppressions, loadSuppressionMap, releaseAddress, removeSuppression, suppressAddress,
 } from "../lib/server/communications/suppression-repository";
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
+import { loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
+import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
+import type { CommunicationTopic } from "../lib/server/communications/types";
+import { setUserLocaleById } from "../lib/server/identity-repository";
+import {
+  listNotificationPreferences, notificationEventTypes, saveNotificationPreference, type NotificationEventType,
+} from "../lib/server/notification-preference-repository";
 
 export const ADMIN: PulseIdentity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -688,4 +695,190 @@ test("suppressions: addresses are normalised and a note fits its column: cut at 
   assert.equal(byEmail["manual@case.is"].note, undefined);
   await releaseAddress(" MIXED@case.is", "Bounced");
   assert.equal((await loadSuppressionMap()).has("mixed@case.is"), false, "a release matches whatever the case or padding of the address");
+});
+
+const orgs: AudienceInput["organizations"] = [
+  { id: "ORG-001", name: "Origo", type: "Customer", status: "Active", isTest: false, locale: "is" },
+  { id: "ORG-002", name: "Advania", type: "Customer", status: "Onboarding", isTest: false, locale: "en" },
+  { id: "ORG-003", name: "Test Co", type: "Customer", status: "Active", isTest: true, locale: "en" },
+  { id: "ORG-INTERNAL", name: "DataCentral", type: "Internal", status: "Active", isTest: false, locale: "en" },
+];
+const member = (userId: string, organizationId: string, email: string, extra: Partial<AudienceInput["members"][number]> = {}) => ({
+  userId, organizationId, email, displayName: email.split("@")[0], locale: "en" as const, role: "Requester", preference: null, ...extra,
+});
+const contact = (id: string, organizationId: string, email: string, topics: CommunicationTopic[] = ["product-updates"], extra: Partial<AudienceInput["contacts"][number]> = {}) => ({
+  id, organizationId, userId: null, email, displayName: email, locale: "en" as const, topics, status: "Active" as const,
+  source: "Admin" as const, createdAt: "", updatedAt: "", ...extra,
+});
+const openSettings = { safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 5000 };
+const spec = { organizations: "all-customers" as const, includeOnboarding: false, includeTestOrganizations: false, includeMembers: true, memberRoles: null, includeContacts: true, includeInternalCopy: false };
+
+test("audience: dedupes member and contact rows case-insensitively; member wins and keeps the user locale", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [member("u1", "ORG-001", "Jon@Origo.is", { locale: "is" })],
+    contacts: [contact("c1", "ORG-001", "jon@origo.is"), contact("c2", "ORG-001", "cio@origo.is")],
+    suppressions: new Map(),
+  };
+  const { recipients, breakdown } = resolveAudience(spec, "product-updates", input, openSettings);
+  assert.deepEqual(recipients.map((r) => [r.email, r.source, r.locale]), [["jon@origo.is", "Member", "is"], ["cio@origo.is", "Contact", "en"]]);
+  assert.equal(breakdown.sendable, 2);
+  assert.equal(breakdown.members, 1);
+  assert.equal(breakdown.contacts, 1);
+});
+
+test("audience: organisation filters (selected ids, onboarding, test orgs) and role filter", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [member("u1", "ORG-001", "a@origo.is", { role: "Company admin" }), member("u2", "ORG-001", "b@origo.is"), member("u3", "ORG-002", "c@advania.is"), member("u4", "ORG-003", "t@test.is")],
+    contacts: [], suppressions: new Map(),
+  };
+  assert.equal(resolveAudience(spec, "product-updates", input, openSettings).breakdown.sendable, 2, "Onboarding and test orgs excluded by default");
+  assert.equal(resolveAudience({ ...spec, includeOnboarding: true, includeTestOrganizations: true }, "product-updates", input, openSettings).breakdown.sendable, 4);
+  assert.equal(resolveAudience({ ...spec, organizations: ["ORG-002"], includeOnboarding: true }, "product-updates", input, openSettings).breakdown.sendable, 1);
+  assert.deepEqual(resolveAudience({ ...spec, memberRoles: ["Company admin"] }, "product-updates", input, openSettings).recipients.map((r) => r.email), ["a@origo.is"]);
+});
+
+test("audience: preference Off is honoured except for mandatory topics; contacts need the topic", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [member("u1", "ORG-001", "off@origo.is", { preference: "Off" }), member("u2", "ORG-001", "on@origo.is", { preference: "Immediate" })],
+    contacts: [contact("c1", "ORG-001", "news@origo.is", ["general"])],
+    suppressions: new Map(),
+  };
+  const product = resolveAudience(spec, "product-updates", input, openSettings);
+  assert.deepEqual(product.recipients.filter((r) => r.state === "Queued").map((r) => r.email), ["on@origo.is"]);
+  assert.equal(product.breakdown.suppressed.PreferenceOff, 1);
+  const security = resolveAudience(spec, "security-advisories", input, openSettings);
+  assert.equal(security.recipients.filter((r) => r.state === "Queued").length, 2, "mandatory topic ignores Off");
+});
+
+test("audience: suppressed members are kept as Suppressed rows; safe mode matches the whole domain", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [member("u1", "ORG-001", "bounced@origo.is"), member("u2", "ORG-001", "ok@datacentral.ai"), member("u3", "ORG-001", "x@evil-datacentral.ai"), member("u4", "ORG-001", "y@datacentral.ai.attacker.com")],
+    contacts: [], suppressions: new Map([["bounced@origo.is", "Bounced"]]),
+  };
+  const result = resolveAudience(spec, "product-updates", input, { safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] }, maxRecipientsPerCampaign: 5000 });
+  const byEmail = Object.fromEntries(result.recipients.map((r) => [r.email, `${r.state}:${r.suppressedReason ?? ""}`]));
+  assert.equal(byEmail["bounced@origo.is"], "Suppressed:Bounced");
+  assert.equal(byEmail["ok@datacentral.ai"], "Queued:");
+  assert.equal(byEmail["x@evil-datacentral.ai"], "Suppressed:SafeMode");
+  assert.equal(byEmail["y@datacentral.ai.attacker.com"], "Suppressed:SafeMode");
+  assert.equal(result.breakdown.sendable, 1);
+});
+
+test("audience: size limit and internal copy", () => {
+  const members = Array.from({ length: 6 }, (_, i) => member(`u${i}`, "ORG-001", `u${i}@origo.is`));
+  const input: AudienceInput = { organizations: orgs, members: [...members, member("staff", "ORG-INTERNAL", "staff@datacentral.ai")], contacts: [], suppressions: new Map() };
+  assert.throws(() => resolveAudience(spec, "general", input, { ...openSettings, maxRecipientsPerCampaign: 5 }), /INVALID_AUDIENCE_TOO_LARGE/);
+  const withInternal = resolveAudience({ ...spec, includeInternalCopy: true }, "general", input, openSettings);
+  assert.equal(withInternal.breakdown.internal, 1);
+  assert.equal(withInternal.breakdown.sendable, 7);
+});
+
+test("topics: every communication topic maps to a registered notification event type with the same mandatory flag", async () => {
+  // Compile-time half: a topic whose event type is no NotificationEventType stops `tsc`, not only this test.
+  const eventTypes: readonly NotificationEventType[] = COMMUNICATION_TOPICS.map(topicEventType);
+  const preferences = await listNotificationPreferences(REQUESTER);
+  for (const topic of COMMUNICATION_TOPICS) {
+    const eventType = topicEventType(topic);
+    assert.ok((notificationEventTypes as readonly string[]).includes(eventType), `${topic} has no notification event type`);
+    assert.equal(
+      preferences.find((p) => p.eventType === eventType)?.mandatory, MANDATORY_TOPICS.has(topic),
+      `${topic}: topics.ts and the preference repository disagree on the mandatory flag`,
+    );
+  }
+  assert.deepEqual(
+    notificationEventTypes.filter((type) => type.startsWith("communication.")).sort(), [...eventTypes].sort(),
+    "every communication.* notification event type belongs to a topic",
+  );
+});
+
+test("audience: the memory loader lists active members with their topic preference and locale, plus contacts and suppressions", async () => {
+  await seedOrganizations(); // ORG-001 Origo, ORG-002 Advania and the seeded admin (bjarki@uidata.com, a Company admin of ORG-001)
+  organizations().push({ id: "ORG-009", name: "Closed", type: "Customer", status: "Inactive", domain: "closed.is", users: 0, requests: 0, authentication: ["OTP"] });
+  users().push(
+    { id: REQUESTER.id, name: "Jón Jónsson", email: "jon@origo.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Requester" }, { companyId: "ORG-002", role: "Viewer" }] },
+    { id: "66666666-6666-4666-8666-666666666666", name: "Sigga", email: "sigga@origo.is", status: "Suspended", authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Requester" }] },
+  );
+  await setUserLocaleById(REQUESTER.id, "is");
+  await saveNotificationPreference(REQUESTER, "communication.product-updates", "Off"); // saved for REQUESTER's company, ORG-001
+  await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "is", topics: ["product-updates"] });
+  await suppressAddress("bounced@origo.is", "Bounced", "Webhook");
+
+  const input = await loadAudienceInput("product-updates");
+  assert.deepEqual(input.organizations.map((o) => o.id), ["ORG-001", "ORG-002"], "inactive organisations are not loaded");
+  assert.deepEqual(
+    input.members.map((m) => [m.email, m.organizationId, m.role, m.locale, m.preference]),
+    [["bjarki@uidata.com", "ORG-001", "Company admin", "en", null], ["jon@origo.is", "ORG-001", "Requester", "is", "Off"], ["jon@origo.is", "ORG-002", "Viewer", "is", null]],
+    "one row per membership of an active user; the preference is the one saved for that company and topic",
+  );
+  assert.deepEqual(input.contacts.map((c) => [c.email, c.organizationId]), [["anna@advania.is", "ORG-002"]]);
+  assert.equal(input.suppressions.get("bounced@origo.is"), "Bounced");
+  const security = await loadAudienceInput("security-advisories");
+  assert.equal(security.members.find((m) => m.userId === REQUESTER.id && m.organizationId === "ORG-001")?.preference, null, "a preference belongs to one topic");
+  input.contacts[0].displayName = "Changed";
+  assert.equal(memoryContacts()[0].displayName, "Anna", "the loader hands out copies, never the store");
+});
+
+test("audience: the SQL loader sends its queries one at a time, as a transaction requires, and maps the rows", async () => {
+  const rows: Array<[RegExp, Array<Record<string, unknown>>]> = [
+    [/FROM dbo\.CommunicationSuppressions/, [{ email: "bounced@origo.is", reason: "Bounced" }]],
+    [/FROM dbo\.Organizations/, [
+      { id: "ORG-001", name: "Origo", type: "Customer", status: "Active", isTest: false, locale: "is" },
+      { id: "ORG-003", name: "Test Co", type: "Customer", status: "Onboarding", isTest: true, locale: "fr" },
+    ]],
+    [/FROM dbo\.Memberships/, [
+      { userId: "AAAAAAAA-0000-4000-8000-000000000001", organizationId: "ORG-001", email: "jon@origo.is", displayName: "Jón", locale: "is", role: "Requester", preference: "Off" },
+      { userId: "AAAAAAAA-0000-4000-8000-000000000002", organizationId: "ORG-001", email: "ann@origo.is", displayName: "Ann", locale: "de", role: "Viewer", preference: null },
+    ]],
+    [/FROM dbo\.CommunicationContacts/, [
+      { id: "CCCCCCCC-0000-4000-8000-000000000001", organizationId: "ORG-001", userId: null, email: "cio@origo.is", displayName: "CIO", locale: "is", topicsJson: '["product-updates","general"]', status: "Active", source: "Admin" },
+    ]],
+  ];
+  const calls: Array<{ text: string; inputs: Record<string, unknown> }> = [];
+  let running = false;
+  // Stands in for the pool. Like a transaction (atomicSql), it refuses a request while another is in flight (mssql: EREQINPROG).
+  const pool = {
+    request() {
+      const inputs: Record<string, unknown> = {};
+      const request = {
+        input(name: string, _type: unknown, value: unknown) { inputs[name] = value; return request; },
+        async query(text: string) {
+          if (running) throw new Error("EREQINPROG: Can't acquire connection for the request. There is another request in progress.");
+          running = true;
+          try {
+            await new Promise((resolve) => setImmediate(resolve));
+            calls.push({ text, inputs });
+            return { recordset: rows.find(([pattern]) => pattern.test(text))?.[1] ?? [] };
+          } finally {
+            running = false;
+          }
+        },
+      };
+      return request;
+    },
+  };
+  process.env.AZURE_SQL_SERVER = "fake-sql-server";
+  globalThis.pulseSqlPool = Promise.resolve(pool as unknown as import("mssql").ConnectionPool);
+  try {
+    const input = await loadAudienceInput("product-updates");
+    assert.deepEqual(input.organizations, [
+      { id: "ORG-001", name: "Origo", type: "Customer", status: "Active", isTest: false, locale: "is" },
+      { id: "ORG-003", name: "Test Co", type: "Customer", status: "Onboarding", isTest: true, locale: "en" },
+    ]);
+    assert.deepEqual(input.members, [
+      { userId: "AAAAAAAA-0000-4000-8000-000000000001", organizationId: "ORG-001", email: "jon@origo.is", displayName: "Jón", locale: "is", role: "Requester", preference: "Off" },
+      { userId: "AAAAAAAA-0000-4000-8000-000000000002", organizationId: "ORG-001", email: "ann@origo.is", displayName: "Ann", locale: "en", role: "Viewer", preference: null },
+    ]);
+    assert.deepEqual(input.contacts, [
+      { id: "CCCCCCCC-0000-4000-8000-000000000001", organizationId: "ORG-001", userId: null, email: "cio@origo.is", displayName: "CIO", locale: "is", topics: ["product-updates", "general"], status: "Active", source: "Admin", createdAt: "", updatedAt: "" },
+    ]);
+    assert.deepEqual([...input.suppressions], [["bounced@origo.is", "Bounced"]]);
+    assert.equal(calls.find((c) => /NotificationPreferences/.test(c.text))?.inputs.eventType, "communication.product-updates", "the preference join is bound to the topic's event type");
+  } finally {
+    delete process.env.AZURE_SQL_SERVER;
+    globalThis.pulseSqlPool = undefined;
+  }
 });

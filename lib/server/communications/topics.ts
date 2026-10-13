@@ -9,8 +9,11 @@ export const COMMUNICATION_TOPICS: CommunicationTopic[] = [
 export const MANDATORY_TOPICS = new Set<CommunicationTopic>(["security-advisories"]);
 export const TEMPLATE_KEYS: TemplateKey[] = ["product-update", "service-notice", "plain"];
 
-/** NotificationPreferences event type that carries a member's opt-in for a topic. */
-export function topicEventType(topic: CommunicationTopic): string {
+/**
+ * NotificationPreferences event type that carries a member's opt-in for a topic. The template literal return type is
+ * assignable to `NotificationEventType`, so a topic with no registered event type fails `tsc` where this is used.
+ */
+export function topicEventType(topic: CommunicationTopic): `communication.${CommunicationTopic}` {
   return `communication.${topic}`;
 }
 export function defaultTemplateForTopic(topic: CommunicationTopic): TemplateKey {
