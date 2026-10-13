@@ -258,3 +258,83 @@ export const communicationSettingsInputSchema = z
     boilerplate: z.object({ en: boilerplateSchema, is: boilerplateSchema }),
   })
   .refine((v) => !v.enabled || v.fromEmail !== "", { message: "fromEmail required when enabled" });
+export const httpsUrl = z.string().trim().url().max(2000).refine((v) => v.startsWith("https://"));
+const emailText = (max: number) => z.string().trim().max(max);
+export const localizedTextSchema = z.object({ en: emailText(200).min(1), is: emailText(200).optional() });
+const linkSchema = z.object({ label: emailText(120).min(1), url: httpsUrl });
+export const productUpdateBodySchema = z.object({
+  eyebrow: emailText(60).optional(),
+  title: emailText(140).min(1),
+  subtitle: emailText(200).optional(),
+  intro: emailText(2000).min(1),
+  highlightsLabel: emailText(60).optional(),
+  sections: z
+    .array(
+      z.object({
+        heading: emailText(120).min(1),
+        body: emailText(2000).min(1),
+        callout: z.object({ tone: z.enum(["warning", "info"]), label: emailText(80).optional(), text: emailText(600).min(1) }).optional(),
+        link: linkSchema.optional(),
+      }),
+    )
+    .min(1)
+    .max(8),
+  note: emailText(600).optional(),
+  cta: linkSchema.optional(),
+  signOff: emailText(200).optional(),
+});
+export const serviceNoticeBodySchema = z.object({
+  title: emailText(140).min(1),
+  summary: emailText(2000).min(1),
+  window: z.object({ startsAt: emailText(40).min(1), endsAt: emailText(40).min(1), timezone: emailText(40).min(1) }).optional(),
+  impact: emailText(1000).optional(),
+  actions: z.array(emailText(300).min(1)).max(10).default([]),
+  link: linkSchema.optional(),
+  contact: emailText(200).optional(),
+  signOff: emailText(200).optional(),
+});
+export const plainBodySchema = z.object({
+  title: emailText(140).min(1),
+  paragraphs: z.array(emailText(2000).min(1)).min(1).max(12),
+  cta: linkSchema.optional(),
+  signOff: emailText(200).optional(),
+});
+export const templateBodySchemas = {
+  "product-update": productUpdateBodySchema,
+  "service-notice": serviceNoticeBodySchema,
+  plain: plainBodySchema,
+} as const;
+export const audienceSpecSchema = z.object({
+  organizations: z.union([z.literal("all-customers"), z.array(z.string().min(1).max(32)).max(500)]),
+  includeOnboarding: z.boolean().default(false),
+  includeTestOrganizations: z.boolean().default(false),
+  includeMembers: z.boolean().default(true),
+  memberRoles: z.array(z.enum(["Company admin", "Requester", "Viewer"])).min(1).max(3).nullable().default(null),
+  includeContacts: z.boolean().default(true),
+  includeInternalCopy: z.boolean().default(false),
+});
+export const communicationInputSchema = z
+  .object({
+    templateKey: z.enum(["product-update", "service-notice", "plain"]),
+    topic: z.enum(["product-updates", "service-notices", "security-advisories", "general"]),
+    title: shortText.min(1),
+    content: z.object({
+      subject: localizedTextSchema,
+      preheader: localizedTextSchema.partial({ en: true }).optional(),
+      body: z.object({ en: z.record(z.string(), z.unknown()), is: z.record(z.string(), z.unknown()).optional() }),
+    }),
+    audience: audienceSpecSchema,
+    fromReleaseId: z.string().regex(/^REL-\d+$/).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const schema = templateBodySchemas[value.templateKey];
+    for (const locale of ["en", "is"] as const) {
+      const body = value.content.body[locale];
+      if (body === undefined) continue;
+      const result = schema.safeParse(body);
+      if (!result.success)
+        ctx.addIssue({ code: "custom", path: ["content", "body", locale], message: "invalid template body" });
+    }
+  });
+export const communicationSendInputSchema = z.object({ scheduledAt: z.iso.datetime().optional() }).strict();
+export const communicationTestSendSchema = z.object({ extraRecipients: z.array(emailAddress).max(5).default([]) }).strict();

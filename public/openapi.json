@@ -4149,6 +4149,73 @@
           "sizeBytes"
         ]
       },
+      "audienceSpecSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "organizations": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "all-customers"
+              },
+              {
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                }
+              }
+            ]
+          },
+          "includeOnboarding": {
+            "default": false,
+            "type": "boolean"
+          },
+          "includeTestOrganizations": {
+            "default": false,
+            "type": "boolean"
+          },
+          "includeMembers": {
+            "default": true,
+            "type": "boolean"
+          },
+          "memberRoles": {
+            "default": null,
+            "anyOf": [
+              {
+                "minItems": 1,
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "Company admin",
+                    "Requester",
+                    "Viewer"
+                  ]
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "includeContacts": {
+            "default": true,
+            "type": "boolean"
+          },
+          "includeInternalCopy": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "organizations"
+        ]
+      },
       "commentInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -4180,6 +4247,185 @@
           "body",
           "visibility"
         ]
+      },
+      "communicationInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "templateKey": {
+            "type": "string",
+            "enum": [
+              "product-update",
+              "service-notice",
+              "plain"
+            ]
+          },
+          "topic": {
+            "type": "string",
+            "enum": [
+              "product-updates",
+              "service-notices",
+              "security-advisories",
+              "general"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "content": {
+            "type": "object",
+            "properties": {
+              "subject": {
+                "type": "object",
+                "properties": {
+                  "en": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "is": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "en"
+                ]
+              },
+              "preheader": {
+                "type": "object",
+                "properties": {
+                  "en": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "is": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              },
+              "body": {
+                "type": "object",
+                "properties": {
+                  "en": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  },
+                  "is": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "en"
+                ]
+              }
+            },
+            "required": [
+              "subject",
+              "body"
+            ]
+          },
+          "audience": {
+            "type": "object",
+            "properties": {
+              "organizations": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "all-customers"
+                  },
+                  {
+                    "maxItems": 500,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32
+                    }
+                  }
+                ]
+              },
+              "includeOnboarding": {
+                "default": false,
+                "type": "boolean"
+              },
+              "includeTestOrganizations": {
+                "default": false,
+                "type": "boolean"
+              },
+              "includeMembers": {
+                "default": true,
+                "type": "boolean"
+              },
+              "memberRoles": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "Company admin",
+                        "Requester",
+                        "Viewer"
+                      ]
+                    }
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "includeContacts": {
+                "default": true,
+                "type": "boolean"
+              },
+              "includeInternalCopy": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "organizations"
+            ]
+          },
+          "fromReleaseId": {
+            "type": "string",
+            "pattern": "^REL-\\d+$"
+          }
+        },
+        "required": [
+          "templateKey",
+          "topic",
+          "title",
+          "content",
+          "audience"
+        ]
+      },
+      "communicationSendInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "scheduledAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "additionalProperties": false
       },
       "communicationSettingsInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4368,6 +4614,24 @@
           "boilerplate"
         ]
       },
+      "communicationTestSendSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "extraRecipients": {
+            "default": [],
+            "maxItems": 5,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 320,
+              "format": "email",
+              "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "draftInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -4528,6 +4792,24 @@
           }
         }
       },
+      "localizedTextSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "en": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "is": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "en"
+        ]
+      },
       "organizationInputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -4593,6 +4875,182 @@
           "users",
           "requests",
           "authentication"
+        ]
+      },
+      "plainBodySchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "paragraphs": {
+            "minItems": 1,
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "cta": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 2000,
+                "format": "uri"
+              }
+            },
+            "required": [
+              "label",
+              "url"
+            ]
+          },
+          "signOff": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "title",
+          "paragraphs"
+        ]
+      },
+      "productUpdateBodySchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "eyebrow": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "intro": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "highlightsLabel": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "sections": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "heading": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "body": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "callout": {
+                  "type": "object",
+                  "properties": {
+                    "tone": {
+                      "type": "string",
+                      "enum": [
+                        "warning",
+                        "info"
+                      ]
+                    },
+                    "label": {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 600
+                    }
+                  },
+                  "required": [
+                    "tone",
+                    "text"
+                  ]
+                },
+                "link": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120
+                    },
+                    "url": {
+                      "type": "string",
+                      "maxLength": 2000,
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "url"
+                  ]
+                }
+              },
+              "required": [
+                "heading",
+                "body"
+              ]
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "cta": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 2000,
+                "format": "uri"
+              }
+            },
+            "required": [
+              "label",
+              "url"
+            ]
+          },
+          "signOff": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "title",
+          "intro",
+          "sections"
         ]
       },
       "releaseInputSchema": {
@@ -4972,6 +5430,92 @@
           "confidence",
           "effort",
           "rationale"
+        ]
+      },
+      "serviceNoticeBodySchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "startsAt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "endsAt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "startsAt",
+              "endsAt",
+              "timezone"
+            ]
+          },
+          "impact": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "actions": {
+            "default": [],
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "link": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "url": {
+                "type": "string",
+                "maxLength": 2000,
+                "format": "uri"
+              }
+            },
+            "required": [
+              "label",
+              "url"
+            ]
+          },
+          "contact": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "signOff": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "title",
+          "summary"
         ]
       },
       "settingsInputSchema": {
