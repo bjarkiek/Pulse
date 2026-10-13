@@ -842,6 +842,31 @@ test("audience: a member who is Off in any selected organisation is suppressed w
     assert.deepEqual(states(run({ ...bothSelected, memberRoles: ["Company admin"] }, "product-updates", members)), ["Suppressed:PreferenceOff"], `${order}: an Off row counts where the role filter drops it`);
 });
 
+test("audience: a member's Off also stops a contact row with the same address, with members switched off or filtered out; a mandatory topic still sends it", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [member("u1", "ORG-001", "viewer@origo.is", { role: "Viewer", preference: "Off" })],
+    contacts: [
+      contact("c1", "ORG-001", "Viewer@Origo.is", ["product-updates", "security-advisories"]), // the member's address, in another case
+      contact("c2", "ORG-001", "other@origo.is", ["product-updates", "security-advisories"]),
+    ],
+    suppressions: new Map(),
+  };
+  const run = (audience: AudienceSpec, topic: CommunicationTopic) => resolveAudience(audience, topic, input, openSettings);
+  const states = (result: ReturnType<typeof run>) => result.recipients.map((r) => `${r.email}:${r.source}:${r.state}:${r.suppressedReason ?? ""}`);
+  const audiences: Array<[string, AudienceSpec]> = [
+    ["members switched off", { ...spec, includeMembers: false }],
+    ["the role filter drops the member row", { ...spec, memberRoles: ["Company admin"] }],
+  ];
+  for (const [why, audience] of audiences) {
+    const product = run(audience, "product-updates");
+    assert.deepEqual(states(product), ["viewer@origo.is:Contact:Suppressed:PreferenceOff", "other@origo.is:Contact:Queued:"], why);
+    assert.deepEqual(product.breakdown.suppressed, { PreferenceOff: 1 }, why);
+    assert.equal(product.breakdown.sendable, 1, why);
+    assert.deepEqual(states(run(audience, "security-advisories")), ["viewer@origo.is:Contact:Queued:", "other@origo.is:Contact:Queued:"], `${why}: a mandatory topic ignores Off`);
+  }
+});
+
 test("topics: every communication topic maps to a registered notification event type with the same mandatory flag", async () => {
   // Compile-time half: a topic whose event type is no NotificationEventType stops `tsc`, not only this test.
   const eventTypes: readonly NotificationEventType[] = COMMUNICATION_TOPICS.map(topicEventType);

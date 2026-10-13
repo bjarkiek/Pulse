@@ -29,10 +29,11 @@ function domainAllowed(email: string, allowed: string[]) {
 
 /**
  * Pure: no I/O. Members come first, then contacts, then the optional internal copy, and the first row for an address wins
- * (so a member beats a contact). A member who is Off for the topic in any selected organisation (even on a row the role filter
- * drops) is kept as `Suppressed/PreferenceOff`, whichever of their rows comes first, unless the topic is mandatory; the global
- * suppression list and safe mode then suppress what is left. Suppressed rows stay in the result so the review can show them,
- * but only Queued rows are sent and count against `maxRecipientsPerCampaign`.
+ * (so a member beats a contact). An address that belongs to a member who is Off for the topic in any selected organisation (even
+ * on a row the role filter drops, and whether or not members are included) is kept as `Suppressed/PreferenceOff` when it is merged
+ * as a member or as a contact, unless the topic is mandatory; the global suppression list and safe mode then suppress what is
+ * left. Suppressed rows stay in the result so the review can show them, but only Queued rows are sent and count against
+ * `maxRecipientsPerCampaign`.
  */
 export function resolveAudience(
   spec: AudienceSpec,
@@ -58,31 +59,32 @@ export function resolveAudience(
     recipient.suppressedReason = reason;
     breakdown.suppressed[reason] = (breakdown.suppressed[reason] || 0) + 1;
   };
-  const add = (recipient: AudienceRecipient, preferenceOff: boolean) => {
+  // Consent must not depend on row order or on the list an address arrives by: a member who is Off in any selected organisation
+  // is Off whichever of their rows comes first, and a contact with the same address is Off with them (even when members are not included).
+  const optedOut = new Set<string>();
+  for (const m of input.members) if (m.preference === "Off" && selected.has(m.organizationId)) optedOut.add(normalise(m.email));
+  const add = (recipient: AudienceRecipient, honourOptOut: boolean) => {
     const key = normalise(recipient.email);
     recipient.email = key;
     if (byEmail.has(key)) return false;
-    if (preferenceOff && !mandatory) suppress(recipient, "PreferenceOff");
+    if (honourOptOut && !mandatory && optedOut.has(key)) suppress(recipient, "PreferenceOff");
     byEmail.set(key, recipient);
     return true;
   };
-  if (spec.includeMembers) {
-    // Consent must not depend on row order: a member who is Off in any selected organisation is Off, whichever of their rows comes first.
-    const optedOut = new Set<string>();
-    for (const m of input.members) if (m.preference === "Off" && selected.has(m.organizationId)) optedOut.add(normalise(m.email));
+  if (spec.includeMembers)
     for (const m of input.members) {
       if (!selected.has(m.organizationId)) continue;
       if (roles && !roles.includes(m.role)) continue;
-      if (add({ organizationId: m.organizationId, email: m.email, displayName: m.displayName, locale: m.locale, source: "Member", userId: m.userId, contactId: null, state: "Queued", suppressedReason: null }, optedOut.has(normalise(m.email))))
+      if (add({ organizationId: m.organizationId, email: m.email, displayName: m.displayName, locale: m.locale, source: "Member", userId: m.userId, contactId: null, state: "Queued", suppressedReason: null }, true))
         breakdown.members++;
     }
-  }
   if (spec.includeContacts)
     for (const c of input.contacts) {
       if (!selected.has(c.organizationId) || c.status !== "Active" || !c.topics.includes(topic)) continue;
-      if (add({ organizationId: c.organizationId, email: c.email, displayName: c.displayName, locale: c.locale, source: "Contact", userId: c.userId, contactId: c.id, state: "Queued", suppressedReason: null }, false))
+      if (add({ organizationId: c.organizationId, email: c.email, displayName: c.displayName, locale: c.locale, source: "Contact", userId: c.userId, contactId: c.id, state: "Queued", suppressedReason: null }, true))
         breakdown.contacts++;
     }
+  // The staff copy is deliberate, so the opt-out set does not apply to it (an address already merged as a member or contact keeps that row).
   if (spec.includeInternalCopy)
     for (const m of input.members) {
       if (!internalIds.has(m.organizationId)) continue;
