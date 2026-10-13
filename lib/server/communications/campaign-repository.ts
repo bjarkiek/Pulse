@@ -114,7 +114,7 @@ export async function createCommunication(identity: PulseIdentity, input: Partia
   const now = new Date().toISOString();
   if (!isAzureSqlConfigured()) {
     const record: CommunicationRecord = {
-      id: nextMemoryPublicId(), templateKey: parsed.templateKey, topic: parsed.topic, title: parsed.title, content: parsed.content as CommunicationRecord["content"],
+      id: nextMemoryPublicId(), templateKey: parsed.templateKey, topic: parsed.topic, title: parsed.title, content: structuredClone(parsed.content) as CommunicationRecord["content"],
       audience: parsed.audience, status: "Draft", recipientCount: 0, releaseId: parsed.fromReleaseId, createdBy: identity.name, createdAt: now, updatedAt: now,
     };
     memoryCommunications().push(record);
@@ -143,7 +143,7 @@ export async function updateCommunication(identity: PulseIdentity, id: string, i
   if (current.status !== "Draft") throw new Error("INVALID_COMMUNICATION_NOT_EDITABLE");
   if (!isAzureSqlConfigured()) {
     const item = memoryCommunications().find((c) => c.id === id)!;
-    Object.assign(item, { templateKey: parsed.templateKey, topic: parsed.topic, title: parsed.title, content: parsed.content, audience: parsed.audience, updatedAt: new Date().toISOString() });
+    Object.assign(item, { templateKey: parsed.templateKey, topic: parsed.topic, title: parsed.title, content: structuredClone(parsed.content), audience: parsed.audience, updatedAt: new Date().toISOString() });
     memoryAuditEvent(identity, "communication.updated", "Communication", id, { title: item.title }, { title: current.title });
     return (await addVersions("Communications", [structuredClone(item)]))[0];
   }

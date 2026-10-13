@@ -1242,6 +1242,25 @@ test("campaigns: a create or an edit takes the draft fields only, never an id, s
   assert.deepEqual((await listCommunications(PM)).map((c) => c.id), ["COM-001"]);
 });
 
+test("campaigns: a draft keeps its own copy of the content and audience it was created or edited with", async () => {
+  const content = structuredClone(productUpdate);
+  const audience = { ...draftInput.audience, organizations: ["ORG-001"] };
+  const created = await createCommunication(PM, { ...draftInput, content, audience });
+  content.body.en.sections[0].heading = "Changed by the caller afterwards";
+  audience.organizations.push("ORG-002");
+  const stored = await getCommunication(PM, created.id);
+  assert.equal((stored.content.body.en as { sections: Array<{ heading: string }> }).sections[0].heading, "New built-in Admin Report");
+  assert.deepEqual(stored.audience.organizations, ["ORG-001"]);
+  const edit = structuredClone(productUpdate);
+  const editedAudience = { ...draftInput.audience, organizations: ["ORG-003"] };
+  await updateCommunication(PM, created.id, { ...draftInput, content: edit, audience: editedAudience });
+  edit.body.en.sections[0].heading = "Changed by the caller afterwards";
+  editedAudience.organizations.push("ORG-004");
+  const edited = await getCommunication(PM, created.id);
+  assert.equal((edited.content.body.en as { sections: Array<{ heading: string }> }).sections[0].heading, "New built-in Admin Report");
+  assert.deepEqual(edited.audience.organizations, ["ORG-003"]);
+});
+
 test("campaigns: a copy of a campaign whose title is at the limit still fits it, and never ends in half an emoji", async () => {
   const created = await createCommunication(PM, { ...draftInput, title: "T".repeat(200) });
   const copy = await duplicateCommunication(PM, created.id);
