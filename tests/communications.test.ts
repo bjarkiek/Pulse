@@ -30,7 +30,7 @@ import {
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
 import { loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
 import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
-import type { CommunicationTopic } from "../lib/server/communications/types";
+import type { AudienceSpec, CommunicationTopic } from "../lib/server/communications/types";
 import { setUserLocaleById } from "../lib/server/identity-repository";
 import {
   listNotificationPreferences, notificationEventTypes, saveNotificationPreference, type NotificationEventType,
@@ -775,6 +775,46 @@ test("audience: size limit and internal copy", () => {
   const withInternal = resolveAudience({ ...spec, includeInternalCopy: true }, "general", input, openSettings);
   assert.equal(withInternal.breakdown.internal, 1);
   assert.equal(withInternal.breakdown.sendable, 7);
+});
+
+test("audience: the member and contact switches work, only Active contacts count and the internal copy takes staff only", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [member("u1", "ORG-001", "m@origo.is"), member("u2", "ORG-002", "onboarding@advania.is"), member("staff", "ORG-INTERNAL", "staff@datacentral.ai")],
+    contacts: [
+      contact("c1", "ORG-001", "c@origo.is"),
+      contact("c2", "ORG-001", "gone@origo.is", ["product-updates"], { status: "Unsubscribed" }),
+      contact("c3", "ORG-001", "bounced@origo.is", ["product-updates"], { status: "Bounced" }),
+    ],
+    suppressions: new Map(),
+  };
+  const emails = (audience: AudienceSpec) => resolveAudience(audience, "product-updates", input, openSettings).recipients.map((r) => r.email);
+  assert.deepEqual(emails(spec), ["m@origo.is", "c@origo.is"], "Unsubscribed and Bounced contacts are left out");
+  assert.deepEqual(emails({ ...spec, includeMembers: false }), ["c@origo.is"]);
+  assert.deepEqual(emails({ ...spec, includeContacts: false }), ["m@origo.is"]);
+  assert.deepEqual(emails({ ...spec, includeInternalCopy: true }), ["m@origo.is", "c@origo.is", "staff@datacentral.ai"], "a member of an excluded company is not a staff copy");
+  assert.deepEqual(emails({ ...spec, includeMembers: false, includeContacts: false, includeInternalCopy: true }), ["staff@datacentral.ai"]);
+});
+
+test("audience: the size limit allows exactly the limit and counts sendable rows only; every address is counted once; a suppression beats a mandatory topic", () => {
+  const input: AudienceInput = {
+    organizations: orgs,
+    members: [
+      ...Array.from({ length: 5 }, (_, i) => member(`u${i}`, "ORG-001", `u${i}@origo.is`)),
+      member("off", "ORG-001", "off@origo.is", { preference: "Off" }),
+      member("bounced", "ORG-001", "bounced@origo.is"),
+      member("both", "ORG-001", "both@origo.is", { preference: "Off" }),
+    ],
+    contacts: [], suppressions: new Map([["bounced@origo.is", "Bounced"], ["both@origo.is", "Unsubscribed"]]),
+  };
+  const atLimit = resolveAudience(spec, "product-updates", input, { ...openSettings, maxRecipientsPerCampaign: 5 });
+  assert.equal(atLimit.breakdown.sendable, 5, "three suppressed rows do not count against the limit");
+  assert.throws(() => resolveAudience(spec, "product-updates", input, { ...openSettings, maxRecipientsPerCampaign: 4 }), /INVALID_AUDIENCE_TOO_LARGE/);
+  assert.equal(atLimit.breakdown.total, 8);
+  assert.deepEqual(atLimit.breakdown.suppressed, { PreferenceOff: 2, Bounced: 1 }, "an address that is Off and listed is reported once, as PreferenceOff");
+  const security = resolveAudience(spec, "security-advisories", input, openSettings);
+  assert.equal(security.breakdown.sendable, 6, "a mandatory topic ignores Off");
+  assert.deepEqual(security.breakdown.suppressed, { Bounced: 1, Unsubscribed: 1 }, "but never the suppression list");
 });
 
 test("topics: every communication topic maps to a registered notification event type with the same mandatory flag", async () => {
