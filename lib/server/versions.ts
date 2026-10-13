@@ -2,7 +2,7 @@ import type { PulseIdentity } from "@/lib/domain";
 import { atomicSql, getSqlPool, isContentSqlActive, sql } from "./database";
 import { requireMembership, requirePublishRole } from "./authorization";
 
-export type VersionedEntity = "Requests" | "Ideas" | "Releases";
+export type VersionedEntity = "Requests" | "Ideas" | "Releases" | "Communications";
 const memoryVersions = new Map<string, number>();
 const memoryLocks = new Set<string>();
 export async function addVersions<T extends { id: string }>(

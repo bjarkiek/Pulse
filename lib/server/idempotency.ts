@@ -31,7 +31,7 @@ const digest = (value: string) =>
 
 async function authorize(identity: PulseIdentity, operation: string) {
   await requireMembership(identity);
-  if (/^(idea\.|release\.|triage\.)/.test(operation))
+  if (/^(idea\.|release\.|triage\.|communication\.)/.test(operation))
     await requirePublishRole(identity);
   if (operation.startsWith("webhook-"))
     await requireInternalRole(identity, ["System admin"]);

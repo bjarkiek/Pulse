@@ -32,7 +32,7 @@ declare global {
   var pulseMemoryOrganizations: OrganizationRecord[] | undefined;
   var pulseMemoryUsers: UserRecord[] | undefined;
 }
-function organizations() {
+export function organizations() {
   globalThis.pulseMemoryOrganizations ||= [
     {
       id: "ORG-001",

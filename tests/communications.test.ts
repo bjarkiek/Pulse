@@ -12,6 +12,8 @@ import {
 } from "../lib/server/communications/settings";
 import { escapeHtml, inlineToText, renderInline } from "../lib/server/communications/html";
 import { getTemplate, renderCommunication } from "../lib/server/communications/templates/index";
+import { executeIdempotent } from "../lib/server/idempotency";
+import { checkedMutation } from "../lib/server/versions";
 import {
   communicationInputSchema,
   communicationSendInputSchema,
@@ -333,4 +335,15 @@ test("assets: the email logo is a PNG at the 2x width the layout shows at 170px"
   assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
   assert.equal(png.readUInt32BE(16), 340, "IHDR width");
   assert.ok(png.readUInt32BE(20) > 20 && png.readUInt32BE(20) < 120, "IHDR height is a single-line wordmark");
+});
+
+test("idempotency: communication.* operations require a publish role", async () => {
+  const request = new Request("https://pulse.test/api/v1/internal/communications/COM-001/send", {
+    method: "POST", headers: { "idempotency-key": "communications-test-key" }, body: "{}",
+  });
+  await assert.rejects(executeIdempotent(request, CONTRIBUTOR, "communication.send:COM-001", 200, async () => ({})), /FORBIDDEN/);
+});
+
+test("versions: Communications is a versioned entity", async () => {
+  await assert.rejects(checkedMutation(PM, "Communications", "COM-001", null, async () => ({})), /PRECONDITION_REQUIRED/);
 });
