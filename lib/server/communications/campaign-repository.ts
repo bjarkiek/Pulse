@@ -1,4 +1,4 @@
-import { communicationInputSchema } from "@/lib/contracts";
+import { communicationInputSchema, httpsUrl } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
 import type { z } from "zod";
 import { requireInternalRole, requirePublishRole } from "../authorization";
@@ -64,6 +64,26 @@ async function loadOne(publicId: string): Promise<CommunicationRecord> {
   return fromRow(result.recordset[0]);
 }
 
+/**
+ * The most each pre-filled field may hold, as `communicationInputSchema` has it: the working title, the subject, and the
+ * product-update body (title, subtitle, intro, section heading and text, and the number of sections).
+ */
+const LIMITS = { workingTitle: 200, subject: 200, title: 140, subtitle: 200, intro: 2000, heading: 120, body: 2000, sections: 8 };
+
+/** `text` cut to at most `max` UTF-16 units, never inside a surrogate pair. */
+const cut = (text: string, max: number) => text.slice(0, max).replace(/[\uD800-\uDBFF]$/, "");
+
+/** Trimmed `text`; one that is longer than `max` is cut short with an ellipsis that still fits inside the limit. */
+function fit(text: string, max: number) {
+  const trimmed = text.trim();
+  return trimmed.length <= max ? trimmed : `${cut(trimmed, max - 1).trimEnd()}…`;
+}
+
+/**
+ * Product-update content drafted from a release (spec 7.2). A release can hold more than a mail takes (a 5000-character summary,
+ * 200-character idea titles, any number of ideas), so every text is fitted to its limit and only the first eight ideas become
+ * sections: a draft from any release saves, and the editor shows the result for the PM to finish.
+ */
 export async function prefillFromRelease(identity: PulseIdentity, releaseId: string): Promise<Pick<CommunicationInput, "templateKey" | "topic" | "title" | "content">> {
   const release = (await listReleases(identity, true)).find((r) => r.id === releaseId);
   if (!release) throw new Error("NOT_FOUND");
@@ -71,20 +91,26 @@ export async function prefillFromRelease(identity: PulseIdentity, releaseId: str
   const sections = release.ideaIds
     .map((ideaId) => ideas.find((i) => i.id === ideaId))
     .filter((i): i is NonNullable<typeof i> => Boolean(i))
-    .map((idea) => ({ heading: idea.publishedTitle || idea.internalTitle, body: idea.releaseNotes || idea.publishedDescription || idea.internalDescription }));
+    .slice(0, LIMITS.sections)
+    .map((idea) => ({
+      heading: fit(idea.publishedTitle || idea.internalTitle, LIMITS.heading),
+      body: fit(idea.releaseNotes || idea.publishedDescription || idea.internalDescription, LIMITS.body),
+    }));
+  const link = release.documentationUrl?.trim();
   return {
     templateKey: "product-update" as const,
     topic: "product-updates" as const,
-    title: release.title,
+    title: fit(release.title, LIMITS.workingTitle),
     content: {
-      subject: { en: release.title },
+      subject: { en: fit(release.title, LIMITS.subject) },
       body: {
         en: {
-          title: release.title,
-          subtitle: release.availability,
-          intro: release.summary,
-          sections: sections.length ? sections : [{ heading: release.title, body: release.summary }],
-          ...(release.documentationUrl ? { cta: { label: "Open the release notes", url: release.documentationUrl } } : {}),
+          title: fit(release.title, LIMITS.title),
+          subtitle: fit(release.availability, LIMITS.subtitle),
+          intro: fit(release.summary, LIMITS.intro),
+          sections: sections.length ? sections : [{ heading: fit(release.title, LIMITS.heading), body: fit(release.summary, LIMITS.body) }],
+          // A link the call to action cannot take (not https, or over its length limit) is left out rather than failing the draft.
+          ...(link && httpsUrl.safeParse(link).success ? { cta: { label: "Open the release notes", url: link } } : {}),
         },
       },
     },
@@ -162,10 +188,10 @@ export async function updateCommunication(identity: PulseIdentity, id: string, i
   });
 }
 
-/** The working title is limited to 200 characters (the title schema and the column). A copy keeps its whole suffix and gives up the end of a title that would otherwise not fit. */
+/** A copy keeps its whole suffix and gives up the end of a title that would otherwise pass the working title limit (the title schema and the column). */
 function copyTitle(title: string) {
   const suffix = " (copy)";
-  return `${title.slice(0, 200 - suffix.length).replace(/[\uD800-\uDBFF]$/, "")}${suffix}`;
+  return `${cut(title, LIMITS.workingTitle - suffix.length)}${suffix}`;
 }
 
 export async function duplicateCommunication(identity: PulseIdentity, id: string) {

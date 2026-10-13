@@ -1028,11 +1028,14 @@ test("campaigns: pre-fill from a published release", async () => {
 });
 
 /** A release with one idea per entry, the way the pre-fill finds them; `publish: false` leaves the ideas without release notes. */
-async function makeRelease(ideas: Array<{ title: string; description: string }>, { publish = true, documentationUrl }: { publish?: boolean; documentationUrl?: string } = {}) {
+async function makeRelease(
+  ideas: Array<{ title: string; description: string }>,
+  { publish = true, documentationUrl, title = "DataCentral 3.1.0", summary = "Summary.", availability = "General availability" }: { publish?: boolean; documentationUrl?: string; title?: string; summary?: string; availability?: string } = {},
+) {
   const ideaIds: string[] = [];
   for (const idea of ideas)
     ideaIds.push((await createIdea(PM, { internalTitle: idea.title, internalDescription: idea.description, area: "Administration" } as never)).id);
-  const release = await createRelease(PM, { title: "DataCentral 3.1.0", date: "2026-11-01", summary: "Summary.", availability: "General availability", ...(documentationUrl ? { documentationUrl } : {}), ideaIds });
+  const release = await createRelease(PM, { title, date: "2026-11-01", summary, availability, ...(documentationUrl ? { documentationUrl } : {}), ideaIds });
   if (publish) await publishRelease(PM, release.id);
   return release;
 }
@@ -1216,6 +1219,60 @@ test("campaigns: pre-fill gives a release whose ideas are gone one section of it
   assert.deepEqual(prefill.content.subject, { en: "DataCentral 3.2.0" });
   await assert.rejects(prefillFromRelease(PM, "REL-404"), /NOT_FOUND/);
   await assert.rejects(createCommunication(PM, { fromReleaseId: "REL-404" }), /NOT_FOUND/);
+});
+
+type PrefilledBody = { title: string; subtitle: string; intro: string; sections: Array<{ heading: string; body: string }>; cta?: unknown };
+const prefilledBody = async (releaseId: string) => (await prefillFromRelease(PM, releaseId)).content.body.en as PrefilledBody;
+
+test("campaigns: a pre-fill always fits the content schema: long texts end in an ellipsis inside their limit and only the first eight ideas become sections", async () => {
+  const ideas = Array.from({ length: 9 }, (_, i) => ({ title: `Idea ${i + 1} ${"t".repeat(190)}`, description: `Idea ${i + 1} ${"d".repeat(2500)}` }));
+  const title = `DataCentral ${"V".repeat(188)}`; // 200 characters, the most a release title can have
+  const summary = `${"S".repeat(4999)}.`; // 5000 characters, the most a release summary can have
+  const release = await makeRelease(ideas, { title, summary });
+  const prefill = await prefillFromRelease(PM, release.id);
+  const parsed = communicationInputSchema.safeParse({ ...prefill, audience: { organizations: "all-customers" } });
+  assert.equal(parsed.success, true, JSON.stringify(parsed.error?.issues));
+  const body = prefill.content.body.en as PrefilledBody;
+  assert.equal(body.title, `${title.slice(0, 139)}…`);
+  assert.equal(body.intro, `${summary.slice(0, 1999)}…`);
+  assert.deepEqual(body.sections.map((s) => s.heading.slice(0, 7)), [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `Idea ${n} `), "the first eight ideas, in order; the ninth is dropped");
+  assert.ok(body.sections.every((s) => s.heading.length === 120 && s.heading.endsWith("…") && s.body.length === 2000 && s.body.endsWith("…")));
+  assert.deepEqual([prefill.title, prefill.content.subject.en], [title, title], "the 200 characters of the title fit the subject and the working title");
+  assert.equal(body.subtitle, "General availability");
+  const created = await createCommunication(PM, { fromReleaseId: release.id });
+  assert.deepEqual([created.releaseId, created.content], [release.id, prefill.content]);
+  assert.equal(created.status, "Draft");
+  // The single section a release gets when none of its ideas can be found is fitted too.
+  const orphan = await createRelease(PM, { title, date: "2026-12-01", summary, availability: "General availability", ideaIds: ["IDEA-9999"] });
+  assert.deepEqual((await prefilledBody(orphan.id)).sections, [{ heading: `${title.slice(0, 119)}…`, body: `${summary.slice(0, 1999)}…` }]);
+  assert.equal((await createCommunication(PM, { fromReleaseId: orphan.id })).releaseId, orphan.id);
+});
+
+test("campaigns: a pre-fill leaves text that fits alone, cuts only past the limit, and cuts cleanly", async () => {
+  const ideas = Array.from({ length: 8 }, (_, i) => ({ title: i === 0 ? "h".repeat(120) : `Idea ${i + 1}`, description: i === 0 ? "b".repeat(2000) : "Short." }));
+  const exact = await prefilledBody((await makeRelease(ideas, { title: "T".repeat(140), summary: "s".repeat(2000), availability: "A".repeat(200), publish: false })).id);
+  assert.deepEqual(
+    [exact.title, exact.subtitle, exact.intro, exact.sections.length, exact.sections[0]],
+    ["T".repeat(140), "A".repeat(200), "s".repeat(2000), 8, { heading: "h".repeat(120), body: "b".repeat(2000) }], "text at its limit and eight sections are not touched",
+  );
+  const padded = await makeRelease([{ title: "Admin report", description: "Built-in admin report." }], { summary: "s".repeat(2000) });
+  padded.summary = `  ${padded.summary}\n`; // hand-edited data: the schema trims white space before it counts characters, and so does the pre-fill
+  assert.equal((await prefilledBody(padded.id)).intro, "s".repeat(2000));
+  const over = await prefilledBody((await makeRelease([{ title: "h".repeat(121), description: "b".repeat(2001) }], { title: "T".repeat(141), summary: "s".repeat(2001), publish: false })).id);
+  assert.deepEqual([over.title, over.intro, over.sections[0]], [`${"T".repeat(139)}…`, `${"s".repeat(1999)}…`, { heading: `${"h".repeat(119)}…`, body: `${"b".repeat(1999)}…` }], "one character over the limit is cut to the limit");
+  const clean = await prefilledBody((await makeRelease([
+    { title: `${"x".repeat(118)} yyyyy`, description: "A cut after a space leaves no space before the ellipsis." },
+    { title: `${"x".repeat(118)}\u{1F600}\u{1F600}`, description: "A cut inside an emoji drops the emoji." },
+  ], { publish: false })).id);
+  assert.deepEqual(clean.sections.map((s) => s.heading), [`${"x".repeat(118)}…`, `${"x".repeat(118)}…`]);
+});
+
+test("campaigns: a documentation URL the call to action cannot take is left out of the pre-fill instead of failing the draft", async () => {
+  const release = await makeRelease([{ title: "Admin report", description: "Built-in admin report." }], { documentationUrl: `https://docs.datacentral.ai/${"a".repeat(2000)}` });
+  const prefill = await prefillFromRelease(PM, release.id);
+  assert.equal("cta" in (prefill.content.body.en as PrefilledBody), false);
+  assert.equal(communicationInputSchema.safeParse({ ...prefill, audience: { organizations: "all-customers" } }).success, true);
+  assert.equal((await createCommunication(PM, { fromReleaseId: release.id })).releaseId, release.id);
 });
 
 test("campaigns: creating from a release records the link, and what the caller sends wins over the pre-fill", async () => {
