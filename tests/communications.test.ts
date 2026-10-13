@@ -24,7 +24,7 @@ import {
   importCompanyContacts, importContacts, listCompanyContacts, listContacts, parseContactLines, removeContact,
   saveCompanyContact, saveContact, removeCompanyContact,
 } from "../lib/server/communications/contact-repository";
-import { listUsers, organizations } from "../lib/server/admin-repository";
+import { listUsers, organizations, users } from "../lib/server/admin-repository";
 
 export const ADMIN: PulseIdentity = {
   id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com",
@@ -442,6 +442,30 @@ test("contacts: editing keeps the status and source a webhook set and the origin
   assert.equal(edited.createdAt, "2026-01-01T00:00:00.000Z");
   assert.ok(edited.updatedAt > "2026-01-01T00:00:00.000Z", "updatedAt moves forward");
   assert.deepEqual((await listContacts(PM, "ORG-002")).map((c) => [c.displayName, c.status]), [["Anna Á", "Unsubscribed"]]);
+});
+
+test("contacts: a contact links to a Pulse user only when that user belongs to the contact's own company, and the link follows e-mail changes", async () => {
+  await seedOrganizations();
+  const jon = "22222222-2222-4222-8222-222222222222";
+  const anna = "66666666-6666-4666-8666-666666666666";
+  users().push(
+    { id: jon, name: "Jón", email: "jon@origo.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Requester" }] },
+    { id: anna, name: "Anna", email: "anna@advania.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-002", role: "Company admin" }] },
+  );
+  // Origo's Company admin lists a colleague who is an Origo member, and an address that belongs to a Pulse user of another company.
+  const colleague = await saveCompanyContact(COMPANY_ADMIN, { email: "Jon@Origo.is", displayName: "Jón", locale: "is", topics: ["general"] });
+  assert.equal(colleague.userId, jon, "a member of the same company is linked");
+  const foreign = await saveCompanyContact(COMPANY_ADMIN, { email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  assert.equal(foreign.userId, null, "a Pulse user of another company is neither linked nor revealed");
+  // The same address inside that user's own company is linked.
+  const own = await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  assert.equal(own.userId, anna);
+  // Editing the address moves the link with it.
+  const moved = await saveCompanyContact(COMPANY_ADMIN, { id: colleague.id, email: "jon.new@origo.is", displayName: "Jón", locale: "is", topics: ["general"] });
+  assert.equal(moved.userId, null, "no member has the new address");
+  const back = await saveCompanyContact(COMPANY_ADMIN, { id: colleague.id, email: "jon@origo.is", displayName: "Jón", locale: "is", topics: ["general"] });
+  assert.equal(back.userId, jon);
+  assert.deepEqual((await listCompanyContacts(COMPANY_ADMIN)).map((c) => [c.email, c.userId]), [["jon@origo.is", jon], ["anna@advania.is", null]]);
 });
 
 test("contacts: input is validated and Company admins cannot name another organisation", async () => {

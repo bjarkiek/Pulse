@@ -1,6 +1,6 @@
 import { communicationContactInputSchema, companyContactInputSchema, communicationContactImportSchema } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
-import { organizations } from "../admin-repository";
+import { organizations, users } from "../admin-repository";
 import { requireInternalRole, requireMembership, requirePublishRole } from "../authorization";
 import { beginSqlTransaction, getSqlPool, isAzureSqlConfigured, sql } from "../database";
 import { emailSchema, parseInput } from "../validation";
@@ -18,6 +18,15 @@ export type ContactInput = {
 };
 
 const SELECT = `SELECT CAST(c.id AS nvarchar(36)) id,c.organization_id organizationId,CAST(c.user_id AS nvarchar(36)) userId,c.email,c.display_name displayName,c.locale,c.topics_json topicsJson,c.status,c.source,c.note,CONVERT(nvarchar(33),c.created_at,127) createdAt,CONVERT(nvarchar(33),c.updated_at,127) updatedAt FROM dbo.CommunicationContacts c`;
+/**
+ * A contact links to a Pulse user only through a membership of the contact's own organisation. The link comes back to the
+ * Company admin in `userId`, so a tenant-agnostic lookup would tell them which addresses are Pulse users elsewhere.
+ * Memory mode (`memberUserId`) and SQL (`MEMBER_LOOKUP`) apply the same rule, on create and on every edit.
+ */
+const MEMBER_LOOKUP = "(SELECT TOP(1) u.id FROM dbo.Users u JOIN dbo.Memberships m ON m.user_id=u.id AND m.organization_id=@org AND m.status='Active' WHERE u.email=@email)";
+function memberUserId(organizationId: string, email: string) {
+  return users().find((u) => u.email.toLowerCase() === email && u.memberships.some((m) => m.companyId === organizationId))?.id ?? null;
+}
 function fromRow(row: Record<string, unknown>): ContactRecord {
   return {
     id: String(row.id), organizationId: String(row.organizationId), userId: (row.userId as string) || null,
@@ -73,7 +82,7 @@ async function upsertContact(identity: PulseIdentity, input: ContactInput, sourc
     if (store.some((c) => c.id !== existing?.id && c.organizationId === parsed.organizationId && c.email === parsed.email))
       throw new Error("INVALID_CONTACT_EXISTS");
     const record: ContactRecord = {
-      id: existing?.id || crypto.randomUUID(), organizationId: parsed.organizationId, userId: existing?.userId ?? null,
+      id: existing?.id || crypto.randomUUID(), organizationId: parsed.organizationId, userId: memberUserId(parsed.organizationId, parsed.email),
       email: parsed.email, displayName: parsed.displayName, locale: parsed.locale, topics: [...new Set(parsed.topics)],
       status: existing?.status || "Active", source: existing?.source || source, note: parsed.note,
       createdAt: existing?.createdAt || now, updatedAt: now,
@@ -100,9 +109,9 @@ async function upsertContact(identity: PulseIdentity, input: ContactInput, sourc
       // An edit must never insert: an id that is unknown, soft-deleted or owned by another organisation matches nothing and ends in NOT_FOUND.
       .query(`MERGE dbo.CommunicationContacts target USING(SELECT @id id,@org organization_id) source
         ON target.id=source.id AND target.organization_id=source.organization_id AND target.deleted_at IS NULL
-        WHEN MATCHED THEN UPDATE SET email=@email,display_name=@name,locale=@locale,topics_json=@topics,note=@note,updated_at=SYSUTCDATETIME()
+        WHEN MATCHED THEN UPDATE SET email=@email,display_name=@name,locale=@locale,topics_json=@topics,note=@note,user_id=${MEMBER_LOOKUP},updated_at=SYSUTCDATETIME()
         WHEN NOT MATCHED AND @create=1 THEN INSERT(id,organization_id,user_id,email,display_name,locale,topics_json,source,note,created_by_user_id)
-          VALUES(@id,@org,(SELECT TOP(1) u.id FROM dbo.Users u WHERE u.email=@email),@email,@name,@locale,@topics,@source,@note,@actor)
+          VALUES(@id,@org,${MEMBER_LOOKUP},@email,@name,@locale,@topics,@source,@note,@actor)
         OUTPUT $action action;`);
     if (parsed.id && result.recordset[0]?.action !== "UPDATE") throw new Error("NOT_FOUND");
     await new sql.Request(scope.transaction)
