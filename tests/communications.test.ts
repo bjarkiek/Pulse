@@ -2058,6 +2058,8 @@ test("worker store: accepted rows are counted per UTC day, and a campaign comple
   const real = (id: string) => memoryDeliveries().filter((d) => d.communicationId === id && d.source !== "Test");
   assert.deepEqual(await store.completeCampaigns(new Date()), [], "both campaigns still have open rows");
   const [one, two, three, four] = real(first.id).map((d) => d.id);
+  await store.claimBatch(10); // the worker holds the first campaign's four real rows (three English, one Icelandic): only a row it holds becomes Accepted
+  await store.claimBatch(10);
   await store.markAccepted([one, two], "msg-a", new Date("2026-10-14T00:00:01Z"));
   await store.markAccepted([three, four], "msg-b", new Date("2026-10-13T23:59:59Z"));
   assert.equal(await store.acceptedToday(new Date("2026-10-14T12:00:00Z")), 2);
@@ -2557,11 +2559,11 @@ test("worker store, SQL: claim maps the batch of one campaign and locale; accept
 
     const at = new Date("2026-10-14T09:00:00Z");
     await store.markAccepted(["id-1", "id-2"], "msg-1", at);
-    const accept = calls.find((c) => /SET state='Accepted'/.test(c.text))!;
+    const accept = calls.find((c) => /THEN 'Accepted' ELSE state END/.test(c.text))!;
     assert.deepEqual([JSON.parse(String(accept.inputs.ids)), accept.inputs.message, accept.inputs.now], [["id-1", "id-2"], "msg-1", at]);
-    assert.match(accept.text, /^UPDATE dbo\.CommunicationDeliveries SET state='Accepted',provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/);
+    assert.match(accept.text, /^UPDATE dbo\.CommunicationDeliveries SET state=CASE WHEN state='Processing' THEN 'Accepted' ELSE state END,provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/, "only a row still Processing becomes Accepted (one the webhook has moved keeps its state), and every row named gets the message id and the time");
     await store.markAccepted(["id-3"], null, at);
-    assert.equal(calls.filter((c) => /SET state='Accepted'/.test(c.text)).at(-1)!.inputs.message, null, "a batch can be accepted without a message id");
+    assert.equal(calls.filter((c) => /THEN 'Accepted' ELSE state END/.test(c.text)).at(-1)!.inputs.message, null, "a batch can be accepted without a message id");
 
     const retryAt = new Date("2026-10-14T10:00:00Z");
     await store.markFailed(["id-1"], "HTTP_429", retryAt);
@@ -3942,6 +3944,56 @@ test("webhook: an event touches only a delivery the provider accepted — a row 
   Object.assign(row, { providerMessageId: "msg-found" });
   assert.deepEqual(await applyAll({ sg_event_id: "x-fallback", event: "delivered", email: row.email, timestamp: 1, sg_message_id: "msg-found.filter0001" }), { applied: 0, ignored: 1 });
   assert.equal(row.state, "Retry");
+});
+
+test("markAccepted: only a row still Processing becomes Accepted — one the webhook has already moved keeps what the provider told it — and every row named gets the message id and the time", async () => {
+  await readyCampaign();
+  const store = getDeliveryStore();
+  const english = (await store.claimBatch(500))!; // bjarki, jon and anna, all Processing
+  const icelandic = (await store.claimBatch(500))!; // cio
+  const rowsOf = (batch: typeof english) => batch.deliveries.map((d) => memoryDeliveries().find((r) => r.id === d.id)!);
+  const [bjarki, jon, anna] = rowsOf(english);
+  const [cio] = rowsOf(icelandic);
+  // The webhook overtakes the worker: the provider reports a delivery and a bounce before the requests have returned.
+  assert.deepEqual(await applyAll(
+    { sg_event_id: "race-1", event: "delivered", email: jon.email, timestamp: 100, deliveryId: jon.id },
+    { sg_event_id: "race-2", event: "bounce", type: "bounce", email: cio.email, timestamp: 100, deliveryId: cio.id },
+  ), { applied: 2, ignored: 0 });
+  assert.deepEqual([jon.state, jon.providerMessageId ?? null, cio.state], ["Delivered", null, "Bounced"]);
+  Object.assign(anna, { state: "Retry", nextAttemptAt: null }); // a row whose lease ran out was taken back meanwhile: no longer the worker's either
+  const at = new Date("2026-10-14T10:00:00Z");
+  await store.markAccepted(english.deliveries.map((d) => d.id), "msg-9", at);
+  await store.markAccepted(icelandic.deliveries.map((d) => d.id), "msg-10", at);
+  assert.deepEqual([bjarki, jon, anna, cio].map((d) => [d.state, d.providerMessageId, d.acceptedAt]), [
+    ["Accepted", "msg-9", at.toISOString()], ["Delivered", "msg-9", at.toISOString()], ["Retry", "msg-9", at.toISOString()], ["Bounced", "msg-10", at.toISOString()],
+  ], "only a row that is still Processing becomes Accepted; the id and the time are on every row named");
+  assert.deepEqual([jon, cio].map((d) => [d.nextAttemptAt, d.lastErrorCode]), [[null, null], [null, null]], "and the lease is over, whatever the state");
+  assert.equal(await store.acceptedToday(at), 4, "every row the provider accepted counts against the day's cap");
+  // An event that names no delivery now finds the row by the message id that was recorded after the event had moved it.
+  assert.deepEqual(await applyAll({ sg_event_id: "race-3", event: "open", email: jon.email, timestamp: 200, sg_message_id: "msg-9.filter0001.1234.0" }), { applied: 1, ignored: 0 });
+  assert.equal(jon.openedAt, new Date(200_000).toISOString());
+  // Later events go on from where the webhook left the row.
+  await applyAll({ sg_event_id: "race-4", event: "deferred", email: jon.email, timestamp: 50, deliveryId: jon.id });
+  assert.equal(jon.state, "Delivered");
+});
+
+test("worker: a delivery the provider reports while the batch is still with it is not undone when the worker records the acceptance", async () => {
+  await readyCampaign();
+  const transport: MailTransport = {
+    kind: "sendgrid",
+    async sendBatch(batch) {
+      // SendGrid has delivered jon's mail and says so before the request that carried it has returned
+      const jon = batch.recipients.find((r) => r.email === "jon@origo.is");
+      if (jon) await applyAll({ sg_event_id: "race-w", event: "delivered", email: jon.email, timestamp: 100, deliveryId: jon.customArgs.deliveryId });
+      return { providerMessageId: "msg-race" };
+    },
+  };
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual([result.accepted, result.deadLettered, result.retried], [4, 0, 0]);
+  assert.deepEqual(memoryDeliveries().map((d) => [d.email, d.state, d.providerMessageId]).sort(), [
+    ["anna@advania.is", "Accepted", "msg-race"], ["bjarki@uidata.com", "Accepted", "msg-race"], ["cio@origo.is", "Accepted", "msg-race"], ["jon@origo.is", "Delivered", "msg-race"],
+  ]);
+  assert.deepEqual(result.completed.length, 1, "the campaign completes: nothing of it is open");
 });
 
 test("webhook: a Manual suppression is an admin's decision — webhook events neither replace it nor lift it, and the contacts keep the status it gave them", async () => {

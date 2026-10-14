@@ -24,7 +24,7 @@ export type DeliveryStore = {
   promoteScheduled(now: Date): Promise<string[]>;          // Scheduled & due → freezeAudience → ids now Sending/Sent
   recoverStale(now: Date): Promise<number>;                // Processing whose lease ran out (next_attempt_at < now; SQL: by its own clock) → Retry, attempts kept (used up → Dead letter LEASE_EXPIRED); a Cancelled campaign's real rows → Cancelled; how many
   claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale, Test rows or real rows (never both); Test rows claimable regardless of campaign status; leases what it takes
-  markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>;
+  markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>; // the provider took the request: a row still Processing → Accepted, a row that moved on meanwhile (the webhook, a lapsed lease) keeps its state; every row named gets the message id and the time
   markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // null → Dead letter; a row of a Cancelled campaign → Cancelled
   releaseBatch(ids: string[]): Promise<void>;              // claimed rows given back unused: Processing → Queued, one attempt less, no lease (a Cancelled campaign's real rows → Cancelled)
   acceptedToday(now: Date): Promise<number>;
@@ -148,7 +148,11 @@ const memoryStore: DeliveryStore = {
     };
   },
   async markAccepted(ids, providerMessageId, now) {
-    for (const d of memoryDeliveries()) if (ids.includes(d.id)) Object.assign(d, { state: "Accepted", providerMessageId, acceptedAt: now.toISOString(), nextAttemptAt: null, lastErrorCode: null });
+    // Only a row that is still Processing becomes Accepted. The provider's webhook can overtake the worker (a delivery reported before this request has
+    // returned), and a row whose lease ran out was taken back; setting such a row to Accepted would undo what it was told, or what the worker decided.
+    // The acceptance itself is a fact about the request, so every row named gets the message id (an event that names no delivery is matched by it), the
+    // time (it counts against the day's cap) and no lease or error.
+    for (const d of memoryDeliveries()) if (ids.includes(d.id)) Object.assign(d, { state: d.state === "Processing" ? "Accepted" : d.state, providerMessageId, acceptedAt: now.toISOString(), nextAttemptAt: null, lastErrorCode: null });
   },
   async markFailed(ids, errorCode, nextAttemptAt) {
     // A row of a campaign that was cancelled while the row was with the provider has nothing left to try again, whatever the failure was: it is
@@ -243,8 +247,9 @@ const sqlStore: DeliveryStore = {
     };
   },
   async markAccepted(ids, providerMessageId, now) {
+    // As in memory: the state changes only for a row that is still Processing; the message id, the time and the cleared lease and error go on every row named.
     await (await getSqlPool()).request().input("ids", sql.NVarChar(sql.MAX), JSON.stringify(ids)).input("message", sql.NVarChar(200), providerMessageId).input("now", sql.DateTime2, now)
-      .query("UPDATE dbo.CommunicationDeliveries SET state='Accepted',provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))");
+      .query("UPDATE dbo.CommunicationDeliveries SET state=CASE WHEN state='Processing' THEN 'Accepted' ELSE state END,provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))");
   },
   async markFailed(ids, errorCode, nextAttemptAt) {
     // As in memory: a row of a campaign that was cancelled meanwhile is cancelled, not queued for another try; a Test row keeps its retry.
