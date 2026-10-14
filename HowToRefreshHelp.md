@@ -107,10 +107,11 @@ admin chapters — keep that guarantee).
   the help system.
 - **A step can show "Done" instead of "Next".** The engine labels a step "Done"
   when none of the later steps' anchors is on the page at that moment: they are
-  on another page (typical for the step before a page change), or the page is
-  still loading when the popover opens (the first step of Customer
-  communications). Pressing it still continues the tour (`onDoneClick` in
-  `public/tours/tour-engine.js`).
+  on another page, or inside a container that is not open yet (step 1 of
+  submitting a request, whose later anchors are in the composer). Pressing it
+  still continues the tour (`onDoneClick` in `public/tours/tour-engine.js`). A
+  stop on a menu entry, which is on every page, keeps the steps before it on
+  "Next" (Customer communications ends on one).
 - Screenshots are English: memory mode resolves every user's locale to `en`.
   The Icelandic manual (`?lang=is`) intentionally reuses them.
 - Screenshots are committed binaries (~300 KB each @2x). Recapture replaces

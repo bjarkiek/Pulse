@@ -343,8 +343,8 @@ export const TOUR_CATALOG: TourDefinition[] = [
       },
       {
         // The anchor is the Contacts tab itself, which is on the page whichever tab is open: the tour cannot switch a tab for the person, and the
-        // section behind the tab is not rendered until it is open. A click on the highlighted tab carries the tour on (the tab opens as the tour
-        // moves to the Settings page); "Next" does the same without opening it.
+        // section behind the tab is not rendered until it is open. A click on the highlighted tab opens it and carries the tour on; the next step
+        // is on the same page, so the list stays open under it. "Next" carries on without opening it.
         element: "[data-tour='communications-contacts']",
         route: "/communications",
         side: "bottom",
@@ -356,12 +356,15 @@ export const TOUR_CATALOG: TourDefinition[] = [
         },
       },
       {
-        element: "[data-tour='settings-communications']",
-        route: "/settings",
+        // The Settings entry of the team's menu, which every internal role sees (the card itself is for System admins, and a role that cannot see it
+        // would wait for its anchor in vain). The route is the page of the step before, so nothing changes under the person's hands.
+        element: "[data-tour='nav-settings']",
+        route: "/communications",
+        side: "right",
         title: { en: "SendGrid settings", is: "SendGrid-stillingar" },
         description: {
-          en: "System admins enable sending, choose the sender, keep safe mode on until the first real send, and verify the configuration here.",
-          is: "Kerfisstjórar virkja sendingar, velja sendanda, halda öruggum ham á þar til fyrsta raunverulega sendingin fer út og staðfesta uppsetninguna hér.",
+          en: "System admins enable sending, choose the sender, keep safe mode on until the first real send, and verify the configuration under Settings.",
+          is: "Kerfisstjórar virkja sendingar, velja sendanda, halda öruggum ham á þar til fyrsta raunverulega sendingin fer út og staðfesta uppsetninguna undir Stillingar.",
         },
       },
     ],

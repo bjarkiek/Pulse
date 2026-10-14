@@ -95,8 +95,9 @@ test("audiences: the customer-communications tour is internal-only and never aut
   assert.ok(!(await getTourState(CUSTOMER)).tours.some((tour) => tour.key === "customer-communications"));
 });
 
-test("customer-communications: it starts on the Communications page, opens the Contacts tab by a click, and ends on the Settings card", async () => {
-  const tour = (await getTourState(ADMIN)).tours.find((item) => item.key === "customer-communications");
+test("customer-communications: every step is on the Communications page, a click opens the Contacts tab, and the last step points at the Settings entry of the menu", async () => {
+  // A contributor, not a System admin: the tour is for every internal role, so every stop has to be something that role sees.
+  const tour = (await getTourState(CONTRIBUTOR)).tours.find((item) => item.key === "customer-communications");
   assert.ok(tour);
   assert.equal(tour.version, 1);
   assert.deepEqual(
@@ -105,15 +106,17 @@ test("customer-communications: it starts on the Communications page, opens the C
       ["[data-tour='nav-communications']", "/communications"],
       ["[data-tour='communications-new']", "/communications"],
       ["[data-tour='communications-contacts']", "/communications"],
-      ["[data-tour='settings-communications']", "/settings"],
+      ["[data-tour='nav-settings']", "/communications"],
     ],
   );
-  // The Contacts tab is on the page from the first moment, so the person opens it by clicking the highlighted tab:
-  // the tour has no way to switch a tab for them, and the section behind the tab is not there until it is open.
+  // The Contacts tab is on the page from the first moment, so the person opens it by clicking the highlighted tab: the tour has no way to switch a
+  // tab for them, and the section behind the tab is not there until it is open. No step leaves the page, so the list stays open under the last one.
   assert.deepEqual(
     tour.steps.map((step) => step.advanceOnClick),
     [false, false, true, false],
   );
+  // The System admin's card is not a stop: a role that cannot see it would wait for its anchor in vain.
+  assert.ok(!tour.steps.some((step) => step.element?.includes("settings-communications")));
 });
 
 test("every tour step is written in both languages, and the Icelandic is not a copy of the English", () => {

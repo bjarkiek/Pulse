@@ -27,7 +27,8 @@ import { useResource } from "./use-resource";
 type Tab = "campaigns" | "contacts" | "suppressions";
 /**
  * `tour` is the anchor of a stop in the customer-communications tour. Its Recipients step highlights the Contacts tab, because the tab is on
- * the page whichever tab is open and the tour cannot switch one for the person: they click the highlighted tab to carry on.
+ * the page whichever tab is open and the tour cannot switch one for the person: they click the highlighted tab, which opens its list and
+ * carries the tour on (the next step is on this page too, so the list stays open).
  */
 const TABS: Array<{ id: Tab; label: string; tour?: string }> = [
   { id: "campaigns", label: "Campaigns" },
