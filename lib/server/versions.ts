@@ -40,6 +40,8 @@ export async function checkedMutation<T>(
   expected: unknown,
   work: () => Promise<T>,
 ): Promise<T> {
+  // The driver binds the id as NVarChar(32): a longer one belongs to no row and must not reach it, so it is refused before anything is asked.
+  if (id.length > 32) throw new Error("NOT_FOUND");
   await requireMembership(identity);
   if (entity !== "Requests") await requirePublishRole(identity);
   else await (await import("./request-repository")).getRequest(identity, id);

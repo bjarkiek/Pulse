@@ -48,6 +48,9 @@ export async function executeIdempotent<T>(
   status: number,
   work: () => Promise<T>,
 ) {
+  // The operation carries the id of what it acts on and is stored in a column of 100 characters: one that does not fit names nothing, and
+  // is refused before anything is asked.
+  if (operation.length > 100) throw new Error("NOT_FOUND");
   await authorize(identity, operation);
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key || !/^[A-Za-z0-9._:-]{8,100}$/.test(key))

@@ -418,9 +418,10 @@ export async function listDeliveries(identity: PulseIdentity, id: string, filter
 /**
  * Queues every Dead letter row of the campaign again, with its attempts started over. A campaign that had completed (Sent) is Sending
  * again so that the worker claims the rows; the audit row then records that status change next to the count. A Cancelled campaign is
- * refused (INVALID_COMMUNICATION_STATE): it never sends again, so rows queued into it would wait for ever.
+ * refused (INVALID_COMMUNICATION_STATE): it never sends again, so rows queued into it would wait for ever. The answer is how many rows were
+ * queued and whether that reopened the campaign, so a caller knows its copy of the campaign (status, completion time) is out of date.
  */
-export async function retryDeadLetters(identity: PulseIdentity, id: string): Promise<{ requeued: number }> {
+export async function retryDeadLetters(identity: PulseIdentity, id: string): Promise<{ requeued: number; reopened: boolean }> {
   await requirePublishRole(identity);
   if ((await loadOne(id)).status === "Cancelled") throw new Error("INVALID_COMMUNICATION_STATE");
   /** What the audit row says: the count, and the move from Sent to Sending when the campaign was reopened. */
@@ -430,12 +431,12 @@ export async function retryDeadLetters(identity: PulseIdentity, id: string): Pro
     const result = await requeueDeadLetters(id);
     const [after, before] = audited(result);
     memoryAuditEvent(identity, "communication.deliveries.retried", "Communication", id, after, before);
-    return { requeued: result.requeued };
+    return { requeued: result.requeued, reopened: result.reopened };
   }
   return atomicSql(async () => {
     const result = await requeueDeadLetters(id);
     const [after, before] = audited(result);
     await insertAudit(identity, "communication.deliveries.retried", await findCommunicationUuid(id), after, before);
-    return { requeued: result.requeued };
+    return { requeued: result.requeued, reopened: result.reopened };
   });
 }

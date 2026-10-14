@@ -3,7 +3,7 @@ import { retryDeadLetters } from "@/lib/server/communications/campaign-repositor
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
 
-/** Queues the campaign's dead-lettered recipients again and answers with how many it queued. */
+/** Queues the campaign's dead-lettered recipients again and answers with how many it queued and whether that reopened a campaign that had completed. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const correlation = correlationId(request);
   try {

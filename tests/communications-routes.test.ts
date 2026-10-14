@@ -1,6 +1,9 @@
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { getPathMatch } from "next/dist/shared/lib/router/utils/path-match";
+import { compileNonPath } from "next/dist/shared/lib/router/utils/prepare-destination";
+import nextConfig from "../next.config";
 import type { PulseIdentity } from "../lib/domain";
 import { createSessionToken } from "../lib/server/session";
 import { organizations, users } from "../lib/server/admin-repository";
@@ -267,7 +270,7 @@ test("openapi: the request bodies of the contact and suppression operations list
 const CAMPAIGNS = "/api/v1/internal/communications";
 const forCampaign = (id: string) => ({ params: Promise.resolve({ id }) });
 /** The parts of a campaign response these tests read. */
-type CampaignItem = { id: string; version: string; status: string; title: string; recipientCount: number; scheduledAt?: string; cancelledAt?: string; stats: { recipients: number; queued: number; cancelled: number } };
+type CampaignItem = { id: string; version: string; status: string; title: string; recipientCount: number; scheduledAt?: string; completedAt?: string; cancelledAt?: string; stats: { recipients: number; queued: number; cancelled: number; deadLettered: number } };
 type DeliveryItem = { email: string; state: string; source: string; organizationId: string | null; locale: string };
 const plainDraft = {
   templateKey: "plain", topic: "general", title: "Route test",
@@ -516,6 +519,65 @@ test("routes: editing, sending and cancelling name the version they saw — none
   assert.deepEqual(await refusal(await sendCampaign(draft.id, {}, current.version)), [412, "PRECONDITION_FAILED"], "a second send under the version the first one used, with a key of its own");
 });
 
+test("routes: a refused call leaves its Idempotency-Key free — a 412 or an invalid body under a key does not stop the corrected call under the same key", async () => {
+  await enableSending();
+  const draft = await createDraft();
+  const moved = await patchCampaign(draft.id, { ...plainDraft, title: "Moved on" }, draft.version);
+  const current = (await moved.json()).item as CampaignItem;
+
+  const sendKey = freshKey();
+  const stale = await sendCampaign(draft.id, {}, draft.version, sendKey); // the version the caller read is behind
+  assert.deepEqual(await refusal(stale), [412, "PRECONDITION_FAILED"]);
+  const fixed = await sendCampaign(draft.id, {}, current.version, sendKey); // reloaded, and the same key again
+  assert.equal(fixed.status, 200);
+  assert.equal((await fixed.json()).item.status, "Sending");
+  assert.equal((await deliveriesOf(draft.id)).total, 1, "and it was sent once");
+
+  const createKey = freshKey();
+  const invalid = await communicationsPost(send("POST", CAMPAIGNS, { ...plainDraft, title: "" }, { "idempotency-key": createKey }));
+  assert.deepEqual(await refusal(invalid), [400, "INVALID_INPUT"]);
+  const valid = await communicationsPost(send("POST", CAMPAIGNS, plainDraft, { "idempotency-key": createKey }));
+  assert.equal(valid.status, 201);
+  const created = (await valid.json()).item as CampaignItem;
+  const replay = await communicationsPost(send("POST", CAMPAIGNS, plainDraft, { "idempotency-key": createKey }));
+  assert.equal((await replay.json()).item.id, created.id, "the corrected call is the one that is stored and replayed");
+});
+
+test("routes: an id too long to name a campaign is 404 before the version, the key or the database is looked at", async () => {
+  await enableSending();
+  const draft = await createDraft();
+  const long = `COM-${"1".repeat(36)}`; // 40 characters: more than the 32 an id is bound as
+  const huge = `COM-${"1".repeat(116)}`; // 120: the operation name that carries it no longer fits the 100 characters an idempotency record stores
+  assert.deepEqual([long.length, huge.length], [40, 120]);
+  const call = (method: string, id: string, suffix: string, body: unknown, headers: Record<string, string> = {}) => send(method, `${CAMPAIGNS}/${id}${suffix}`, body, headers);
+  const refused = [
+    // no version, which a real id would answer with 428
+    await communicationPatch(call("PATCH", long, "", plainDraft), forCampaign(long)),
+    await sendPost(call("POST", long, "/send", {}, { "idempotency-key": freshKey() }), forCampaign(long)),
+    await cancelPost(call("POST", long, "/cancel", {}), forCampaign(long)),
+    // with one
+    await communicationPatch(call("PATCH", long, "", plainDraft, ifMatch(draft.version)), forCampaign(long)),
+    await sendPost(call("POST", long, "/send", {}, { ...ifMatch(draft.version), "idempotency-key": freshKey() }), forCampaign(long)),
+    await cancelPost(call("POST", long, "/cancel", {}, ifMatch(draft.version)), forCampaign(long)),
+    // no key, which a real id would answer with 400
+    await duplicatePost(call("POST", huge, "/duplicate", undefined), forCampaign(huge)),
+    await testPost(call("POST", huge, "/test", {}), forCampaign(huge)),
+    await sendPost(call("POST", huge, "/send", {}, ifMatch(draft.version)), forCampaign(huge)),
+    await retryPost(call("POST", huge, "/deliveries/retry", undefined), forCampaign(huge)),
+    // with one
+    await duplicateCampaign(huge),
+    await testSendCampaign(huge, {}),
+    await sendCampaign(huge, {}, draft.version),
+    await retryCampaign(huge),
+  ];
+  assert.deepEqual(await Promise.all(refused.map(refusal)), refused.map(() => [404, "NOT_FOUND"]));
+  // The same calls on a real id are refused for what they lack.
+  assert.deepEqual(await refusal(await communicationPatch(call("PATCH", draft.id, "", plainDraft), forCampaign(draft.id))), [428, "PRECONDITION_REQUIRED"]);
+  assert.deepEqual(await refusal(await sendPost(call("POST", draft.id, "/send", {}, ifMatch(draft.version)), forCampaign(draft.id))), [400, "INVALID_IDEMPOTENCY_KEY"]);
+  const listed = (await (await communicationsGet(send("GET", CAMPAIGNS))).json()).items;
+  assert.deepEqual([(await getCampaign(draft.id)).status, listed.length], ["Draft", 1], "nothing was created or sent");
+});
+
 test("routes: a send with scheduledAt schedules the campaign, and unscheduling makes it a Draft again", async () => {
   await enableSending();
   const draft = await createDraft();
@@ -628,13 +690,34 @@ test("routes: retrying the dead letters requeues them, under a key, and a replay
   const key = freshKey();
   const retried = await retryCampaign(draft.id, key);
   assert.equal(retried.status, 200);
-  assert.deepEqual(await retried.json(), { requeued: 2 });
+  assert.deepEqual(await retried.json(), { requeued: 2, reopened: false }, "the campaign is still Sending, so nothing was reopened");
   assert.deepEqual([(await deliveriesOf(draft.id, "?state=Queued")).total, (await deliveriesOf(draft.id, deadLetters)).total], [2, 0]);
   const replay = await retryCampaign(draft.id, key);
-  assert.deepEqual(await replay.json(), { requeued: 2 }, "the stored answer");
+  assert.deepEqual(await replay.json(), { requeued: 2, reopened: false }, "the stored answer");
   assert.equal(auditCount("communication.deliveries.retried"), 1);
-  assert.deepEqual(await (await retryCampaign(draft.id)).json(), { requeued: 0 }, "a call under a new key does the work again, and there is nothing left to requeue");
+  assert.deepEqual(await (await retryCampaign(draft.id)).json(), { requeued: 0, reopened: false }, "a call under a new key does the work again, and there is nothing left to requeue");
   assert.deepEqual(await refusal(await retryCampaign("COM-999")), [404, "NOT_FOUND"]);
+});
+
+test("routes: retrying the dead letters of a campaign that has completed reopens it, and the answer says so", async () => {
+  await enableSending();
+  const draft = await createDraft();
+  assert.equal((await sendCampaign(draft.id, {}, draft.version)).status, 200);
+  const store = getDeliveryStore();
+  const batch = await store.claimBatch(10);
+  await store.markFailed(batch!.deliveries.map((d) => d.id), "HTTP_400", null); // the one recipient is a dead letter
+  assert.deepEqual(await store.completeCampaigns(new Date()), [draft.id]);
+  const done = await getCampaign(draft.id);
+  assert.deepEqual([done.status, typeof done.completedAt, done.stats.deadLettered, done.stats.queued], ["Sent", "string", 1, 0]);
+
+  const retried = await retryCampaign(draft.id);
+  assert.equal(retried.status, 200);
+  assert.deepEqual(await retried.json(), { requeued: 1, reopened: true });
+  const reopened = await getCampaign(draft.id);
+  assert.deepEqual([reopened.status, reopened.completedAt, reopened.stats.queued, reopened.stats.deadLettered], ["Sending", undefined, 1, 0], "Sending again, so the worker claims the row; the completion is undone");
+
+  const nothing = await retryCampaign(draft.id);
+  assert.deepEqual(await nothing.json(), { requeued: 0, reopened: false }, "a retry that finds nothing to requeue reopens nothing");
 });
 
 test("routes: the preview serves the mail in the language and format asked for under a strict CSP; an unknown, malformed or deleted id is 404", async () => {
@@ -700,6 +783,43 @@ test("routes: a signed-in user who is not internal staff is refused by every cam
   const unchanged = await getCampaign(id);
   assert.deepEqual([unchanged.title, unchanged.status, unchanged.version], ["Route test", "Draft", draft.version]);
   assert.deepEqual([(await (await communicationsGet(send("GET", CAMPAIGNS))).json()).items.length, (await deliveriesOf(id)).total], [1, 0], "no campaign was added or sent");
+});
+
+/**
+ * The headers next.config.ts gives a path, as Next works them out (next/dist/server/lib/router-utils/resolve-routes): every `headers()` entry whose
+ * source matches, in the order they are listed, and an entry that sets a header an earlier one set replaces it.
+ */
+async function configHeadersFor(pathname: string) {
+  const sent: Record<string, string> = {};
+  for (const rule of await nextConfig.headers!()) {
+    const params = getPathMatch(rule.source)(pathname);
+    if (!params) continue;
+    for (const { key, value } of rule.headers) sent[compileNonPath(key, params).toLowerCase()] = compileNonPath(value, params);
+  }
+  return sent;
+}
+
+test("config: the mail preview is served under its own strict CSP — its next.config.ts entry follows the app-wide one, because the last entry wins and a handler's header is dropped once the name is set", async () => {
+  const strict = "default-src 'none'; img-src 'self' https: data:; style-src 'unsafe-inline'";
+  const rules = await nextConfig.headers!();
+  const appWide = rules.findIndex((rule) => rule.source === "/(.*)");
+  const preview = rules.findIndex((rule) => rule.source === "/api/v1/internal/communications/:id/preview");
+  assert.ok(appWide >= 0, "the app-wide entry is still there");
+  assert.ok(preview > appWide, "and the preview's entry comes after it");
+  assert.equal(rules[preview].headers.find((header) => header.key === "Content-Security-Policy")?.value, strict);
+
+  const previewPath = "/api/v1/internal/communications/COM-001/preview";
+  const sent = await configHeadersFor(previewPath);
+  assert.equal(sent["content-security-policy"], strict, "what Next sends for the preview is the strict policy");
+  assert.equal(sent["x-content-type-options"], "nosniff", "the other app-wide headers still apply to it");
+  for (const other of ["/", "/api/v1/internal/communications", "/api/v1/internal/communications/COM-001", "/api/v1/internal/communications/COM-001/audience"]) {
+    assert.match((await configHeadersFor(other))["content-security-policy"], /^default-src 'self'; /, `${other} keeps the app-wide policy`);
+  }
+
+  // The handler sets the same policy, so it holds wherever the config is not what serves the response.
+  const draft = await createDraft();
+  const response = await previewGet(send("GET", `${CAMPAIGNS}/${draft.id}/preview`), forCampaign(draft.id));
+  assert.equal(response.headers.get("content-security-policy"), strict);
 });
 
 test("openapi: the campaign operations are curated — ids, success codes, preconditions, request bodies and the preview's media types", () => {
