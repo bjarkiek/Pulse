@@ -1929,8 +1929,8 @@ test("cancel: unschedule takes back a Scheduled campaign only, cancel stops a Sc
   await sendCommunication(PM, second.id, {});
   await assert.rejects(cancelCommunication(PM, second.id, "unschedule"), /INVALID_COMMUNICATION_STATE/, "a campaign that is sending cannot go back to a draft");
   const store = getDeliveryStore();
-  await store.claimBatch(2); // two rows are with the provider now
-  await store.markFailed([memoryDeliveries().find((d) => d.state === "Queued" && d.email === "anna@advania.is")!.id], "HTTP_429", new Date(Date.now() + 3_600_000)); // and one is waiting to be retried
+  await store.claimBatch(3); // three rows are with the provider now
+  await store.markFailed([memoryDeliveries().find((d) => d.email === "anna@advania.is")!.id], "HTTP_429", new Date(Date.now() + 3_600_000)); // one of them failed and is waiting to be retried
   const cancelled = await cancelCommunication(PM, second.id, "cancel");
   assert.deepEqual([cancelled.status, Boolean(cancelled.cancelledAt)], ["Cancelled", true]);
   const rows = (await listDeliveries(PM, second.id, {})).items;
@@ -2073,9 +2073,13 @@ test("worker store: accepted rows are counted per UTC day, and a campaign comple
   assert.equal(memoryCommunications().find((c) => c.id === second.id)!.status, "Sending");
   assert.equal(memoryCommunications().find((c) => c.id === draft.id)!.status, "Draft");
   const [s1, s2, s3, s4] = real(second.id).map((d) => d.id);
+  await store.claimBatch(10); // the worker takes the second campaign's rows (three English, one Icelandic): only a row it holds is settled by a failure
+  await store.claimBatch(10);
   await store.markFailed([s1, s2, s3], "HTTP_400", null);
   await store.markFailed([s4], "HTTP_429", new Date(Date.now() + 3_600_000));
   assert.deepEqual(await store.completeCampaigns(new Date()), [], "a row waiting for a retry keeps the campaign open");
+  memoryDeliveries().find((d) => d.id === s4)!.nextAttemptAt = new Date(Date.now() - 1000).toISOString(); // its time has come: the worker takes it again, and the provider refuses it for good
+  await store.claimBatch(10);
   await store.markFailed([s4], "HTTP_400", null);
   assert.deepEqual(await store.completeCampaigns(new Date()), [second.id], "dead letters are finished");
   assert.deepEqual(await store.completeCampaigns(new Date()), [], "a campaign completes once");
@@ -2176,8 +2180,9 @@ test("deliveries: retrying requeues the dead letters of that campaign only, star
   await sendCommunication(PM, first.id, {});
   await sendCommunication(PM, second.id, {});
   const store = getDeliveryStore();
-  const dead = memoryDeliveries().filter((d) => d.state === "Queued").map((d) => d.id);
-  await store.markFailed(dead, "HTTP_400", null); // every row of both campaigns is a dead letter
+  const dead: string[] = [];
+  for (let claimed = await store.claimBatch(10); claimed; claimed = await store.claimBatch(10)) dead.push(...claimed.deliveries.map((d) => d.id)); // every row of both campaigns is with the worker
+  await store.markFailed(dead, "HTTP_400", null); // and is a dead letter
   const keep = memoryDeliveries().find((d) => d.communicationId === first.id && d.email === "cio@origo.is")!;
   Object.assign(keep, { state: "Bounced", attemptCount: 3 }); // and one of them is not
   Object.assign(memoryDeliveries().find((d) => d.communicationId === first.id && d.email === "jon@origo.is")!, { attemptCount: 5, nextAttemptAt: new Date().toISOString() });
@@ -2571,7 +2576,7 @@ test("worker store, SQL: claim maps the batch of one campaign and locale; accept
     const [retry, dead] = calls.filter((c) => /^UPDATE d SET state=CASE/.test(c.text));
     assert.deepEqual([retry.inputs.state, retry.inputs.next, retry.inputs.error, JSON.parse(String(retry.inputs.ids))], ["Retry", retryAt, "HTTP_429", ["id-1"]]);
     assert.deepEqual([dead.inputs.state, dead.inputs.next, dead.inputs.error], ["Dead letter", null, "X".repeat(100)], "a dead letter has no next attempt, and the code fits its column");
-    assert.match(retry.text, /^UPDATE d SET state=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' ELSE @state END,\s+next_attempt_at=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/, "a row of a cancelled campaign is cancelled, whatever the failure was, and a cancel that is committing is waited for; a test row keeps its retry");
+    assert.match(retry.text, /^UPDATE d SET state=CASE WHEN d\.state<>'Processing' THEN d\.state WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' ELSE @state END,\s+next_attempt_at=CASE WHEN d\.state<>'Processing' THEN d\.next_attempt_at WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/, "only a row still Processing is settled (one the webhook moved on keeps its state and its next attempt, and gets the code): a row of a cancelled campaign is cancelled, whatever the failure was, and a cancel that is committing is waited for; a test row keeps its retry");
 
     assert.equal(await store.acceptedToday(at), 7);
     const today = calls.find((c) => /SELECT COUNT\(\*\) count/.test(c.text))!;
@@ -3994,6 +3999,42 @@ test("worker: a delivery the provider reports while the batch is still with it i
     ["anna@advania.is", "Accepted", "msg-race"], ["bjarki@uidata.com", "Accepted", "msg-race"], ["cio@origo.is", "Accepted", "msg-race"], ["jon@origo.is", "Delivered", "msg-race"],
   ]);
   assert.deepEqual(result.completed.length, 1, "the campaign completes: nothing of it is open");
+});
+
+test("markFailed: a row the webhook has already moved keeps its state — a delivery reported before the settle is not turned back into a retry, a dead letter or a cancellation — and the code of the failure is still recorded", async () => {
+  await seedAudience();
+  await saveContact(PM, { organizationId: "ORG-001", email: "extra@origo.is", displayName: "Extra", locale: "en", topics: ["product-updates"] });
+  await enableSending();
+  const store = getDeliveryStore();
+  const rowsOf = (batch: { deliveries: Array<{ id: string }> }) => batch.deliveries.map((d) => memoryDeliveries().find((r) => r.id === d.id)!);
+  const future = new Date(Date.now() + 3_600_000);
+  const first = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, first.id, {});
+  const english = (await store.claimBatch(10))!; // bjarki, jon, anna and extra
+  const icelandic = (await store.claimBatch(10))!; // cio
+  const [bjarki, jon, anna, extra] = rowsOf(english);
+  const [cio] = rowsOf(icelandic);
+  const leases = [jon.nextAttemptAt, cio.nextAttemptAt];
+  // The requests failed from the worker's side (a timeout, say) though the provider had taken them, and the webhook reports a delivery and a bounce before the worker settles.
+  assert.deepEqual(await applyAll(
+    { sg_event_id: "late-1", event: "delivered", email: jon.email, timestamp: 100, deliveryId: jon.id },
+    { sg_event_id: "late-2", event: "bounce", type: "bounce", email: cio.email, timestamp: 100, deliveryId: cio.id },
+  ), { applied: 2, ignored: 0 });
+  Object.assign(extra, { state: "Retry", nextAttemptAt: future.toISOString() }); // and one row is not the worker's any more: its lease ran out meanwhile and it was taken back to wait for a retry
+  await store.markFailed([bjarki.id, jon.id], "HTTP_500", future);
+  await store.markFailed([anna.id, cio.id, extra.id], "HTTP_400", null);
+  assert.deepEqual([bjarki, jon, anna, cio, extra].map((d) => [d.state, d.lastErrorCode]), [["Retry", "HTTP_500"], ["Delivered", "HTTP_500"], ["Dead letter", "HTTP_400"], ["Bounced", "HTTP_400"], ["Retry", "HTTP_400"]], "only a row still Processing is settled by the failure, and the code is recorded on every row named");
+  assert.deepEqual([bjarki, jon, anna, cio, extra].map((d) => d.nextAttemptAt), [future.toISOString(), leases[0], null, leases[1], future.toISOString()], "the next attempt goes with the state: a row that moved on keeps what it had");
+  // The same in a campaign that was cancelled meanwhile: the rows in flight become Cancelled, the row the webhook moved is not.
+  const second = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, second.id, {});
+  const claimed = (await store.claimBatch(10))!;
+  assert.equal(claimed.communicationId, second.id);
+  const [bjarki2, jon2, anna2] = rowsOf(claimed);
+  await applyAll({ sg_event_id: "late-3", event: "delivered", email: jon2.email, timestamp: 100, deliveryId: jon2.id });
+  await cancelCommunication(PM, second.id, "cancel"); // the Icelandic row is cancelled; the rows in flight are left alone
+  await store.markFailed(claimed.deliveries.map((d) => d.id), "HTTP_429", future);
+  assert.deepEqual([bjarki2, jon2, anna2].map((d) => [d.state, d.lastErrorCode]), [["Cancelled", "HTTP_429"], ["Delivered", "HTTP_429"], ["Cancelled", "HTTP_429"]]);
 });
 
 test("webhook: a Manual suppression is an admin's decision — webhook events neither replace it nor lift it, and the contacts keep the status it gave them", async () => {

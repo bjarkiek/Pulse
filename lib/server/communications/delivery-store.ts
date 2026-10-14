@@ -25,7 +25,7 @@ export type DeliveryStore = {
   recoverStale(now: Date): Promise<number>;                // Processing whose lease ran out (next_attempt_at < now; SQL: by its own clock) → Retry, attempts kept (used up → Dead letter LEASE_EXPIRED); a Cancelled campaign's real rows → Cancelled; how many
   claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale, Test rows or real rows (never both); Test rows claimable regardless of campaign status; leases what it takes
   markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>; // the provider took the request: a row still Processing → Accepted, a row that moved on meanwhile (the webhook, a lapsed lease) keeps its state; every row named gets the message id and the time
-  markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // null → Dead letter; a row of a Cancelled campaign → Cancelled
+  markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // a row still Processing: null → Dead letter, else Retry, a row of a Cancelled campaign → Cancelled; a row that moved on meanwhile (the webhook, a lapsed lease) keeps its state; every row named gets the code
   releaseBatch(ids: string[]): Promise<void>;              // claimed rows given back unused: Processing → Queued, one attempt less, no lease (a Cancelled campaign's real rows → Cancelled)
   acceptedToday(now: Date): Promise<number>;
   completeCampaigns(now: Date): Promise<string[]>;         // Sending with no Queued/Retry/Processing non-test rows → Sent
@@ -160,8 +160,13 @@ const memoryStore: DeliveryStore = {
     const cancelled = new Set(memoryCommunications().filter((c) => c.status === "Cancelled").map((c) => c.id));
     for (const d of memoryDeliveries()) {
       if (!ids.includes(d.id)) continue;
+      d.lastErrorCode = errorCode;
+      // Only a row that is still Processing is settled by the failure. One the webhook has already moved (the provider took a request that looked failed from
+      // here, and reported the delivery first) keeps what it was told, and one the lease took back is not the caller's: turning either into a retry would mail
+      // it again. The code is recorded all the same; the next attempt goes with the state, so it is left as it is.
+      if (d.state !== "Processing") continue;
       const stopped = d.source !== "Test" && cancelled.has(d.communicationId);
-      Object.assign(d, { state: stopped ? "Cancelled" : nextAttemptAt ? "Retry" : "Dead letter", nextAttemptAt: stopped ? null : nextAttemptAt?.toISOString() ?? null, lastErrorCode: errorCode });
+      Object.assign(d, { state: stopped ? "Cancelled" : nextAttemptAt ? "Retry" : "Dead letter", nextAttemptAt: stopped ? null : nextAttemptAt?.toISOString() ?? null });
     }
   },
   async releaseBatch(ids) {
@@ -252,12 +257,13 @@ const sqlStore: DeliveryStore = {
       .query("UPDATE dbo.CommunicationDeliveries SET state=CASE WHEN state='Processing' THEN 'Accepted' ELSE state END,provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))");
   },
   async markFailed(ids, errorCode, nextAttemptAt) {
-    // As in memory: a row of a campaign that was cancelled meanwhile is cancelled, not queued for another try; a Test row keeps its retry.
+    // As in memory: only a row still Processing is settled (one that moved on keeps its state and its next attempt, and gets the code); a row of a campaign
+    // that was cancelled meanwhile is cancelled, not queued for another try; a Test row keeps its retry.
     // READCOMMITTEDLOCK, as in completeCampaigns: the campaign is read with a lock, so a cancel that is committing is waited for and seen.
     await (await getSqlPool()).request().input("ids", sql.NVarChar(sql.MAX), JSON.stringify(ids)).input("state", sql.NVarChar(32), nextAttemptAt ? "Retry" : "Dead letter")
       .input("next", sql.DateTime2, nextAttemptAt).input("error", sql.NVarChar(100), errorCode.slice(0, 100))
-      .query(`UPDATE d SET state=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN 'Cancelled' ELSE @state END,
-        next_attempt_at=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error
+      .query(`UPDATE d SET state=CASE WHEN d.state<>'Processing' THEN d.state WHEN c.status='Cancelled' AND d.source<>'Test' THEN 'Cancelled' ELSE @state END,
+        next_attempt_at=CASE WHEN d.state<>'Processing' THEN d.next_attempt_at WHEN c.status='Cancelled' AND d.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error
         FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id
         WHERE d.id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))`);
   },
