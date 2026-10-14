@@ -721,3 +721,8 @@ Object.assign(internalTranslations, {
     "Netfangið getur fengið sendingar aftur og tengiliðir með það netfang verða virkir á ný. Ef netfangið skilar sér ekki eða er afskráð aftur lætur SendGrid vita og það er útilokað á ný.",
   "Keep suppression": "Halda útilokun",
 });
+
+// The Releases page: the hand-off of a published release to the Communications page.
+Object.assign(internalTranslations, {
+  "Draft customer email": "Semja tölvupóst til viðskiptavina",
+});

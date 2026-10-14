@@ -87,6 +87,8 @@ export function CommunicationsPage({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<CommunicationItem | null>(null);
   const [creating, setCreating] = useState(false);
+  // True while a copy is being made: a second click (on the list or on the detail) must not make a second copy.
+  const [duplicating, setDuplicating] = useState(false);
   const list = useResource<{ items: CommunicationItem[] }>(API);
   const items = list.data?.items;
   const reload = list.retry;
@@ -183,6 +185,8 @@ export function CommunicationsPage({
     }
   }
   async function duplicate(item: CommunicationItem) {
+    if (duplicating) return;
+    setDuplicating(true);
     try {
       const data = await apiFetch<{ item: CommunicationItem }>(
         `${API}/${item.id}/duplicate`,
@@ -193,6 +197,8 @@ export function CommunicationsPage({
       setEditing(data.item);
     } catch (error) {
       onToast(errorMessage(error));
+    } finally {
+      setDuplicating(false);
     }
   }
 
@@ -357,6 +363,7 @@ export function CommunicationsPage({
                     </Button>
                     <Button
                       variant="ghost"
+                      disabled={duplicating}
                       onClick={() => void duplicate(item)}
                     >
                       {t("Duplicate")}

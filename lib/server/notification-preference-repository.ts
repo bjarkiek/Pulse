@@ -90,6 +90,12 @@ export async function saveNotificationPreference(
   const typedCadence = cadence as NotificationCadence;
   if (mandatoryEvents.has(typedEvent) && typedCadence !== "Immediate")
     throw new Error("MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE");
+  // A communication is sent when it is sent, never in a daily or weekly digest: for these only on (Immediate) and off are meaningful.
+  if (
+    typedEvent.startsWith("communication.") &&
+    (typedCadence === "Daily" || typedCadence === "Weekly")
+  )
+    throw new Error("INVALID_NOTIFICATION_CADENCE");
 
   if (!isAzureSqlConfigured()) {
     memoryPreferences().set(

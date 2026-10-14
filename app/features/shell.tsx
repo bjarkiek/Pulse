@@ -4,6 +4,8 @@ import dynamic from "next/dynamic";
 
 import { useEffect, useMemo, useState } from "react";
 
+import { apiFetch, errorMessage } from "@/lib/api-client";
+
 import { clearDeviceDrafts } from "@/lib/draft-storage";
 
 import { makeT, type UiLocale } from "@/lib/i18n";
@@ -16,6 +18,7 @@ import { TourHost } from "../tour-host";
 
 import {
   useT,
+  mutationHeaders,
   DraftOwnerContext,
   LocaleContext,
   UserContext,
@@ -463,10 +466,34 @@ export function AppShell() {
     setIdentityReady(true);
   }
 
+  /** Releases, "Draft customer email": makes a product update from the release and opens it in the editor of the Communications page. */
+  async function draftEmailFromRelease(release: ReleaseItem) {
+    try {
+      const data = await apiFetch<{ item: { id: string } }>(
+        "/api/v1/internal/communications",
+        {
+          method: "POST",
+          headers: mutationHeaders(),
+          body: JSON.stringify({ fromReleaseId: release.id }),
+        },
+      );
+      // The Communications page opens the draft named in the address when it is drawn, and forgets the name once it has.
+      const url = new URL(window.location.href);
+      url.searchParams.set("page", "communications");
+      url.searchParams.set("communication", data.item.id);
+      window.history.pushState({}, "", url);
+      setPage("communications");
+    } catch (error) {
+      setToast(errorMessage(error));
+    }
+  }
+
   const draftScope =
     identityReady && meUser?.id
       ? `${meUser.id}:${organizationContexts.find((o) => o.active)?.id || ""}`
       : null;
+  // The role in the company the person is signed in to: it decides what the Updates page offers.
+  const activeRole = organizationContexts.find((o) => o.active)?.role ?? "";
 
   if (!identityReady)
     return (
@@ -793,6 +820,8 @@ export function AppShell() {
                     ideas={ideas}
                     notifications={notifications}
                     onOpen={openIdea}
+                    activeRole={activeRole}
+                    onToast={setToast}
                   />
                 )}
                 {page === "help" && (
@@ -829,6 +858,7 @@ export function AppShell() {
                     onChange={setReleases}
                     onIdeasChange={setInternalIdeas}
                     onToast={setToast}
+                    onDraftEmail={draftEmailFromRelease}
                   />
                 )}
                 {page === "communications" && (

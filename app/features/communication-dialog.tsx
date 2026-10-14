@@ -51,8 +51,8 @@ export function ModalDialog({
  * A question for what cannot be undone, in place of `window.confirm`: a sandboxed frame such as DataCentral's may refuse native dialogs, and
  * the answer is then "no" without anyone having been asked. As in the editor's discard dialog the way out is the violet button and the
  * confirmation the plain one. `children` say what the question is about and what will happen. `onConfirm` does it; the confirm button waits
- * until it is done, so a second click cannot do it twice. The dialog stays until `onClose` is called: `onConfirm` calls it when it is done,
- * whatever came of it.
+ * until it is done, so a second click cannot do it twice. When `onConfirm` is done, whatever came of it, the dialog calls `onClose`: a
+ * rejection is not shown here (whoever asked tells the person what went wrong, usually with a toast), but it cannot leave the dialog stuck.
  */
 export function ConfirmDialog({
   id,
@@ -81,8 +81,11 @@ export function ConfirmDialog({
           setPending(true);
           try {
             await onConfirm();
+          } catch {
+            // Nothing to show here: the caller reports its own failure. The dialog closes all the same.
           } finally {
             setPending(false);
+            onClose();
           }
         }}
       >

@@ -1,5 +1,7 @@
 "use client";
 
+import dynamic from "next/dynamic";
+
 import { useContext, useEffect, useState } from "react";
 
 import {
@@ -18,6 +20,11 @@ import {
   PageIntro,
   EmptyState,
 } from "./shared";
+
+// Only a Company admin has this section, and it brings the contact dialogs with it: it is loaded when it is first drawn.
+const CompanyContactsSection = dynamic(() =>
+  import("./company-contacts").then((m) => m.CompanyContactsSection),
+);
 
 export function HomePage({
   requests,
@@ -583,13 +590,38 @@ export function RequestsPage({
   );
 }
 
+/** What each communication topic is called on the Updates page and what it covers: words for the person, not the event type's name. */
+const PREFERENCE_LABELS: Record<string, [string, string]> = {
+  "communication.product-updates": [
+    "Product updates from DataCentral",
+    "Release announcements like new versions and features",
+  ],
+  "communication.service-notices": [
+    "Service notices",
+    "Planned maintenance and service changes",
+  ],
+  "communication.security-advisories": [
+    "Security advisories",
+    "Always delivered — security information for your company",
+  ],
+  "communication.general": [
+    "General announcements",
+    "Occasional news from the DataCentral team",
+  ],
+};
+
 export function UpdatesPage({
   notifications,
   onOpen,
+  activeRole,
+  onToast,
 }: {
   ideas: Idea[];
   notifications: NotificationItem[];
   onOpen: (idea: Idea) => void;
+  /** The person's role in the active company: only a Company admin keeps the company's list of recipients. */
+  activeRole: string;
+  onToast: (message: string) => void;
 }) {
   const t = useT();
   const [preferences, setPreferences] = useState<NotificationPreferenceItem[]>(
@@ -658,40 +690,64 @@ export function UpdatesPage({
               {t("Choose when email updates arrive for this company context.")}
             </p>
           </div>
-          <span role="status">{preferenceStatus}</span>
+          <span role="status">{t(preferenceStatus)}</span>
         </header>
         <div>
-          {preferences.map((preference) => (
-            <label key={preference.eventType}>
-              <span>
-                <strong>
-                  {preference.eventType
-                    .replaceAll(".", " ")
-                    .replace(/\b\w/g, (letter) => letter.toUpperCase())}
-                </strong>
-                <small>
-                  {preference.mandatory
-                    ? "Mandatory service message · delivered immediately"
-                    : "In-app updates remain available in Pulse"}
-                </small>
-              </span>
-              <select
-                aria-label={`${preference.eventType} email cadence`}
-                value={preference.cadence}
-                disabled={preference.mandatory}
-                onChange={(event) =>
-                  updatePreference(preference.eventType, event.target.value)
-                }
-              >
-                <option value="Immediate">{t("Immediate")}</option>
-                <option value="Daily">{t("Daily")}</option>
-                <option value="Weekly">{t("Weekly")}</option>
-                <option value="Off">{t("Off")}</option>
-              </select>
-            </label>
-          ))}
+          {preferences.map((preference) => {
+            // A communication is sent when it is sent: for these topics the choice is on or off, never a digest.
+            const isCommunication =
+              preference.eventType.startsWith("communication.");
+            const [label, hint] = PREFERENCE_LABELS[preference.eventType] ?? [
+              preference.eventType
+                .replaceAll(".", " ")
+                .replace(/\b\w/g, (letter) => letter.toUpperCase()),
+              preference.mandatory
+                ? "Mandatory service message · delivered immediately"
+                : "In-app updates remain available in Pulse",
+            ];
+            return (
+              <label key={preference.eventType}>
+                <span>
+                  <strong>{t(label)}</strong>
+                  <small>{t(hint)}</small>
+                </span>
+                {isCommunication ? (
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label={`${t(label)}: ${t("Email")}`}
+                    checked={preference.cadence !== "Off"}
+                    disabled={preference.mandatory}
+                    onChange={(event) =>
+                      updatePreference(
+                        preference.eventType,
+                        event.target.checked ? "Immediate" : "Off",
+                      )
+                    }
+                  />
+                ) : (
+                  <select
+                    aria-label={`${preference.eventType} email cadence`}
+                    value={preference.cadence}
+                    disabled={preference.mandatory}
+                    onChange={(event) =>
+                      updatePreference(preference.eventType, event.target.value)
+                    }
+                  >
+                    <option value="Immediate">{t("Immediate")}</option>
+                    <option value="Daily">{t("Daily")}</option>
+                    <option value="Weekly">{t("Weekly")}</option>
+                    <option value="Off">{t("Off")}</option>
+                  </select>
+                )}
+              </label>
+            );
+          })}
         </div>
       </section>
+      {activeRole === "Company admin" && (
+        <CompanyContactsSection onToast={onToast} />
+      )}
       <div className="updates-feed">
         {entries.map((entry, index) => (
           <article className="update-item" key={entry.title}>

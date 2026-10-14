@@ -184,6 +184,39 @@ export const IS: Record<string, string> = {
   Off: "Slökkt",
   "Preferences saved.": "Stillingar vistaðar.",
   "Could not save this preference.": "Ekki tókst að vista stillinguna.",
+  "Mandatory service message · delivered immediately":
+    "Skyldubundin þjónustutilkynning · send strax",
+  "In-app updates remain available in Pulse":
+    "Uppfærslur í Pulse eru áfram aðgengilegar",
+
+  // --- communication topics on the Updates page ---
+  // (Service notices, Security advisories and General announcements are in the shared catalogue already.)
+  "Product updates from DataCentral": "Vöruuppfærslur frá DataCentral",
+  "Release announcements like new versions and features":
+    "Tilkynningar um nýjar útgáfur og eiginleika",
+  "Planned maintenance and service changes":
+    "Áætlað viðhald og þjónustubreytingar",
+  "Always delivered — security information for your company":
+    "Alltaf sent — öryggisupplýsingar fyrir fyrirtækið þitt",
+  "Occasional news from the DataCentral team":
+    "Fréttir frá DataCentral teyminu af og til",
+
+  // --- the company's recipient list (Company admins) ---
+  "Who receives DataCentral communications for your company":
+    "Hverjir fá samskipti frá DataCentral fyrir fyrirtækið þitt",
+  "Colleagues with a Pulse account receive updates automatically and manage their own preferences. Add people here who should receive product updates and notices without a Pulse account.":
+    "Samstarfsfólk með Pulse-aðgang fær uppfærslur sjálfkrafa og stýrir eigin stillingum. Bættu hér við fólki sem á að fá vöruuppfærslur og tilkynningar án Pulse-aðgangs.",
+  "Add recipient": "Bæta við viðtakanda",
+  "No additional recipients yet.": "Engir viðbótarviðtakendur enn.",
+  "Remove this recipient?": "Fjarlægja þennan viðtakanda?",
+  "They stop receiving DataCentral communications for your company. Emails already sent are not recalled.":
+    "Viðkomandi fær ekki lengur samskipti frá DataCentral fyrir fyrirtækið þitt. Tölvupóstur sem þegar hefur verið sendur er ekki kallaður til baka.",
+  "Keep recipient": "Halda viðtakanda",
+
+  // --- what a failed request says when the server gave no reason (errorMessage in lib/api-client.ts) ---
+  "The operation failed. Please try again.": "Aðgerðin mistókst. Reyndu aftur.",
+  "Unable to connect. Your input is still here; please retry.":
+    "Ekki náðist samband. Það sem þú slóst inn er enn til staðar; reyndu aftur.",
 
   // --- page intros & filters ---
   "Product ideas": "Vöruhugmyndir",

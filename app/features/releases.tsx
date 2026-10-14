@@ -20,15 +20,20 @@ export function ReleasesPage({
   onChange,
   onIdeasChange,
   onToast,
+  onDraftEmail,
 }: {
   releases: ReleaseItem[];
   ideas: InternalIdea[];
   onChange: (items: ReleaseItem[]) => void;
   onIdeasChange: (items: InternalIdea[]) => void;
   onToast: (message: string) => void;
+  /** Makes a customer email of a published release and opens it for editing; it reports its own failure. */
+  onDraftEmail: (release: ReleaseItem) => Promise<void> | void;
 }) {
   const t = useT();
   const [creating, setCreating] = useState(false);
+  // True while a draft is being made: a second click must not make a second draft of the same release.
+  const [drafting, setDrafting] = useState(false);
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [summary, setSummary] = useState("");
@@ -91,6 +96,15 @@ export function ReleasesPage({
     );
     onToast(`${item.id} was published and eligible customers were notified.`);
   }
+  async function draftEmail(item: ReleaseItem) {
+    if (drafting) return;
+    setDrafting(true);
+    try {
+      await onDraftEmail(item);
+    } finally {
+      setDrafting(false);
+    }
+  }
   return (
     <div className="page-stack management-page">
       <PageIntro
@@ -132,6 +146,16 @@ export function ReleasesPage({
                 {!release.published && (
                   <Button onClick={() => publish(release)}>
                     {t("Publish release")}
+                  </Button>
+                )}
+                {release.published && (
+                  <Button
+                    variant="secondary"
+                    icon="send"
+                    disabled={drafting}
+                    onClick={() => void draftEmail(release)}
+                  >
+                    {t("Draft customer email")}
                   </Button>
                 )}
               </footer>

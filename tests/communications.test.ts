@@ -952,6 +952,30 @@ test("topics: every communication topic maps to a registered notification event 
   );
 });
 
+test("preferences: a communication topic is on (Immediate) or off; Daily and Weekly are refused, and the mandatory topic stays Immediate", async () => {
+  const cadenceOf = async (eventType: string) =>
+    (await listNotificationPreferences(REQUESTER)).find((p) => p.eventType === eventType)?.cadence;
+  for (const cadence of ["Off", "Immediate"] as const) {
+    assert.equal((await saveNotificationPreference(REQUESTER, "communication.general", cadence)).cadence, cadence);
+    assert.equal(await cadenceOf("communication.general"), cadence, `${cadence} is saved and listed`);
+  }
+  await saveNotificationPreference(REQUESTER, "communication.general", "Off");
+  for (const eventType of notificationEventTypes.filter((type) => type.startsWith("communication."))) {
+    for (const cadence of ["Daily", "Weekly"]) {
+      await assert.rejects(
+        saveNotificationPreference(REQUESTER, eventType, cadence),
+        // The mandatory topic is refused for what it is, anything but Immediate; the rule about digests is for the others.
+        eventType === "communication.security-advisories" ? /MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE/ : /INVALID_NOTIFICATION_CADENCE/,
+        `${eventType} ${cadence}`,
+      );
+    }
+  }
+  assert.equal(await cadenceOf("communication.general"), "Off", "a refused cadence changes nothing");
+  await assert.rejects(saveNotificationPreference(REQUESTER, "communication.security-advisories", "Off"), /MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE/);
+  assert.equal((await saveNotificationPreference(REQUESTER, "communication.security-advisories", "Immediate")).mandatory, true);
+  assert.equal((await saveNotificationPreference(REQUESTER, "release.published", "Weekly")).cadence, "Weekly", "the rule is about communications: other events keep their digests");
+});
+
 test("audience: the memory loader lists active members with their topic preference and locale, plus contacts and suppressions", async () => {
   await seedOrganizations(); // ORG-001 Origo, ORG-002 Advania and the seeded admin (bjarki@uidata.com, a Company admin of ORG-001)
   organizations().push({ id: "ORG-009", name: "Closed", type: "Customer", status: "Inactive", domain: "closed.is", users: 0, requests: 0, authentication: ["OTP"] });
