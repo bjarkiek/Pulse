@@ -169,8 +169,8 @@ export function SettingsPage({
         description="Govern taxonomy, customer wording, retention, scoring, localization, and secure attachment policy."
       />
       <section className="settings-grid">
-        <DeliveryStatus />
         <CommunicationSettingsCard onToast={onToast} />
+        <DeliveryStatus />
         <article className="settings-card">
           <header>
             <Icon name="plus" size={19} />
