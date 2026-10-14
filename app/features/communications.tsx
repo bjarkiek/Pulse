@@ -13,7 +13,10 @@ import {
   type ReleaseItem,
 } from "./shared";
 import { CommunicationEditor } from "./communication-editor";
-import { COMMUNICATION_TEMPLATE_LABELS } from "./communication-fields";
+import {
+  COMMUNICATION_STATUS_TONE,
+  COMMUNICATION_TEMPLATE_LABELS,
+} from "./communication-fields";
 import { CommunicationDetail } from "./communication-detail";
 import {
   CommunicationContactsTab,
@@ -27,13 +30,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "contacts", label: "Contacts" },
   { id: "suppressions", label: "Suppressions" },
 ];
-const STATUS_TONE = {
-  Draft: "neutral",
-  Scheduled: "warning",
-  Sending: "violet",
-  Sent: "success",
-  Cancelled: "error",
-} as const;
 const API = "/api/v1/internal/communications";
 const PARAM = "communication";
 
@@ -302,7 +298,10 @@ export function CommunicationsPage({
               title="No communications yet"
               description="Start with a product update, a service notice or a plain announcement."
               action="New product update"
-              onAction={() => void createDraft("product-update")}
+              // The empty state has no disabled look of its own, so a click while a draft is being created is ignored, like the buttons above.
+              onAction={() => {
+                if (!creating) void createDraft("product-update");
+              }}
             />
           )}
           {items && items.length > 0 && (
@@ -329,7 +328,9 @@ export function CommunicationsPage({
                   <span>
                     {t(COMMUNICATION_TEMPLATE_LABELS[item.templateKey])}
                   </span>
-                  <Status tone={STATUS_TONE[item.status]}>{item.status}</Status>
+                  <Status tone={COMMUNICATION_STATUS_TONE[item.status]}>
+                    {item.status}
+                  </Status>
                   <span>
                     {/* A scheduled communication freezes its audience when it starts to send, so until then there is no count. */}
                     {item.status === "Draft" || item.status === "Scheduled"

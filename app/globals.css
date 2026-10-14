@@ -4581,8 +4581,9 @@ a.tour-menu-item {
 .communication-review dd {
   margin: 0;
 }
-.management-modal .form-error,
-.management-modal .communication-hint {
+/* The editor's own dialogs only: other modals lay out their notices themselves. */
+.communication-editor .management-modal .form-error,
+.communication-editor .management-modal .communication-hint {
   margin: 12px 0 0;
 }
 .communication-audience {
@@ -4629,5 +4630,148 @@ a.tour-menu-item {
 @media (max-width: 560px) {
   .communication-window {
     grid-template-columns: 1fr;
+  }
+}
+/* The campaign detail, the contacts and the suppressions. As in the campaign list, the actions column has a width of its own: an auto one would be sized per row, and the columns would not line up. */
+.communication-stats {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+/* A tile this narrow has no room for a label and a four-digit figure side by side: the figure goes under the label. */
+.communication-stats > div {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.communication-stats strong {
+  grid-row: auto;
+  grid-column: auto;
+}
+.communication-org-table .management-head,
+.communication-org-table .management-row {
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+}
+.communication-org-table .management-row {
+  min-height: 48px;
+}
+/* The figures are the point of this table; the small grey second and third column is for the details in the other tables. */
+.communication-org-table .management-row > span {
+  font-size: 13px;
+  color: var(--text);
+}
+.communication-delivery-table .management-head,
+.communication-delivery-table .management-row {
+  grid-template-columns:
+    minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 0.8fr) minmax(0, 1.4fr)
+    minmax(0, 1.4fr) minmax(0, 1fr);
+}
+.contact-table .management-head,
+.contact-table .management-row {
+  grid-template-columns:
+    minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)
+    minmax(0, 1fr) 176px;
+}
+.suppression-table .management-head,
+.suppression-table .management-row {
+  grid-template-columns:
+    minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)
+    120px;
+}
+/* The columns are the same in every row (minmax(0, …)), so what does not fit gives way instead of pushing its column wider in one row only: a state with its code wraps, an email is cut short, a long word breaks. */
+.communication-delivery-table .status,
+.contact-table .status {
+  justify-self: start;
+  white-space: normal;
+}
+.communication-delivery-table .record-name code,
+.contact-table .record-name code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.communication-delivery-table .management-row > span,
+.suppression-table .management-row > span {
+  overflow-wrap: anywhere;
+}
+/* The details beside a name (the generic rule covers the second and third column): the last event, the opened time, the source, the date. */
+.contact-table .management-row > span:nth-child(5),
+.suppression-table .management-row > span:nth-child(4),
+.communication-delivery-table .management-row > span:nth-child(5),
+.communication-delivery-table .management-row > span:nth-child(6) {
+  font-size: 11px;
+  color: var(--neutral-600);
+}
+.communication-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.communication-suppress-form input {
+  flex: 1 1 200px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+}
+@media (max-width: 1100px) {
+  .communication-delivery-table .management-head,
+  .communication-delivery-table .management-row {
+    grid-template-columns:
+      minmax(160px, 2fr) minmax(0, 1.2fr) minmax(0, 2fr)
+      minmax(0, 1fr);
+  }
+  .communication-delivery-table .management-head > span:nth-child(3),
+  .communication-delivery-table .management-row > span:nth-child(3),
+  .communication-delivery-table .management-head > span:nth-child(5),
+  .communication-delivery-table .management-row > span:nth-child(5) {
+    display: none;
+  }
+  .contact-table .management-head,
+  .contact-table .management-row {
+    grid-template-columns: minmax(160px, 2fr) minmax(0, 2fr) minmax(0, 1fr)
+      176px;
+  }
+  .contact-table .management-head > span:nth-child(2),
+  .contact-table .management-row > span:nth-child(2),
+  .contact-table .management-head > span:nth-child(5),
+  .contact-table .management-row > span:nth-child(5) {
+    display: none;
+  }
+  .suppression-table .management-head,
+  .suppression-table .management-row {
+    grid-template-columns: minmax(160px, 2fr) minmax(0, 2fr) minmax(0, 1fr)
+      120px;
+  }
+  .suppression-table .management-head > span:nth-child(3),
+  .suppression-table .management-row > span:nth-child(3) {
+    display: none;
+  }
+}
+@media (max-width: 780px) {
+  /* As the campaign list does: a row is the name, the status and the actions. The table of figures per company keeps its head: they mean nothing without it. */
+  .contact-table .management-row,
+  .suppression-table .management-row,
+  .communication-delivery-table .management-row {
+    grid-template-columns: 1fr auto;
+    padding: 12px;
+  }
+  .contact-table
+    .management-row
+    > span:not(.record-name):not(.status):not(.communication-row-actions),
+  .suppression-table
+    .management-row
+    > span:not(:first-child):not(.communication-row-actions),
+  .communication-delivery-table
+    .management-row
+    > span:not(.record-name):not(.status) {
+    display: none;
+  }
+  .contact-table .management-row > .communication-row-actions,
+  .suppression-table .management-row > .communication-row-actions {
+    grid-column: 1 / -1;
+  }
+  .communication-org-table .management-head {
+    display: grid;
   }
 }

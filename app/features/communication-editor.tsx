@@ -103,6 +103,14 @@ export function CommunicationEditor({
   // Counts the edits, so that a save can tell whether the author kept typing while its request was on the way.
   const edits = useRef(0);
   const saving = useRef(false);
+  // False once the editor is closed. A request can finish after "Discard changes"; its result must not reach the page then, or the page would open the editor again.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const body = (draft.content.body[locale] ??
     draft.content.body.en) as TemplateBody;
   const estimate =
@@ -168,6 +176,7 @@ export function CommunicationEditor({
       const data = await apiFetch<{ item: CommunicationItem }>(
         `${API}/${draft.id}`,
       );
+      if (!mounted.current) return;
       setDraft(data.item);
       setDirty(false);
       onSaved(data.item);
@@ -209,6 +218,8 @@ export function CommunicationEditor({
           }),
         },
       );
+      // Closed meanwhile: nothing is left to update or to tell, and onSaved would reopen the editor.
+      if (!mounted.current) return null;
       onSaved(data.item);
       if (seen !== edits.current) {
         // The server holds the text as it was when the request left, so only the version moves on; the author's newer text stays unsaved.

@@ -630,3 +630,74 @@ Object.assign(internalTranslations, {
   "Paragraphs (separate with a blank line)":
     "Málsgreinar (aðskildar með auðri línu)",
 });
+
+// The campaign detail: header actions, delivery states, the recipient list.
+Object.assign(internalTranslations, {
+  Unschedule: "Aftengja tímasetningu",
+  "Cancel sending": "Hætta við sendingu",
+  "Retry dead letters": "Reyna aftur sendingar sem mistókust",
+  "Nothing was requeued: no recipient had run out of attempts.":
+    "Engu var bætt aftur í biðröð: enginn viðtakandi hafði nýtt allar tilraunir.",
+  "Recipients queued again:": "Viðtakendur settir aftur í biðröð:",
+  "The communication was reopened and is sending again.":
+    "Sendingin var opnuð aftur og er í sendingu á ný.",
+  Accepted: "Móttekið",
+  Delivered: "Afhent",
+  Opened: "Opnað",
+  Clicked: "Smellt",
+  Deferred: "Frestað",
+  Dropped: "Fellt niður",
+  Suppressed: "Útilokað",
+  "Filter by state": "Sía eftir stöðu",
+  "All states": "Allar stöður",
+  "Filter by company": "Sía eftir fyrirtæki",
+  recipients: "viðtakendur",
+  Recipient: "Viðtakandi",
+  Source: "Uppruni",
+  State: "Staða",
+  "Last event": "Síðasti atburður",
+  Member: "Meðlimur",
+  Test: "Prófun",
+  "No recipients to show.": "Engir viðtakendur til að sýna.",
+  "Recipients are chosen when sending starts.":
+    "Viðtakendur eru ákveðnir þegar sending hefst.",
+  Previous: "Fyrri",
+});
+
+// The Contacts and Suppressions tabs and the dialogs the company section shares.
+Object.assign(internalTranslations, {
+  contacts: "tengiliðir",
+  "Add contact": "Bæta við tengilið",
+  "Paste list": "Líma lista",
+  "Pulse members of this company receive communications automatically and manage their own preferences; add people here who are not Pulse users.":
+    "Meðlimir þessa fyrirtækis í Pulse fá samskipti sjálfkrafa og stýra eigin stillingum; bættu hér við fólki sem er ekki notendur í Pulse.",
+  "This company has no contacts yet.": "Þetta fyrirtæki á enga tengiliði enn.",
+  Language: "Tungumál",
+  Topics: "Efnisflokkar",
+  Admin: "Stjórnandi",
+  Import: "Innflutningur",
+  "Contact removed.": "Tengiliður fjarlægður.",
+  "Contact updated.": "Tengiliður uppfærður.",
+  "Contact added.": "Tengilið bætt við.",
+  "Communication contact": "Tengiliður samskipta",
+  Note: "Athugasemd",
+  "At least one topic is required.":
+    "Að minnsta kosti einn efnisflokkur þarf að vera valinn.",
+  "Save contact": "Vista tengilið",
+  "Add several contacts": "Bæta við mörgum tengiliðum",
+  "One per line: Name, email — or just the email. Up to 250 lines.":
+    "Einn í hverri línu: nafn, netfang — eða bara netfangið. Allt að 250 línur.",
+  Lines: "Línur",
+  "Add contacts": "Bæta við tengiliðum",
+  "Contacts added:": "Tengiliðum bætt við:",
+  "Lines skipped:": "Línum sleppt:",
+  "Suppressed addresses never receive communications, whatever company or list they are on. Bounces, spam reports and unsubscribes arrive here automatically from SendGrid.":
+    "Útilokuð netföng fá aldrei sendingar, sama hvaða fyrirtæki eða lista þau eru á. Netföng sem skila sér ekki, ruslpóstskvartanir og afskráningar berast hingað sjálfkrafa frá SendGrid.",
+  "Reason (optional)": "Ástæða (valfrjálst)",
+  "Suppress address": "Útiloka netfang",
+  "Address suppressed.": "Netfang útilokað.",
+  "Suppression removed.": "Útilokun fjarlægð.",
+  "No addresses are suppressed.": "Engin netföng eru útilokuð.",
+  Reason: "Ástæða",
+  Since: "Frá",
+});

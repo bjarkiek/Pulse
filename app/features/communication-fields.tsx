@@ -14,6 +14,15 @@ export const COMMUNICATION_TEMPLATE_LABELS = {
   plain: "Announcement",
 } as const;
 
+/** The tone each status is shown in, in the list and in the detail view (the status itself is translated where it is shown). */
+export const COMMUNICATION_STATUS_TONE = {
+  Draft: "neutral",
+  Scheduled: "warning",
+  Sending: "violet",
+  Sent: "success",
+  Cancelled: "error",
+} as const;
+
 type Link = { label: string; url: string };
 type Callout = { tone: "warning" | "info"; label?: string; text: string };
 type Section = {
