@@ -11,7 +11,7 @@ export async function deliveryStatus(identity: PulseIdentity) {
     await (await getSqlPool()).request().query(`
  SELECT 'Email' channel,state,COUNT(*) count,MIN(created_at) oldest FROM dbo.Notifications WHERE channel='Email' AND state IN ('Queued','Retry','Processing','Dead letter') GROUP BY state
  UNION ALL SELECT 'Webhook' channel,state,COUNT(*) count,MIN(created_at) oldest FROM dbo.WebhookDeliveries WHERE state IN ('Queued','Retry','Processing','Dead letter') GROUP BY state
- UNION ALL SELECT 'Communications' channel,state,COUNT(*) count,MIN(created_at) oldest FROM dbo.CommunicationDeliveries WHERE state IN ('Queued','Retry','Processing','Dead letter') GROUP BY state
+ UNION ALL SELECT 'Communications' channel,d.state,COUNT(*) count,MIN(d.created_at) oldest FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id AND c.status<>'Cancelled' AND c.deleted_at IS NULL WHERE d.state IN ('Queued','Retry','Processing','Dead letter') GROUP BY d.state
  `)
   ).recordset as Array<{
     channel: DeliveryChannel;

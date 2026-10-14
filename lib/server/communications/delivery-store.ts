@@ -22,10 +22,11 @@ export type ClaimedDelivery = { id: string; email: string; displayName: string |
 export type ClaimedBatch = { communicationId: string; templateKey: TemplateKey; topic: CommunicationTopic; content: CommunicationContent; locale: EmailLocale; deliveries: ClaimedDelivery[] };
 export type DeliveryStore = {
   promoteScheduled(now: Date): Promise<string[]>;          // Scheduled & due → freezeAudience → ids now Sending/Sent
-  recoverStale(now: Date): Promise<number>;                // Processing whose lease ran out (next_attempt_at < now) → Retry, attempts kept (used up → Dead letter LEASE_EXPIRED); a Cancelled campaign's real rows → Cancelled; how many
+  recoverStale(now: Date): Promise<number>;                // Processing whose lease ran out (next_attempt_at < now; SQL: by its own clock) → Retry, attempts kept (used up → Dead letter LEASE_EXPIRED); a Cancelled campaign's real rows → Cancelled; how many
   claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale, Test rows or real rows (never both); Test rows claimable regardless of campaign status; leases what it takes
   markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>;
   markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // null → Dead letter; a row of a Cancelled campaign → Cancelled
+  releaseBatch(ids: string[]): Promise<void>;              // claimed rows given back unused: Processing → Queued, one attempt less, no lease (a Cancelled campaign's real rows → Cancelled)
   acceptedToday(now: Date): Promise<number>;
   completeCampaigns(now: Date): Promise<string[]>;         // Sending with no Queued/Retry/Processing non-test rows → Sent
 };
@@ -159,6 +160,16 @@ const memoryStore: DeliveryStore = {
       Object.assign(d, { state: stopped ? "Cancelled" : nextAttemptAt ? "Retry" : "Dead letter", nextAttemptAt: stopped ? null : nextAttemptAt?.toISOString() ?? null, lastErrorCode: errorCode });
     }
   },
+  async releaseBatch(ids) {
+    // The rows were claimed and nothing came of it (the provider refused the key, say), so they are as they were before the claim, attempt
+    // included. Only a row that is still claimed: one that settled or was recovered meanwhile is not the caller's any more. As in markFailed and
+    // recoverStale, a real row of a campaign that was cancelled meanwhile is cancelled rather than queued for a claim that will never come.
+    const cancelled = new Set(memoryCommunications().filter((c) => c.status === "Cancelled").map((c) => c.id));
+    for (const d of memoryDeliveries()) {
+      if (!ids.includes(d.id) || d.state !== "Processing") continue;
+      Object.assign(d, { state: d.source !== "Test" && cancelled.has(d.communicationId) ? "Cancelled" : "Queued", attemptCount: Math.max(0, d.attemptCount - 1), nextAttemptAt: null });
+    }
+  },
   async acceptedToday(now) {
     const day = now.toISOString().slice(0, 10);
     return memoryDeliveries().filter((d) => d.acceptedAt?.slice(0, 10) === day).length;
@@ -181,16 +192,19 @@ const sqlStore: DeliveryStore = {
       .query("SELECT public_id id FROM dbo.Communications WHERE status='Scheduled' AND scheduled_at<=@now AND deleted_at IS NULL ORDER BY scheduled_at");
     return promoteDue(due.recordset.map((row) => row.id as string), now);
   },
-  async recoverStale(now) {
+  async recoverStale() {
+    // The lease runs out by the database's clock, the one the claim stamped it with (SYSUTCDATETIME), not the application's: two clocks a few
+    // seconds apart would shorten or lengthen every lease by that much. So the caller's `now` is not used here (the memory store, which has one
+    // clock, uses it).
     // As markFailed: a real row of a campaign that was cancelled meanwhile is cancelled, not queued for a claim that will never come, and a cancel
     // that is committing is waited for (READCOMMITTEDLOCK); a Test row is claimed whatever its campaign is, so it is retried. The attempts are kept,
     // and the row is due at once (no next attempt), unless that claim was its last attempt: then it is a dead letter, with the reason recorded.
     // One statement, so it is atomic on its own.
-    const result = await (await getSqlPool()).request().input("now", sql.DateTime2, now).input("maxAttempts", sql.Int, MAX_ATTEMPTS)
+    const result = await (await getSqlPool()).request().input("maxAttempts", sql.Int, MAX_ATTEMPTS)
       .query(`UPDATE d SET state=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN 'Cancelled' WHEN d.attempt_count>=@maxAttempts THEN 'Dead letter' ELSE 'Retry' END,next_attempt_at=NULL,
           last_error_code=CASE WHEN d.attempt_count>=@maxAttempts THEN 'LEASE_EXPIRED' ELSE d.last_error_code END
         FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id
-        WHERE d.state='Processing' AND d.next_attempt_at<@now`);
+        WHERE d.state='Processing' AND d.next_attempt_at<SYSUTCDATETIME()`);
     return result.rowsAffected[0];
   },
   async claimBatch(size) {
@@ -241,6 +255,16 @@ const sqlStore: DeliveryStore = {
         next_attempt_at=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error
         FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id
         WHERE d.id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))`);
+  },
+  async releaseBatch(ids) {
+    // As in memory: only rows still claimed, one attempt less (never below zero), no lease; a cancelled campaign's real rows are cancelled, and a
+    // cancel that is committing is waited for (READCOMMITTEDLOCK). One statement, so it is atomic on its own.
+    if (!ids.length) return;
+    await (await getSqlPool()).request().input("ids", sql.NVarChar(sql.MAX), JSON.stringify(ids))
+      .query(`UPDATE d SET state=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN 'Cancelled' ELSE 'Queued' END,
+          attempt_count=CASE WHEN d.attempt_count>0 THEN d.attempt_count-1 ELSE 0 END,next_attempt_at=NULL
+        FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id
+        WHERE d.state='Processing' AND d.id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))`);
   },
   async acceptedToday(now) {
     const result = await (await getSqlPool()).request().input("day", sql.Date, now).query("SELECT COUNT(*) count FROM dbo.CommunicationDeliveries WHERE accepted_at>=@day AND accepted_at<DATEADD(day,1,@day)");

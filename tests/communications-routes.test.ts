@@ -900,7 +900,7 @@ test("job route: it runs the worker behind the secret — skipped while sending 
     const idle = await job();
     assert.equal(idle.status, 200);
     assert.equal(idle.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await idle.json(), { skipped: true, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0 }, "sending is off until the settings say so");
+    assert.deepEqual(await idle.json(), { skipped: true, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0, splits: 0 }, "sending is off until the settings say so");
 
     await enableSending();
     organizations().push({ id: "ORG-002", name: "Advania", type: "Customer", status: "Active", domain: "advania.is", users: 0, requests: 0, authentication: ["OTP"] });

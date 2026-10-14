@@ -39,15 +39,33 @@ export function buildSendGridMessage(batch: OutboundBatch): Record<string, unkno
   };
 }
 
-export function classifySendError(error: unknown): SendError {
+/**
+ * The codes a failure without an HTTP status may be named by. Anything else is SEND_FAILED: an error message is free text (it can carry an
+ * address, a host, a path) and does not belong in a log line or a column. ECONNABORTED is what axios raises when the request timeout passes.
+ */
+const NETWORK_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "ECONNREFUSED", "EAI_AGAIN", "ECONNABORTED"]);
+
+/**
+ * What a failed send means: the HTTP status as `HTTP_<status>` (retryable for 429 and 5xx), and how long the provider asked to wait, from
+ * Retry-After or, for a 429, from X-RateLimit-Reset (epoch seconds; `nowMs` is the clock it is measured against). A failure without a status is
+ * retryable and is named by a known network code, or SEND_FAILED.
+ */
+export function classifySendError(error: unknown, nowMs = Date.now()): SendError {
   if (error instanceof SendError) return error;
-  const e = error as { code?: unknown; response?: { headers?: Record<string, string>; body?: { errors?: Array<{ message?: string }> } }; message?: string };
+  const e = error as { code?: unknown; response?: { headers?: Record<string, string> }; message?: unknown } | null | undefined;
   const status = typeof e?.code === "number" ? e.code : Number(e?.code);
   if (Number.isFinite(status) && status >= 100) {
-    const retryAfter = Number(e.response?.headers?.["retry-after"]);
-    return new SendError(`HTTP_${status}`, status === 429 || status >= 500, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null);
+    const headers = e?.response?.headers;
+    let wait = Number(headers?.["retry-after"]);
+    if (!(Number.isFinite(wait) && wait > 0) && status === 429) {
+      const reset = Number(headers?.["x-ratelimit-reset"]);
+      wait = Number.isFinite(reset) && reset * 1000 > nowMs ? Math.ceil(reset - nowMs / 1000) : Number.NaN;
+    }
+    return new SendError(`HTTP_${status}`, status === 429 || status >= 500, Number.isFinite(wait) && wait > 0 ? wait : null);
   }
-  return new SendError((e?.message || "SEND_FAILED").replace(/[^A-Za-z0-9_]/g, "_").slice(0, 40), true);
+  const message = String(e?.message ?? "");
+  const known = typeof e?.code === "string" && NETWORK_CODES.has(e.code) ? e.code : [...NETWORK_CODES].find((code) => message.includes(code));
+  return new SendError(known ?? "SEND_FAILED", true);
 }
 
 /** Development and tests without a key: nothing leaves the process. The worker refuses this transport in production. */

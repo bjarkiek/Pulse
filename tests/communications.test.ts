@@ -38,7 +38,7 @@ import {
 } from "../lib/server/communications/campaign-repository";
 import { BACKOFF_BASE_MS, communicationStats, freezeAudience, getDeliveryStore, LEASE_MS, MAX_ATTEMPTS, requeueDeadLetters, type DeliveryStore } from "../lib/server/communications/delivery-store";
 import { buildSendGridMessage, classifySendError, createMailTransport, SendError, type MailTransport, type OutboundBatch } from "../lib/server/communications/sendgrid";
-import { processCommunicationBatch } from "../lib/server/communications/delivery-worker";
+import { MAX_SPLIT_REQUESTS, processCommunicationBatch } from "../lib/server/communications/delivery-worker";
 import { deliveryStatus, retryDeliveries } from "../lib/server/delivery-status";
 import { makeT } from "../lib/i18n";
 import sgMail from "@sendgrid/mail";
@@ -2744,7 +2744,7 @@ test("send side, demo data: with SQL configured and the demo-data switch on, cam
 // SendGrid transport and delivery worker
 // ---------------------------------------------------------------------------------------------------------------------
 
-type FakeStep = "ok" | { status: number; retryAfter?: number };
+type FakeStep = "ok" | { status: number; retryAfter?: number; reset?: number };
 // Module scope: the webhook and acceptance tests of later tasks reuse these two.
 /**
  * Stands in for SendGrid: answers from `script` (past its end, "ok") and keeps every batch it was handed. A failure looks like the SDK's
@@ -2758,14 +2758,35 @@ function fakeTransport(script: FakeStep[] = []) {
       calls.push(batch);
       const step = script.shift() ?? "ok";
       if (step === "ok") return { providerMessageId: `msg-${calls.length}` };
-      throw Object.assign(new Error("sendgrid failure"), { code: step.status, response: { headers: step.retryAfter ? { "retry-after": String(step.retryAfter) } : {}, body: { errors: [{ message: "nope" }] } } });
+      throw Object.assign(new Error("sendgrid failure"), { code: step.status, response: { headers: { ...(step.retryAfter ? { "retry-after": String(step.retryAfter) } : {}), ...(step.reset ? { "x-ratelimit-reset": String(step.reset) } : {}) }, body: { errors: [{ message: "nope" }] } } });
+    },
+  };
+  return { transport, calls };
+}
+/**
+ * Stands in for a SendGrid that rejects, with `status`, every request that has a recipient `isBad` points at (as SendGrid answers 400 to a whole
+ * request for one address it will not take); anything else is accepted with a message id of its own. Records the batches like `fakeTransport`.
+ */
+function pickyTransport(isBad: (email: string) => boolean, status = 400) {
+  const calls: OutboundBatch[] = [];
+  const transport: MailTransport = {
+    kind: "sendgrid",
+    async sendBatch(batch) {
+      calls.push(batch);
+      if (batch.recipients.some((r) => isBad(r.email))) throw Object.assign(new Error("sendgrid failure"), { code: status, response: { headers: {}, body: { errors: [{ message: "nope" }] } } });
+      return { providerMessageId: `msg-${calls.length}` };
     },
   };
   return { transport, calls };
 }
 /** A campaign that has been sent to the four people `seedAudience` makes: Sending, with four Queued rows (three English, one Icelandic). */
 async function readyCampaign() {
+  return readyCampaignWith(0);
+}
+/** The same with `extraEnglish` more English-speaking contacts of ORG-001 in the audience: `extraEnglish + 3` English rows and the one Icelandic row. */
+async function readyCampaignWith(extraEnglish: number) {
   await seedAudience();
+  for (let i = 0; i < extraEnglish; i++) await saveContact(PM, { organizationId: "ORG-001", email: `extra${i}@origo.is`, displayName: `Extra ${i}`, locale: "en", topics: ["product-updates"] });
   await enableSending();
   const created = await createCommunication(PM, draftInput);
   await sendCommunication(PM, created.id, {});
@@ -2781,6 +2802,10 @@ async function captured<T>(method: "log" | "warn" | "error", work: () => Promise
   } finally {
     console[method] = original;
   }
+}
+/** `work` with the worker's structured log lines (warn and error) recorded instead of printed, so that they stay out of the TAP stream; gives back what `work` returned. */
+async function quietly<T>(work: () => Promise<T>): Promise<T> {
+  return (await captured("warn", () => captured("error", work))).value.value;
 }
 const outbound = (over: Partial<OutboundBatch> = {}): OutboundBatch => ({
   subject: "S", html: "<p>h</p>", text: "t", from: { email: "updates@datacentral.ai", name: "DataCentral" }, replyTo: null,
@@ -2829,7 +2854,7 @@ test("sendgrid: error classification", () => {
   assert.equal(classifySendError(new Error("ECONNRESET")).retryable, true);
 });
 
-test("sendgrid: classification — statuses, a missing or odd Retry-After, network errors, anything that is not an error, and a code that is short and made of word characters", () => {
+test("sendgrid: classification — statuses, a missing or odd Retry-After, network errors, anything that is not an error, and a code that is never made of the message", () => {
   const summary = (error: unknown) => { const c = classifySendError(error); return [c.code, c.retryable, c.retryAfterSeconds]; };
   assert.deepEqual(summary({ code: 500 }), ["HTTP_500", true, null]);
   assert.deepEqual(summary({ code: 401 }), ["HTTP_401", false, null], "a rejected key is not worth retrying");
@@ -2837,14 +2862,34 @@ test("sendgrid: classification — statuses, a missing or odd Retry-After, netwo
   assert.deepEqual(summary({ code: "429", response: { headers: { "retry-after": "30" } } }), ["HTTP_429", true, 30], "a status can arrive as text");
   for (const odd of ["soon", "0", "-5", ""]) assert.equal(classifySendError({ code: 429, response: { headers: { "retry-after": odd } } }).retryAfterSeconds, null, `Retry-After ${JSON.stringify(odd)} asks for no wait`);
   assert.equal(classifySendError({ code: 429, response: {} }).retryAfterSeconds, null);
-  assert.deepEqual(summary(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), ["read_ECONNRESET", true, null], "a network error has no status: its message becomes the code");
-  assert.deepEqual(summary(new Error("timeout of 30000ms exceeded")), ["timeout_of_30000ms_exceeded", true, null]);
+  assert.deepEqual(summary(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), ["ECONNRESET", true, null], "a network error has no status: its code is the code, when it is a known one");
+  for (const code of ["ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "ECONNREFUSED", "EAI_AGAIN", "ECONNABORTED"]) assert.deepEqual(summary(Object.assign(new Error("whatever it says"), { code })), [code, true, null], `${code} is a known network code`);
+  assert.deepEqual(summary(new Error("getaddrinfo EAI_AGAIN api.sendgrid.com")), ["EAI_AGAIN", true, null], "a known network code in the message counts when the error carries none");
+  assert.deepEqual(summary(new Error("timeout of 30000ms exceeded")), ["SEND_FAILED", true, null], "any other failure is a generic one, however its message reads");
   for (const notAnError of [null, undefined, "boom", 42, {}]) assert.deepEqual(summary(notAnError), ["SEND_FAILED", true, null]);
-  for (const notAStatus of [0, 99, "", null, "ECONNRESET"]) assert.deepEqual(summary(Object.assign(new Error("odd code"), { code: notAStatus })), ["odd_code", true, null], `a code of ${JSON.stringify(notAStatus)} is no HTTP status`);
-  assert.equal(classifySendError(new Error("x".repeat(100))).code.length, 40, "a code fits the log line and the column");
-  assert.match(classifySendError(new Error("a b-c.d/e")).code, /^[A-Za-z0-9_]+$/);
+  for (const notAStatus of [0, 99, "", null, "EPIPE", "ERR_BAD_REQUEST"]) assert.deepEqual(summary(Object.assign(new Error("odd code"), { code: notAStatus })), ["SEND_FAILED", true, null], `a code of ${JSON.stringify(notAStatus)} is neither an HTTP status nor a known network code`);
+  // The message is never the code (it can carry an address) and, whatever it is, it does not throw.
+  assert.equal(classifySendError(new Error("bad address jon@origo.is")).code, "SEND_FAILED");
+  for (const message of [42, { not: "a string" }, ["ECONNRESET"], null, undefined]) assert.doesNotThrow(() => classifySendError({ message }), `a message of ${JSON.stringify(message)}`);
+  assert.equal(classifySendError({ message: 42 }).code, "SEND_FAILED");
   const mine = new SendError("MINE", false, 5);
   assert.equal(classifySendError(mine), mine, "a SendError is already classified");
+});
+
+test("sendgrid: a 429 without a usable Retry-After waits until X-RateLimit-Reset (epoch seconds); a Retry-After wins, and a reset that has passed asks for no wait", () => {
+  const now = 1_760_000_000_000; // ms; 1_760_000_000 s
+  const wait = (headers: Record<string, string>, code = 429) => classifySendError({ code, response: { headers } }, now).retryAfterSeconds;
+  assert.equal(wait({ "x-ratelimit-reset": "1760000120" }), 120);
+  assert.equal(wait({ "x-ratelimit-reset": "1760000120", "retry-after": "30" }), 30, "Retry-After wins when it is there");
+  assert.equal(wait({ "x-ratelimit-reset": "1760000120", "retry-after": "soon" }), 120, "and the reset is the fallback when it is no number");
+  assert.equal(wait({ "x-ratelimit-reset": "1759999995" }), null, "a reset that has passed asks for no wait");
+  assert.equal(wait({ "x-ratelimit-reset": "1760000000" }), null, "nor does one that is now");
+  assert.equal(wait({ "x-ratelimit-reset": "soon" }), null);
+  assert.equal(wait({}), null);
+  assert.equal(classifySendError({ code: 429, response: { headers: { "x-ratelimit-reset": "1760000000.2" } } }, now - 1).retryAfterSeconds, 1, "a fraction of a second is a second");
+  assert.equal(wait({ "x-ratelimit-reset": "1760000120" }, 503), null, "only a 429 is about the rate limit");
+  assert.equal(wait({ "x-ratelimit-reset": "1760000120" }, 400), null);
+  assert.equal(wait({ "x-ratelimit-reset": "1760000120", "retry-after": "30" }, 503), 30, "a Retry-After is read whatever the status");
 });
 
 test("sendgrid: the transport sends the built message, returns the provider's message id and turns every failure into a classified SendError", async () => {
@@ -2863,7 +2908,9 @@ test("sendgrid: the transport sends the built message, returns the provider's me
   await assert.rejects(answering(503).sendBatch(batch), isSendError("HTTP_503", true));
   await assert.rejects(failing({ code: 429, response: { headers: { "retry-after": "120" } } }).sendBatch(batch), isSendError("HTTP_429", true, 120));
   await assert.rejects(failing({ code: 400, response: { body: { errors: [{ message: "recipient@origo.is is not valid" }] } } }).sendBatch(batch), isSendError("HTTP_400", false));
-  await assert.rejects(failing(new Error("socket hang up")).sendBatch(batch), isSendError("socket_hang_up", true));
+  await assert.rejects(failing(new Error("socket hang up")).sendBatch(batch), isSendError("SEND_FAILED", true));
+  await assert.rejects(failing(Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), { code: "ECONNREFUSED" })).sendBatch(batch), isSendError("ECONNREFUSED", true));
+  await assert.rejects(failing({ code: 429, response: { headers: { "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 300) } } }).sendBatch(batch), (e: unknown) => e instanceof SendError && e.code === "HTTP_429" && (e.retryAfterSeconds ?? 0) > 290 && (e.retryAfterSeconds ?? 0) <= 301, "the transport reads the reset from the real clock");
 });
 
 test("sendgrid: without an API key the transport is the console one: it sends nothing and logs a count, never an address", async () => {
@@ -2964,15 +3011,17 @@ test("worker: the request carries the campaign's settings, the rendered mail for
 test("worker: honours Retry-After when it exceeds the backoff; non-retryable errors dead-letter at once", async () => {
   const id = await readyCampaign();
   const start = Date.now();
-  const throttled = await processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter: 900 }]).transport, now: () => new Date(start) });
+  const throttled = await quietly(() => processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter: 900 }]).transport, now: () => new Date(start) }));
   assert.equal(throttled.retried, 3, "the English batch of three was throttled");
   assert.equal((await listDeliveries(PM, id, { state: "Queued" })).total, 1, "the Icelandic row is never claimed after the 429 stop");
   const retry = (await listDeliveries(PM, id, { state: "Retry" })).items[0];
   assert.ok(new Date(retry.nextAttemptAt!).getTime() >= start + 900_000);
   for (const d of globalThis.pulseMemoryCommunicationDeliveries!) d.nextAttemptAt = new Date(0).toISOString();
-  const rejected = await processCommunicationBatch(500, { transport: fakeTransport([{ status: 400 }, { status: 400 }]).transport });
-  assert.ok(rejected.deadLettered >= 1);
-  assert.ok((await listDeliveries(PM, id, { state: "Dead letter" })).total >= 1);
+  // Every request is rejected: a lone recipient is a dead letter at once, and a batch is split until each of its recipients stands alone
+  // (three in the English batch: the request itself, then 2 + 1 and 1 + 1, so four requests more).
+  const rejected = await quietly(() => processCommunicationBatch(500, { transport: fakeTransport(Array.from({ length: 6 }, () => ({ status: 400 }))).transport }));
+  assert.deepEqual([rejected.deadLettered, rejected.retried, rejected.splits], [4, 0, 4]);
+  assert.equal((await listDeliveries(PM, id, { state: "Dead letter" })).total, 4);
 });
 
 test("worker: a Retry-After shorter than the backoff changes nothing, and one past a day waits a day, so a wild value cannot park a row for years", async () => {
@@ -2980,7 +3029,7 @@ test("worker: a Retry-After shorter than the backoff changes nothing, and one pa
   const start = Date.now();
   const waitAfter = async (retryAfter: number) => {
     for (const d of memoryDeliveries()) Object.assign(d, { state: "Queued", attemptCount: 0, nextAttemptAt: null });
-    await processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter }]).transport, now: () => new Date(start) });
+    await quietly(() => processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter }]).transport, now: () => new Date(start) }));
     return new Date(memoryDeliveries().find((d) => d.state === "Retry")!.nextAttemptAt!).getTime() - start;
   };
   assert.equal(await waitAfter(30), 2 * BACKOFF_BASE_MS, "the first failure backs off two minutes; 30 seconds is less");
@@ -2992,7 +3041,7 @@ test("worker: five retryable failures dead-letter; master switch off skips; dail
   const id = await readyCampaign();
   const script = Array.from({ length: 10 }, () => ({ status: 500 }));
   for (let i = 0; i < 5; i++) {
-    await processCommunicationBatch(500, { transport: fakeTransport(script).transport });
+    await quietly(() => processCommunicationBatch(500, { transport: fakeTransport(script).transport }));
     for (const d of globalThis.pulseMemoryCommunicationDeliveries!) d.nextAttemptAt = new Date(0).toISOString();
   }
   assert.equal((await communicationStats(id)).deadLettered, 4);
@@ -3053,7 +3102,7 @@ test("worker: a lease that has run out is recovered first, the rows go out again
   assert.deepEqual([row("bjarki@uidata.com").state, row("bjarki@uidata.com").attemptCount, row("anna@advania.is").state], ["Accepted", 2, "Processing"], "recovery keeps the attempts: the new claim counted the second");
   assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ level: "warn", event: "communications.recovered-stale", count: 2 }], "an abnormal event is logged, with a count");
   row("anna@advania.is").nextAttemptAt = new Date(Date.now() - 1000).toISOString();
-  const second = await processCommunicationBatch(500, { transport });
+  const second = await quietly(() => processCommunicationBatch(500, { transport }));
   assert.deepEqual([second.recovered, second.accepted, second.completed], [1, 1, [id]]);
   assert.deepEqual((await processCommunicationBatch(500, { transport })).recovered, 0, "nothing is recovered twice");
 });
@@ -3063,7 +3112,7 @@ test("worker: with 'Show demo data' on nothing is mailed — a demo campaign's d
   const { transport, calls } = fakeTransport();
   globalThis.pulseShowDemoData = true;
   try {
-    assert.deepEqual(await processCommunicationBatch(500, { transport }), { skipped: true, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0 });
+    assert.deepEqual(await processCommunicationBatch(500, { transport }), { skipped: true, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0, splits: 0 });
   } finally {
     globalThis.pulseShowDemoData = undefined;
   }
@@ -3099,11 +3148,11 @@ test("worker: a batch that cannot be rendered fails like any other — retried, 
   const { value: first, lines } = await captured("error", () => processCommunicationBatch(500, { transport }));
   assert.deepEqual([first.accepted, first.retried, first.deadLettered, calls.length], [0, 4, 0, 0], "both batches failed; the second was still tried");
   assert.deepEqual(countByState(memoryDeliveries()), { Retry: 4 });
-  assert.ok(memoryDeliveries().every((d) => d.lastErrorCode === "INVALID_TEMPLATE" && d.attemptCount === 1));
-  assert.deepEqual(lines.map((line) => JSON.parse(line).code), ["INVALID_TEMPLATE", "INVALID_TEMPLATE"]);
+  assert.ok(memoryDeliveries().every((d) => d.lastErrorCode === "RENDER_FAILED" && d.attemptCount === 1), "the code says what failed, not what the renderer's message said");
+  assert.deepEqual(lines.map((line) => JSON.parse(line).code), ["RENDER_FAILED", "RENDER_FAILED"]);
   for (const d of memoryDeliveries()) Object.assign(d, { attemptCount: 4, nextAttemptAt: new Date(0).toISOString() });
-  const last = await processCommunicationBatch(500, { transport });
-  assert.deepEqual([last.retried, last.deadLettered], [0, 4], "the fifth attempt is the last");
+  const last = await quietly(() => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([last.retried, last.deadLettered, last.splits], [0, 4, 0], "the fifth attempt is the last, and a render failure is no reason to split a batch");
 });
 
 test("worker: a failed batch is logged with its campaign, a code and a count — never an address, a subject or a body", async () => {
@@ -3127,7 +3176,7 @@ test("worker: an error from the store while it settles an accepted batch is not 
   assert.deepEqual(countByState(memoryDeliveries()), { Processing: 3, Queued: 1 }, "the rows stay with the worker: their lease, not a bogus failure, decides when they go out again");
   assert.ok(memoryDeliveries().every((d) => d.lastErrorCode === undefined), "and no failure was recorded against them");
   for (const d of memoryDeliveries().filter((x) => x.state === "Processing")) d.nextAttemptAt = new Date(Date.now() - 1000).toISOString();
-  const again = await processCommunicationBatch(500, { transport });
+  const again = await quietly(() => processCommunicationBatch(500, { transport }));
   assert.deepEqual([again.recovered, again.accepted, again.completed], [3, 4, [id]]);
 });
 
@@ -3147,6 +3196,7 @@ test("worker: the limit bounds the run — that many rows, never more than 500 i
     },
     async markAccepted() {},
     async markFailed() {},
+    async releaseBatch() {},
     async acceptedToday() { return 0; },
     async completeCampaigns() { return []; },
   };
@@ -3261,7 +3311,7 @@ test("worker: a settle that always fails does not mail a row for ever — five s
   const store = getDeliveryStore();
   const breaking: DeliveryStore = { ...store, markAccepted: async () => { throw new Error("SQL went away"); } };
   const { transport, calls } = fakeTransport();
-  const run = () => processCommunicationBatch(500, { store: breaking, transport });
+  const run = () => quietly(() => processCommunicationBatch(500, { store: breaking, transport }));
   await assert.rejects(run(), /SQL went away/, "the database is down every time");
   for (let again = 0; again < 11; again++) {
     for (const d of memoryDeliveries().filter((x) => x.state === "Processing")) d.nextAttemptAt = new Date(Date.now() - 1000).toISOString(); // the lease of the run before runs out
@@ -3313,9 +3363,9 @@ test("worker store, SQL: recoverStale returns lapsed leases to Retry — a cance
   await withFakeSql([[/WHERE d\.state='Processing'/, { rowsAffected: [3] }]], async (calls, events) => {
     assert.equal(await getDeliveryStore().recoverStale(at), 3);
     const recover = calls.find((c) => /WHERE d\.state='Processing'/.test(c.text))!;
-    assert.deepEqual([recover.inputs.now, recover.inputs.maxAttempts], [at, MAX_ATTEMPTS]);
-    assert.match(recover.text, /^UPDATE d SET state=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' WHEN d\.attempt_count>=@maxAttempts THEN 'Dead letter' ELSE 'Retry' END,next_attempt_at=NULL,\s+last_error_code=CASE WHEN d\.attempt_count>=@maxAttempts THEN 'LEASE_EXPIRED' ELSE d\.last_error_code END\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.state='Processing' AND d\.next_attempt_at<@now$/,
-      "only a lease that has run out; the real rows of a cancelled campaign are cancelled (a cancel that is committing is waited for); a last attempt is a dead letter, with its reason; the attempts are not touched");
+    assert.deepEqual(recover.inputs, { maxAttempts: MAX_ATTEMPTS }, "the only input is the attempt limit: the clock is the database's, the one the claim stamps the lease with");
+    assert.match(recover.text, /^UPDATE d SET state=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' WHEN d\.attempt_count>=@maxAttempts THEN 'Dead letter' ELSE 'Retry' END,next_attempt_at=NULL,\s+last_error_code=CASE WHEN d\.attempt_count>=@maxAttempts THEN 'LEASE_EXPIRED' ELSE d\.last_error_code END\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.state='Processing' AND d\.next_attempt_at<SYSUTCDATETIME\(\)$/,
+      "only a lease that has run out by the database's clock; the real rows of a cancelled campaign are cancelled (a cancel that is committing is waited for); a last attempt is a dead letter, with its reason; the attempts are not touched");
     assert.deepEqual(events, [], "one atomic statement, no unit of work");
   });
   await withFakeSql([], async () => assert.equal(await getDeliveryStore().recoverStale(at), 0, "nothing lapsed"));
@@ -3332,7 +3382,8 @@ test("delivery status, SQL: the Communications channel is counted next to Email 
     assert.equal(arms.length, 3);
     assert.match(arms[0], /^SELECT 'Email' channel,state,COUNT\(\*\) count,MIN\(created_at\) oldest FROM dbo\.Notifications WHERE channel='Email' AND state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY state$/);
     assert.match(arms[1], /^SELECT 'Webhook' channel,state,COUNT\(\*\) count,MIN\(created_at\) oldest FROM dbo\.WebhookDeliveries WHERE state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY state$/);
-    assert.match(arms[2], /^SELECT 'Communications' channel,state,COUNT\(\*\) count,MIN\(created_at\) oldest FROM dbo\.CommunicationDeliveries WHERE state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY state$/);
+    assert.match(arms[2], /^SELECT 'Communications' channel,d\.state,COUNT\(\*\) count,MIN\(d\.created_at\) oldest FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.status<>'Cancelled' AND c\.deleted_at IS NULL WHERE d\.state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY d\.state$/,
+      "the same campaigns as the retry: rows of a cancelled or deleted campaign are not counted, so the card never shows a dead letter its retry cannot requeue");
   });
   await withFakeSql([], async () => { await assert.rejects(deliveryStatus(PM), /FORBIDDEN/); });
 });
@@ -3380,4 +3431,235 @@ test("delivery retry: Email and Webhook still run their own statements, an unkno
 test("i18n: the Settings delivery card names the Communications channel", () => {
   assert.equal(makeT("is")("Communications"), "Samskipti");
   assert.equal(makeT("en")("Communications"), "Communications");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A rejected batch: a refused key gives it back, a rejected recipient is found by splitting it, each row is settled by its own attempts
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The delivery row of an address (the first, when a campaign has several). */
+const rowOf = (email: string) => memoryDeliveries().find((d) => d.email === email)!;
+const englishAddresses = () => memoryDeliveries().filter((d) => d.locale === "en" && d.source !== "Test").map((d) => d.email);
+const isIcelandic = (call: OutboundBatch) => call.recipients.some((r) => r.email === "cio@origo.is");
+
+for (const status of [401, 403] as const) {
+  test(`worker: a ${status === 401 ? "refused key (401)" : "sender the provider will not accept (403)"} gives the batch back unclaimed, stops the tick and dead-letters nothing`, async () => {
+    const id = await readyCampaign();
+    const { transport, calls } = fakeTransport([{ status }, { status }]);
+    const { value: result, lines } = await captured("error", () => processCommunicationBatch(500, { transport }));
+    assert.deepEqual(result, { skipped: false, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0, splits: 0 });
+    assert.equal(calls.length, 1, "the tick stops at the first refusal: the Icelandic batch is never tried");
+    assert.deepEqual(countByState(memoryDeliveries()), { Queued: 4 }, "every row is waiting again");
+    assert.ok(memoryDeliveries().every((d) => d.attemptCount === 0 && !d.nextAttemptAt && d.lastErrorCode === undefined), "with the attempts it had: the refusal is not the rows' fault");
+    assert.equal((await getCommunication(PM, id)).status, "Sending", "and the campaign is still sending, not completed with nothing sent");
+    assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ level: "error", event: "communications.send.misconfigured", communicationId: id, code: `HTTP_${status}`, recipients: 3 }], "the code is logged once, with a count and the campaign");
+    assert.ok(lines.every((line) => !line.includes("@") && !line.includes("origo")));
+    const fixed = fakeTransport(); // the key is right again: the same rows go out, and each has been tried once
+    const next = await processCommunicationBatch(500, { transport: fixed.transport });
+    assert.deepEqual([next.accepted, next.completed], [4, [id]]);
+    assert.ok(memoryDeliveries().every((d) => d.state === "Accepted" && d.attemptCount === 1));
+  });
+}
+
+test("worker: a refusal in the middle of a split gives back the half that was refused and what was never tried, and keeps what was accepted", async () => {
+  const id = await readyCampaignWith(1); // four English rows and the Icelandic one
+  const { transport, calls } = fakeTransport([{ status: 400 }, "ok", { status: 401 }]); // the request is rejected, its first half accepted, its second half refused
+  const { value: result, lines } = await captured("error", () => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([result.accepted, result.splits, result.retried, result.deadLettered, result.capReached], [2, 2, 0, 0, false]);
+  assert.deepEqual(calls.map((c) => c.recipients.length), [4, 2, 2], "the request and its two halves; the tick stopped there");
+  const [accepted, refused] = [calls[1], calls[2]].map((c) => c.recipients.map((r) => rowOf(r.email)));
+  assert.ok(accepted.every((d) => d.state === "Accepted" && d.attemptCount === 1 && d.providerMessageId === "msg-2"));
+  assert.ok(refused.every((d) => d.state === "Queued" && d.attemptCount === 0 && !d.nextAttemptAt), "the refused half is given back with its attempts as they were");
+  assert.deepEqual([rowOf("cio@origo.is").state, rowOf("cio@origo.is").attemptCount], ["Queued", 0], "and the Icelandic row was not claimed");
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ level: "error", event: "communications.send.misconfigured", communicationId: id, code: "HTTP_401", recipients: 2 }]);
+});
+
+test("worker: a refusal of the first half of a split gives back both halves, the second never having been tried", async () => {
+  await readyCampaignWith(1);
+  const { transport, calls } = fakeTransport([{ status: 400 }, { status: 403 }]);
+  const result = await quietly(() => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([result.accepted, result.splits, result.retried, result.deadLettered], [0, 1, 0, 0]);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(countByState(memoryDeliveries()), { Queued: 5 });
+  assert.ok(memoryDeliveries().every((d) => d.attemptCount === 0), "nothing was tried that stays tried");
+});
+
+test("worker: a throttle in the middle of a split settles the half that was throttled, gives back the half that was never tried and stops the tick", async () => {
+  await readyCampaignWith(1);
+  const start = Date.now();
+  const { transport, calls } = fakeTransport([{ status: 400 }, { status: 429, retryAfter: 60 }]);
+  const result = await quietly(() => processCommunicationBatch(500, { transport, now: () => new Date(start) }));
+  assert.deepEqual([result.accepted, result.retried, result.deadLettered, result.splits, result.capReached], [0, 2, 0, 1, false]);
+  assert.equal(calls.length, 2, "the other half and the Icelandic row wait for the next tick");
+  const throttledAddresses = calls[1].recipients.map((r) => r.email);
+  const throttled = throttledAddresses.map((email) => rowOf(email));
+  const untried = englishAddresses().filter((email) => !throttledAddresses.includes(email)).map((email) => rowOf(email));
+  assert.equal(untried.length, 2);
+  assert.ok(throttled.every((d) => d.state === "Retry" && d.attemptCount === 1 && d.lastErrorCode === "HTTP_429" && new Date(d.nextAttemptAt!).getTime() === start + 2 * BACKOFF_BASE_MS), "the throttled half waits, by the backoff of its first attempt");
+  assert.ok(untried.every((d) => d.state === "Queued" && d.attemptCount === 0), "the half that was never tried is given back");
+});
+
+test("worker: a request rejected with 400 is split in halves until the rejected recipient stands alone; only that row is a dead letter, the others are accepted with message ids of their own", async () => {
+  const id = await readyCampaignWith(1); // four English rows and the Icelandic one
+  const english = englishAddresses();
+  assert.equal(english.length, 4);
+  const bad = english[2];
+  const { transport, calls } = pickyTransport((email) => email === bad);
+  const result = await quietly(() => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([result.accepted, result.deadLettered, result.retried, result.splits], [4, 1, 0, 4], "three English rows and the Icelandic one are accepted, the bad address is a dead letter");
+  const englishCalls = calls.filter((c) => !isIcelandic(c));
+  assert.deepEqual(englishCalls.map((c) => c.recipients.length), [4, 2, 2, 1, 1], "the request, its two halves, and the two recipients of the half that holds the bad address");
+  assert.equal(calls.length, 6, "and one request for the Icelandic row");
+  assert.equal(new Set(englishCalls.map((c) => c.html + c.subject + c.text)).size, 1, "every request carries the same rendered mail");
+  assert.deepEqual([rowOf(bad).state, rowOf(bad).lastErrorCode, rowOf(bad).attemptCount], ["Dead letter", "HTTP_400", 1]);
+  const good = english.filter((e) => e !== bad);
+  assert.ok(good.every((e) => rowOf(e).state === "Accepted" && rowOf(e).attemptCount === 1));
+  assert.equal(new Set(good.map((e) => rowOf(e).providerMessageId)).size, 2, "the good half, and the good one of the other half, were accepted by requests of their own");
+  assert.deepEqual(result.completed, [id], "every row is settled, so the campaign completes");
+  assert.deepEqual([(await communicationStats(id)).deadLettered, (await communicationStats(id)).accepted], [1, 4]);
+});
+
+test("worker: finding one rejected recipient costs two requests per level of the split — 6 more for a batch of 8", async () => {
+  await readyCampaignWith(5); // eight English rows and the Icelandic one
+  const english = englishAddresses();
+  assert.equal(english.length, 8);
+  const { transport, calls } = pickyTransport((email) => email === english[5]);
+  const result = await quietly(() => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([result.accepted, result.deadLettered, result.splits], [8, 1, 6]);
+  assert.deepEqual(calls.filter((c) => !isIcelandic(c)).map((c) => c.recipients.length), [8, 4, 4, 2, 1, 1, 2], "the request, its good half, its bad half, that half's first half, its two recipients, and the good rest");
+});
+
+test("worker: two rejected recipients at the far ends of a batch of 16 cost 14 more requests, and nobody else is a dead letter", async () => {
+  await readyCampaignWith(13); // sixteen English rows and the Icelandic one
+  const english = englishAddresses();
+  assert.equal(english.length, 16);
+  const { transport } = pickyTransport((email) => email === english[0] || email === english[15]);
+  const result = await quietly(() => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([result.accepted, result.deadLettered, result.retried, result.splits], [15, 2, 0, 14], "2 + 4 + 4 + 4: about 2 x log2(16) for each bad address, the top levels shared");
+  assert.deepEqual(memoryDeliveries().filter((d) => d.state === "Dead letter").map((d) => d.email).sort(), [english[0], english[15]].sort());
+});
+
+test("worker: the splitting of one batch is capped, and what it has not isolated by then waits for the next tick instead of being dead-lettered", async () => {
+  await readyCampaignWith(37); // forty English rows and the Icelandic one
+  const start = Date.now();
+  const { transport, calls } = pickyTransport(() => true); // every request is rejected, as one for a message the provider will not take at all: the whole tree of 79 requests would be needed
+  const result = await quietly(() => processCommunicationBatch(500, { transport, now: () => new Date(start) }));
+  assert.equal(result.splits, MAX_SPLIT_REQUESTS, "the extra requests stop at the cap");
+  assert.equal(calls.filter((c) => !isIcelandic(c)).length, 1 + MAX_SPLIT_REQUESTS);
+  assert.equal(result.accepted, 0);
+  const english = memoryDeliveries().filter((d) => d.locale === "en");
+  const dead = english.filter((d) => d.state === "Dead letter");
+  const waiting = english.filter((d) => d.state === "Retry");
+  assert.equal(dead.length + waiting.length, 40, "every English row is settled one way or the other");
+  assert.ok(dead.length > 0 && waiting.length > 0, "some were rejected on their own; the rest were not isolated");
+  assert.ok(dead.every((d) => d.lastErrorCode === "HTTP_400" && d.attemptCount === 1));
+  assert.ok(waiting.every((d) => d.lastErrorCode === "HTTP_400" && d.attemptCount === 1 && new Date(d.nextAttemptAt!).getTime() === start + 2 * BACKOFF_BASE_MS), "they try again by the backoff of their first attempt, and are dead letters only after the fifth");
+  assert.equal(rowOf("cio@origo.is").state, "Dead letter", "a recipient alone is a dead letter at once");
+  assert.deepEqual([result.deadLettered, result.retried], [dead.length + 1, waiting.length]);
+});
+
+for (const status of [413, 422]) {
+  test(`worker: an answer of ${status} is split like a 400`, async () => {
+    await readyCampaignWith(1);
+    const { transport, calls } = fakeTransport([{ status }]); // the request is rejected once, and then its halves are accepted
+    const result = await quietly(() => processCommunicationBatch(500, { transport }));
+    assert.deepEqual([result.accepted, result.deadLettered, result.splits], [5, 0, 2]);
+    assert.deepEqual(calls.map((c) => c.recipients.length), [4, 2, 2, 1]);
+  });
+}
+
+test("worker: a 5xx is not split, it is retried as a whole; an answer that is no 4xx and not retryable dead-letters the batch at once", async () => {
+  await readyCampaignWith(1);
+  const first = await quietly(() => processCommunicationBatch(500, { transport: fakeTransport([{ status: 502 }, "ok"]).transport }));
+  assert.deepEqual([first.retried, first.deadLettered, first.splits, first.accepted], [4, 0, 0, 1], "the four English rows wait for a retry, the Icelandic one is accepted");
+  for (const d of memoryDeliveries()) Object.assign(d, { state: "Queued", attemptCount: 0, nextAttemptAt: null });
+  const { transport, calls } = fakeTransport([{ status: 302 }, "ok"]);
+  const second = await quietly(() => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([second.retried, second.deadLettered, second.splits, second.accepted], [0, 4, 0, 1]);
+  assert.deepEqual(calls.map((c) => c.recipients.length), [4, 1]);
+});
+
+test("worker: a 429 without a Retry-After waits for X-RateLimit-Reset, measured against the worker's clock", async () => {
+  await readyCampaign();
+  const at = Date.UTC(2030, 0, 1, 12); // a clock that is not the real one, so that the reset can only be read against the worker's own
+  const { transport } = fakeTransport([{ status: 429, reset: at / 1000 + 600 }]);
+  await quietly(() => processCommunicationBatch(500, { transport, now: () => new Date(at) }));
+  const waits = memoryDeliveries().filter((d) => d.state === "Retry").map((d) => new Date(d.nextAttemptAt!).getTime() - at);
+  assert.deepEqual(waits, [600_000, 600_000, 600_000], "longer than the two minutes of the first backoff");
+});
+
+test("worker: a failed batch is settled row by row — a row on its last attempt is a dead letter, and the others wait by the backoff of their own attempt", async () => {
+  await readyCampaign();
+  const start = Date.now();
+  const [a, b, c] = ["bjarki@uidata.com", "jon@origo.is", "anna@advania.is"].map(rowOf);
+  a.attemptCount = MAX_ATTEMPTS - 1; // the claim makes it the fifth attempt
+  b.attemptCount = 1;
+  c.attemptCount = 2;
+  const store = getDeliveryStore();
+  const settled: Array<[number, string, string | null]> = [];
+  const recording: DeliveryStore = { ...store, markFailed: async (ids, code, next) => { settled.push([ids.length, code, next ? next.toISOString() : null]); return store.markFailed(ids, code, next); } };
+  const result = await quietly(() => processCommunicationBatch(500, { store: recording, transport: fakeTransport([{ status: 500 }]).transport, now: () => new Date(start) }));
+  assert.deepEqual([result.deadLettered, result.retried], [1, 2]);
+  assert.deepEqual([a.state, a.attemptCount, a.nextAttemptAt], ["Dead letter", MAX_ATTEMPTS, null], "the last attempt is the end of that row, though the others of its batch have attempts left");
+  assert.deepEqual([b.state, b.attemptCount, new Date(b.nextAttemptAt!).getTime() - start], ["Retry", 2, 2 ** 2 * BACKOFF_BASE_MS]);
+  assert.deepEqual([c.state, c.attemptCount, new Date(c.nextAttemptAt!).getTime() - start], ["Retry", 3, 2 ** 3 * BACKOFF_BASE_MS], "each by the backoff of its own attempt");
+  assert.deepEqual(settled.map(([count, code, next]) => [count, code, next === null]), [[1, "HTTP_500", true], [1, "HTTP_500", false], [1, "HTTP_500", false]], "the dead letter first, then one call for each attempt's rows");
+});
+
+test("worker: the failure is logged before the rows are settled, so a database that fails then still leaves its trace", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const failing: DeliveryStore = { ...store, markFailed: async () => { throw new Error("SQL went away"); }, releaseBatch: async () => { throw new Error("SQL went away"); } };
+  const retried = await captured("error", async () => { await assert.rejects(processCommunicationBatch(500, { store: failing, transport: fakeTransport([{ status: 500 }]).transport }), /SQL went away/); });
+  assert.deepEqual(retried.lines.map((line) => JSON.parse(line)), [{ level: "error", event: "communications.send.failed", communicationId: id, code: "HTTP_500", recipients: 3, terminal: false }]);
+  const refused = await captured("error", async () => { await assert.rejects(processCommunicationBatch(500, { store: failing, transport: fakeTransport([{ status: 401 }]).transport }), /SQL went away/); });
+  assert.deepEqual(refused.lines.map((line) => JSON.parse(line).code), ["HTTP_401"], "and so is a refusal");
+});
+
+test("releaseBatch: claimed rows go back to Queued as if never claimed — one attempt less, no lease; rows in other states and unknown ids are left alone", async () => {
+  await readyCampaign();
+  const store = getDeliveryStore();
+  const english = (await store.claimBatch(500))!;
+  const icelandic = (await store.claimBatch(500))!;
+  const [a, b, c] = english.deliveries.map((d) => rowOf(d.email));
+  const cio = rowOf(icelandic.deliveries[0].email);
+  assert.deepEqual([a.attemptCount, a.state, Boolean(a.nextAttemptAt)], [1, "Processing", true]);
+  await store.markAccepted([c.id], "msg-1", new Date()); // settled meanwhile, however: only a claimed row is given back
+  await store.releaseBatch([a.id, b.id, c.id, "no-such-row"]);
+  assert.deepEqual([a, b].map((d) => [d.state, d.attemptCount, d.nextAttemptAt]), [["Queued", 0, null], ["Queued", 0, null]]);
+  assert.deepEqual([c.state, c.attemptCount, c.providerMessageId], ["Accepted", 1, "msg-1"], "an accepted row stays accepted");
+  assert.equal(cio.state, "Processing", "and a row that was not named stays with the worker");
+  await store.releaseBatch([]);
+  const again = (await store.claimBatch(500))!;
+  assert.deepEqual(again.deliveries.map((d) => [d.email, d.attemptCount]), [["bjarki@uidata.com", 1], ["jon@origo.is", 1]], "claimed again, the attempt counts as the first");
+  a.state = "Processing"; a.attemptCount = 0; // however it got there: the count does not go below zero
+  await store.releaseBatch([a.id]);
+  assert.deepEqual([a.state, a.attemptCount], ["Queued", 0]);
+});
+
+test("releaseBatch: the real rows of a cancelled campaign are cancelled, not queued for a claim that never comes; a Test row is queued again", async () => {
+  const id = await readyCampaign();
+  await testSendCommunication(PM, id, []);
+  const store = getDeliveryStore();
+  const claimed: string[] = [];
+  for (let batch = await store.claimBatch(500); batch; batch = await store.claimBatch(500)) claimed.push(...batch.deliveries.map((d) => d.id));
+  assert.equal(claimed.length, 5);
+  await cancelCommunication(PM, id, "cancel");
+  await store.releaseBatch(claimed);
+  assert.deepEqual(memoryDeliveries().map((d) => [d.source === "Test" ? "Test" : "real", d.state]).sort(), [["Test", "Queued"], ["real", "Cancelled"], ["real", "Cancelled"], ["real", "Cancelled"], ["real", "Cancelled"]]);
+  const stats = await communicationStats(id);
+  assert.deepEqual([stats.queued, stats.cancelled], [0, 4], "the campaign holds no row that nothing will claim");
+});
+
+test("worker store, SQL: releaseBatch gives back only rows that are still Processing, one attempt less, and cancels a cancelled campaign's real rows instead", async () => {
+  await withFakeSql([], async (calls, events) => {
+    await getDeliveryStore().releaseBatch(["id-1", "id-2"]);
+    const release = calls.find((c) => /ELSE 'Queued' END/.test(c.text))!;
+    assert.deepEqual(JSON.parse(String(release.inputs.ids)), ["id-1", "id-2"]);
+    assert.match(release.text, /^UPDATE d SET state=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' ELSE 'Queued' END,\s+attempt_count=CASE WHEN d\.attempt_count>0 THEN d\.attempt_count-1 ELSE 0 END,next_attempt_at=NULL\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.state='Processing' AND d\.id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/,
+      "only a row still claimed (not one a lease recovery or a cancel moved), the attempt the claim counted is taken back, and a cancel that is committing is waited for");
+    await getDeliveryStore().releaseBatch([]);
+    assert.equal(calls.length, 1, "nothing to give back, no statement");
+    assert.deepEqual(events, [], "one atomic statement, no unit of work");
+  });
 });
