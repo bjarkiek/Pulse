@@ -41,6 +41,8 @@ npm run test:sql
 
 For Windows LocalDB, install optional `msnodesqlv8` outside the app runtime, set `NODE_PATH` to that tools directory, `PULSE_SQL_NATIVE=1`, and `UV_THREADPOOL_SIZE=16` before running. Native ODBC lock waits occupy worker threads; too small a thread pool can starve concurrent test queries. Default Azure SQL uses the production Tedious driver.
 
+`npm run test:sql` runs `tests/sql-security.test.ts` (the security boundaries) and `tests/sql-communications.test.ts`, which drives the customer-communications routes, repositories, delivery worker (with a stub mail transport, so nothing is sent) and webhook effects through real SQL: campaigns from draft to sent, scheduled or cancelled, dead letters and leases, contacts, suppressions, preferences, settings and retention. The second file makes its own companies and people, deletes every row it made, and refuses to start when the database already has a communication in flight, because its worker would take it.
+
 Release acceptance still requires the actual Linux image, managed identity permissions, deployed ingress/CSP/embed flows, real ACS delivery, real SendGrid delivery with signed webhook events, Defender clean/infected/overwrite tests, a restore drill, and tenant-scale load tests. Native Icelandic review and a pilot with representative customer/internal users cannot be replaced by automated code checks. Record those results and owners before declaring general production readiness. Other P1 findings were not included in this implementation batch.
 
 For local Chromium regression checks, run `node scripts/preview-security.mjs` in one

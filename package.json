@@ -19,7 +19,7 @@
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
     "openapi:generate": "node --import tsx scripts/generate-openapi.ts",
     "openapi:check": "node --import tsx scripts/generate-openapi.ts --check",
-    "test:sql": "node --import tsx --test --test-concurrency=1 tests/sql-security.test.ts",
+    "test:sql": "node --import tsx --test --test-concurrency=1 tests/sql-security.test.ts tests/sql-communications.test.ts",
     "verify": "npm run openapi:check && npm test && npm run lint && npm run build"
   },
   "dependencies": {
