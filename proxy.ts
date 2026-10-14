@@ -1,4 +1,4 @@
-import { readJsonValue } from "@/lib/server/validation";
+import { readJsonValue, requestHasBody } from "@/lib/server/validation";
 import {
   apiError,
   correlationId as requestCorrelationId,
@@ -155,9 +155,10 @@ export async function proxy(request: NextRequest) {
 
   // Two routes take a body that is not the usual small JSON: an attachment upload, and SendGrid's Event Webhook, which verifies the signature
   // of the raw body itself and whose batches (up to 1000 events, 1 MiB) exceed the 250-item / 64 KiB limits of the generic JSON gate.
+  // A request with no body (a POST that only triggers something) has nothing for the gate to read, and an empty stream is not valid JSON: it
+  // goes on to its route, which refuses a missing body itself if it needs one.
   if (
     mutation &&
-    request.body &&
     !(
       (request.method === "PUT" &&
         /^\/api\/v1\/attachments\/[^/]+\/content$/.test(path)) ||
@@ -166,7 +167,7 @@ export async function proxy(request: NextRequest) {
     )
   ) {
     try {
-      await readJsonValue(request.clone());
+      if (await requestHasBody(request)) await readJsonValue(request.clone());
     } catch (error) {
       return apiError(error, correlationId);
     }

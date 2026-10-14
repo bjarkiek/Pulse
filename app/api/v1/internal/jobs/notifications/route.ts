@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readInput } from "@/lib/server/validation";
+import { readInput, requestHasBody } from "@/lib/server/validation";
 import { timingSafeEqual } from "node:crypto";
 import { apiError, correlationId, json } from "@/lib/server/http";
 import { processNotificationBatch } from "@/lib/server/notification-worker";
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   const id = correlationId(request);
   try {
     if (!authorized(request)) throw new Error("UNAUTHORIZED");
-    const body = request.body
+    const body = (await requestHasBody(request))
       ? await readInput(
           request,
           z.object({ limit: z.number().int().min(1).max(1000).optional() }),

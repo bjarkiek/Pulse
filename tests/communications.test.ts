@@ -31,7 +31,7 @@ import {
   addSuppression, listSuppressions, loadSuppressionMap, releaseAddress, removeSuppression, suppressAddress,
 } from "../lib/server/communications/suppression-repository";
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
-import { loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
+import { domainAllowed, loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
 import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
 import type { AudienceSpec, CommunicationTopic, DeliveryRecord, DeliveryState } from "../lib/server/communications/types";
 import {
@@ -4348,15 +4348,18 @@ test("configuration test: one mail, to the caller alone, marked [TEST] and untra
     assert.deepEqual(mail.mail_settings, { sandbox_mode: { enable: true } }, "and it is sandboxed when the settings are");
     const [text, html] = mail.content;
     assert.deepEqual([text.type, html.type], ["text/plain", "text/html"]);
-    for (const part of [text.value, html.value]) assert.match(part, /Sending state: sandbox\./);
-    // The state line says what a campaign would do now.
+    for (const part of [text.value, html.value]) assert.match(part, /Sending state: disabled\./, "sending is off in these settings, sandbox flag or not, and that is what the Settings card says");
+    // The state line is the effective sending state the Settings card shows: what a campaign would do now.
     const states: Array<[Partial<CommunicationSettings>, string]> = [
-      [{ sandboxMode: false }, "safe mode"],
-      [{ sandboxMode: false, safeMode: { enabled: false, allowedDomains: [] } }, "live"],
-      [{ sandboxMode: true, safeMode: { enabled: false, allowedDomains: [] } }, "sandbox"],
+      [{ enabled: true, sandboxMode: false }, "safe-mode"],
+      [{ enabled: true, sandboxMode: false, safeMode: { enabled: false, allowedDomains: [] } }, "live"],
+      [{ enabled: true, sandboxMode: true, safeMode: { enabled: false, allowedDomains: [] } }, "sandbox"],
+      [{ enabled: false, sandboxMode: true }, "disabled"],
     ];
     for (const [over, state] of states) {
-      const other = await sent(configurationSettings(over));
+      const settings = configurationSettings(over);
+      assert.equal(communicationProviderStatus(settings).effectiveSendingState, state, "the card's value");
+      const other = await sent(settings);
       assert.match(other.mail.content[0].value, new RegExp(`Sending state: ${state}\\.`), state);
       assert.deepEqual(other.mail.mail_settings, { sandbox_mode: { enable: over.sandboxMode === true } });
     }
@@ -4414,6 +4417,53 @@ test("configuration test, SQL: the role is the membership's, not the session's �
     assert.deepEqual([value.ok, value.transport, lines.length], [true, "console", 1], "a System admin in SQL gets the settings from SQL and sends");
     assert.ok(calls.some((call) => /FROM dbo\.Settings/.test(call.text)));
   });
+});
+
+test("configuration test, production: without an API key it is refused as the worker refuses the console transport — before safe mode and before anything is logged — and with one it goes to the provider", async () => {
+  const blocking = configurationSettings({ safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] } }); // safe mode would also stop this admin, uidata.com
+  const open = configurationSettings({ safeMode: { enabled: false, allowedDomains: [] } });
+  const env = process.env as Record<string, string | undefined>; // NODE_ENV is typed as read-only
+  const before = env.NODE_ENV;
+  const client = sdkClient();
+  const requests: unknown[] = [];
+  client.request = async (data) => { requests.push(data); return [{ statusCode: 202, body: "", headers: { "x-message-id": "sg-prod-1" } }, ""]; };
+  env.NODE_ENV = "production";
+  try {
+    await withFakeSql(settingsRow(JSON.stringify(blocking)).answers, async () => { // production has no memory mode: the settings and the roles come from SQL
+      const { lines } = await captured("log", async () => {
+        await assert.rejects(sendConfigurationTest(ADMIN), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, "no key");
+        env.SENDGRID_API_KEY = "   ";
+        await assert.rejects(sendConfigurationTest(ADMIN), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, "a blank key is no key");
+        await assert.rejects(sendConfigurationTest(ADMIN, { settingsOverride: open }), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, "settings that would let it through do not help");
+        await assert.rejects(sendConfigurationTest(ADMIN, { settingsOverride: { ...open, fromEmail: "" } }), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, "and no sender is the same error");
+      });
+      assert.deepEqual([lines, requests.length], [[], 0], "nothing reached the console transport or the provider");
+      env.SENDGRID_API_KEY = "SG.test-key";
+      await assert.rejects(sendConfigurationTest(ADMIN), /INVALID_SAFE_MODE_BLOCKS_RECIPIENT/, "with a key, safe mode is looked at");
+      assert.deepEqual(await sendConfigurationTest(ADMIN, { settingsOverride: open }), { ok: true, transport: "sendgrid", providerMessageId: "sg-prod-1" });
+      assert.equal(requests.length, 1);
+    });
+  } finally {
+    if (before === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = before;
+    delete client.request;
+    client.setDataResidency("global");
+  }
+});
+
+test("domainAllowed: the whole domain, whatever the case — the one rule behind safe mode for a campaign's audience and for the configuration test", () => {
+  assert.deepEqual(
+    [
+      domainAllowed("bjarki@uidata.com", ["uidata.com"]),
+      domainAllowed("Bjarki@UiData.COM", ["uidata.com"]),
+      domainAllowed("bjarki@uidata.com", ["datacentral.ai", "UIDATA.com"]),
+      domainAllowed("bjarki@mail.uidata.com", ["uidata.com"]),
+      domainAllowed("bjarki@evil-uidata.com", ["uidata.com"]),
+      domainAllowed("bjarki@uidata.com.attacker.example", ["uidata.com"]),
+      domainAllowed("bjarki@uidata.com", []),
+    ],
+    [true, true, true, false, false, false, false],
+  );
 });
 
 test("configuration test: a refusal from the provider is INVALID_EMAIL_PROVIDER_<code> — the code and nothing else, never the provider's words or the address — and nothing is logged", async () => {

@@ -30,7 +30,7 @@
 
 ## 5. Delivery jobs
 
-Configure Logic Apps recurrence or a timer function to call with `x-pulse-job-secret`:
+Configure Logic Apps recurrence or a timer function to call with `x-pulse-job-secret` (no body is needed):
 
 - `POST /api/v1/internal/jobs/notifications` every minute;
 - `POST /api/v1/internal/jobs/webhooks` every minute;
@@ -43,7 +43,7 @@ Customer communications add these alerts:
 
 - The log event `communications.send.misconfigured`. SendGrid answered 401 or 403: the API key was rotated or revoked, the sender is not verified, or the data residency is wrong. The run stops, gives the rows back and dead-letters nothing, but nothing is sent until someone fixes it.
 - Growth of `Communications · Dead letter` in the Settings delivery card. The card requeues dead letters (100 per click); so does the campaign page.
-- A 400 `INVALID_EMAIL_PROVIDER_CONFIGURATION` from the job. Sending is on but `SENDGRID_API_KEY` is not set in production.
+- A 400 `INVALID_EMAIL_PROVIDER_CONFIGURATION` from the job. Sending is on but `SENDGRID_API_KEY` is not set in production. The configuration test in Settings answers the same when the key or the from address is missing.
 
 Mail is sent at least once: a batch whose lease runs out (15 minutes) is sent again, at most five times per delivery. A wrong or truncated `SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY` makes every batch the Event Webhook sends answer 401, the same answer a forgery gets. SendGrid retries for about a day and then drops the events, so deliveries stay Accepted and no bounce or unsubscribe reaches the suppression list. After changing the key, check the Event Webhook in SendGrid and the campaign's deliveries.
 

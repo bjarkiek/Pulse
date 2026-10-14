@@ -9,6 +9,7 @@ import nextConfig from "../next.config";
 import { proxy } from "../proxy";
 import type { PulseIdentity } from "../lib/domain";
 import { createSessionToken } from "../lib/server/session";
+import { requestHasBody } from "../lib/server/validation";
 import { organizations, users } from "../lib/server/admin-repository";
 import { memoryDeliveries, resetCommunicationMemory } from "../lib/server/communications/memory";
 import { getDeliveryStore } from "../lib/server/communications/delivery-store";
@@ -30,6 +31,9 @@ import { GET as companyContactsGet, POST as companyContactsPost } from "../app/a
 import { PATCH as companyContactPatch, DELETE as companyContactDelete } from "../app/api/v1/communications/contacts/[contactId]/route";
 import { POST as eventsPost } from "../app/api/v1/internal/communications/events/route";
 import { POST as communicationsJobPost } from "../app/api/v1/internal/jobs/communications/route";
+import { POST as notificationsJobPost } from "../app/api/v1/internal/jobs/notifications/route";
+import { POST as retentionJobPost } from "../app/api/v1/internal/jobs/retention/route";
+import { POST as webhooksJobPost } from "../app/api/v1/internal/jobs/webhooks/route";
 import { GET as deliveryStatusGet, POST as deliveryStatusPost } from "../app/api/v1/admin/delivery/route";
 import { GET as settingsGet, PATCH as settingsPatch } from "../app/api/v1/admin/communications/settings/route";
 import { POST as settingsTestPost } from "../app/api/v1/admin/communications/settings/test/route";
@@ -1274,4 +1278,142 @@ test("openapi: the settings operations are documented behind the System admin ro
   assert.deepEqual(response.properties.status.properties.effectiveSendingState.enum, ["disabled", "provider-missing", "sandbox", "safe-mode", "live"]);
   const answer = configurationTest.post.responses["200"].content["application/json"].schema;
   assert.deepEqual([answer.required, answer.properties.transport.enum], [["ok", "transport", "providerMessageId"], ["sendgrid", "console"]]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// A POST with nothing to say. The server hands a handler a body stream for every method but GET and HEAD, an empty one when the client sent no
+// body, so the proxy's JSON gate has to tell an empty stream from a body: or a bare POST is refused as invalid JSON before its route is reached.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const CONFIGURATION_TEST_URL = "http://localhost:3000/api/v1/admin/communications/settings/test";
+const emptyStream = () => new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+/** A stream that delivers `parts` as chunks of their own, an empty one included. */
+const chunks = (...parts: string[]) => new ReadableStream<Uint8Array>({ start(controller) { for (const part of parts) controller.enqueue(new TextEncoder().encode(part)); controller.close(); } });
+/** A POST to the configuration test, as the proxy gets it. `body` is what the client sent; leaving it out sends no body at all. */
+const postTo = (body?: BodyInit | null, headers: Record<string, string> = {}) =>
+  new NextRequest(CONFIGURATION_TEST_URL, {
+    method: "POST", headers: { host: "localhost:3000", origin: "http://localhost:3000", ...headers },
+    ...(body === undefined ? {} : { body, duplex: "half" }),
+  } as ConstructorParameters<typeof NextRequest>[1]);
+
+test("proxy: a POST with no body is not refused by the JSON gate and reaches its route, however the body is missing", async () => {
+  globalThis.pulseSharedLocalLimits = undefined; // every request below comes from the same address: start from an empty window
+  try {
+    const bare: Array<[string, () => NextRequest]> = [
+      ["no body at all", () => postTo()],
+      ["an empty string", () => postTo("")],
+      ["an empty stream and no content type, as a bare curl -X POST arrives", () => postTo(emptyStream())],
+      ["an empty stream that says it is JSON", () => postTo(emptyStream(), { "content-type": "application/json" })],
+      ["a declared length of 0", () => postTo("", { "content-length": "0" })],
+      ["a declared length of 0 and a content type, as a browser's fetch sends it", () => postTo("", { "content-length": "0", "content-type": "application/json" })],
+    ];
+    for (const [what, make] of bare) assert.equal((await proxy(make())).status, 200, what);
+  } finally {
+    globalThis.pulseSharedLocalLimits = undefined;
+  }
+});
+
+test("proxy: a POST with a body is still held to the JSON gate — an empty first chunk or a blank is not 'no body' — and the body is left whole for the route", async () => {
+  globalThis.pulseSharedLocalLimits = undefined;
+  try {
+    const refused: Array<[string, () => NextRequest]> = [
+      ["an unfinished object", () => postTo("{", { "content-type": "application/json" })],
+      ["a blank", () => postTo(" ")],
+      ["a stream whose first chunk is empty and whose second is not JSON", () => postTo(chunks("", "{"))],
+      ["a body of a declared length that is not JSON", () => postTo("{", { "content-length": "1" })],
+    ];
+    for (const [what, make] of refused) {
+      const response = await proxy(make());
+      assert.deepEqual([response.status, (await response.json()).error.code], [400, "INVALID_JSON"], what);
+    }
+    const tooLarge = await proxy(postTo(JSON.stringify({ text: "x".repeat(70_000) }), { "content-type": "application/json" }));
+    assert.deepEqual([tooLarge.status, (await tooLarge.json()).error.code], [413, "PAYLOAD_TOO_LARGE"], "the size limit is the gate's still");
+    const accepted: Array<[string, () => NextRequest, string]> = [
+      ["an empty object", () => postTo("{}", { "content-type": "application/json" }), "{}"],
+      ["a stream of two chunks", () => postTo(chunks("{", "}")), "{}"],
+      ["a stream whose first chunk is empty", () => postTo(chunks("", '{"a":1}')), '{"a":1}'],
+    ];
+    for (const [what, make, text] of accepted) {
+      const request = make();
+      assert.equal((await proxy(request)).status, 200, what);
+      assert.equal(await request.text(), text, `${what}: looking at the body leaves it unread for the route`);
+    }
+  } finally {
+    globalThis.pulseSharedLocalLimits = undefined;
+  }
+});
+
+test("proxy: a body that fails while the gate looks at it is answered like any failure of the gate — a 500 with a support id, not an exception out of the proxy", async () => {
+  globalThis.pulseSharedLocalLimits = undefined;
+  const original = console.error;
+  const logged: string[] = [];
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  try {
+    const broken = new ReadableStream<Uint8Array>({ start(controller) { controller.error(new Error("connection reset by peer")); } });
+    const response = await proxy(postTo(broken));
+    assert.deepEqual([response.status, (await response.json()).error.code], [500, "INTERNAL_ERROR"]);
+    assert.ok(!logged.join(" ").includes("connection reset"), "and the reason is not logged");
+  } finally {
+    console.error = original;
+    globalThis.pulseSharedLocalLimits = undefined;
+  }
+});
+
+/** A POST as the server hands it to a route when the client sent no body: a body stream with nothing in it, not no stream. */
+const emptyPost = (path: string, headers: Record<string, string> = {}) => req(path, { method: "POST", headers, body: "" });
+
+test("routes: an empty body is no body — the campaign routes that take an optional body, and the idempotent ones, answer it as they answer a POST with none", async () => {
+  await enableSending();
+  const draft = await createDraft();
+  const at = (suffix: string, headers: Record<string, string> = {}) => emptyPost(`${CAMPAIGNS}/${draft.id}${suffix}`, headers);
+  const duplicated = await duplicatePost(at("/duplicate", { "idempotency-key": freshKey() }), forCampaign(draft.id));
+  assert.equal(duplicated.status, 201, "duplicate takes no body, and is idempotent");
+  const tested = await testPost(at("/test", { "idempotency-key": freshKey() }), forCampaign(draft.id));
+  assert.deepEqual([tested.status, await tested.json()], [200, { queued: 1 }], "a test send with no extra recipients");
+  const sendKey = freshKey();
+  const sent = await sendPost(at("/send", { "if-match": draft.version, "idempotency-key": sendKey }), forCampaign(draft.id));
+  assert.equal(sent.status, 200, "send with no body is send now");
+  const campaign = (await sent.json()).item as CampaignItem;
+  assert.equal(campaign.status, "Sending");
+  assert.equal((await sendPost(at("/send", { "if-match": draft.version, "idempotency-key": sendKey }), forCampaign(draft.id))).status, 200, "and a replay under the same key is a replay");
+  assert.deepEqual(await (await retryPost(at("/deliveries/retry", { "idempotency-key": freshKey() }), forCampaign(draft.id))).json(), { requeued: 0, reopened: false }, "retry takes no body, and is idempotent");
+  assert.equal((await cancelPost(at("/cancel", { "if-match": campaign.version }), forCampaign(draft.id))).status, 200, "cancel with no body is cancel the remaining");
+});
+
+test("job routes: an empty body is no body — all four answer a POST that sends none as they answer one with none", async () => {
+  await withJobSecret(async () => {
+    const jobs: Array<[string, (request: Request) => Promise<Response>]> = [
+      ["communications", communicationsJobPost], ["notifications", notificationsJobPost], ["retention", retentionJobPost], ["webhooks", webhooksJobPost],
+    ];
+    for (const [name, post] of jobs) {
+      const response = await post(emptyPost(`/api/v1/internal/jobs/${name}`, { "x-pulse-job-secret": JOB_SECRET }));
+      assert.equal(response.status, 200, name);
+      assert.deepEqual(await refusal(await post(emptyPost(`/api/v1/internal/jobs/${name}`, { "x-pulse-job-secret": "wrong" }))), [401, "UNAUTHORIZED"], `${name}: the secret is still asked for`);
+    }
+  });
+});
+
+test("requestHasBody: a declared length decides when there is one; without one the first chunk of a copy does, and nothing more is read", async () => {
+  const request = (body?: BodyInit | null, headers: Record<string, string> = {}) =>
+    new Request("http://localhost/x", { method: "POST", headers, ...(body === undefined ? {} : { body, duplex: "half" }) } as RequestInit);
+  assert.deepEqual(
+    await Promise.all([request(), request(""), request(emptyStream()), request("", { "content-length": "0" }), request(chunks("", ""))].map((r) => requestHasBody(r))),
+    [false, false, false, false, false],
+    "no stream, an empty string, an empty stream, a declared length of 0, chunks without a byte",
+  );
+  assert.deepEqual(
+    await Promise.all([request("{}"), request(chunks("", "{")), request("{}", { "content-length": "2" })].map((r) => requestHasBody(r))),
+    [true, true, true],
+    "a string, a stream whose first chunk is empty and whose second is not, a declared length above 0",
+  );
+  assert.deepEqual(
+    await Promise.all([request("{}", { "content-length": "0" }), request("", { "content-length": "5" })].map((r) => requestHasBody(r))),
+    [false, true],
+    "the declared length decides when there is one: 0 is no body whatever follows, and a promised body is a body for the gate to judge",
+  );
+  const endless = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); } }); // one chunk, and no end
+  assert.equal(await requestHasBody(request(endless)), true, "it does not wait for a stream to finish");
+  const sent = request("abc");
+  assert.equal(await requestHasBody(sent), true);
+  assert.equal(await sent.text(), "abc", "and the request is left unread");
 });

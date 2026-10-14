@@ -21,8 +21,11 @@ export type AudienceBreakdown = { organizations: number; members: number; contac
 /** The form an address is deduplicated, matched against the suppression list and looked up under. */
 const normalise = (email: string) => email.toLowerCase();
 
-/** Safe mode compares the whole domain: `x@evil-datacentral.ai` and `x@datacentral.ai.attacker.com` do not match `datacentral.ai`. */
-function domainAllowed(email: string, allowed: string[]) {
+/**
+ * Safe mode compares the whole domain, whatever its case: `x@evil-datacentral.ai` and `x@datacentral.ai.attacker.com` do not match `datacentral.ai`.
+ * One rule for everything safe mode guards: the audience of a campaign and the configuration test mail.
+ */
+export function domainAllowed(email: string, allowed: string[]) {
   const domain = email.slice(email.lastIndexOf("@") + 1).toLowerCase();
   return allowed.some((d) => d.toLowerCase() === domain);
 }

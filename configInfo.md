@@ -387,9 +387,9 @@ Pulse under **Settings → Customer communications (SendGrid)**.
 Everything here is optional. Without `SENDGRID_API_KEY`,
 `createMailTransport()` (`lib/server/communications/sendgrid.ts`) returns the
 console transport: it logs a count, never an address, and sends nothing. The
-worker refuses that transport in production. The two SendGrid values are
-environment settings only, never stored in the database, and the Settings
-card shows only whether each one is set.
+worker and the configuration test refuse that transport in production. The
+two SendGrid values are environment settings only, never stored in the
+database, and the Settings card shows only whether each one is set.
 
 1. **API key.** In SendGrid, Settings → API Keys → **Create API Key** →
    **Restricted Access**, and switch on **Mail Send** only. SendGrid shows the
@@ -433,6 +433,8 @@ card shows only whether each one is set.
 4. **Event Webhook.** In SendGrid, Settings → Mail Settings → **Event Webhook**:
    - Set the **HTTP POST URL** to the **Event webhook URL** the Pulse Settings
      card shows: `{PULSE_PUBLIC_URL}/api/v1/internal/communications/events`.
+     The template leaves that path out of Easy Auth, as it does the job routes,
+     so SendGrid reaches it without a login; the signature is the credential.
    - Select the events Processed, Delivered, Deferred, Bounce, Dropped, Open,
      Click, Spam Report, Unsubscribe, Group Unsubscribe and Group Resubscribe.
    - Enable **Signed Event Webhook** and copy the **verification key** it
@@ -462,16 +464,17 @@ card shows only whether each one is set.
    1. Save the sender settings and press **Send configuration test**. It mails
       the signed-in System admin straight to SendGrid, not through the queue,
       and works while sending is still off. Safe mode still applies, so your own
-      domain must be on the list. Without an API key it reports that the mail
-      was logged to the server console.
+      domain must be on the list. Outside production, without an API key it
+      reports that the mail was logged to the server console. In production it
+      is refused with `INVALID_EMAIL_PROVIDER_CONFIGURATION`.
    2. Switch **Enable sending** on and send a real communication to internal
       recipients. Safe mode keeps everyone else out. **Sandbox mode** can come
       first: SendGrid validates the request and delivers nothing.
    3. Run the checklist below. Switch safe mode off only after it passes.
 7. **Verification checklist.**
    - The configuration test mail arrives with the subject prefix `[TEST]` from
-     the address you set, and its message headers show SPF, DKIM and DMARC as
-     pass.
+     the address you set. Its last line, `Sending state: …`, is the status the
+     card shows, and its message headers show SPF, DKIM and DMARC as pass.
    - After a communication to internal recipients, its deliveries move from
      Accepted to **Delivered** within a few minutes. That proves the webhook
      URL, the signature and the verification key.

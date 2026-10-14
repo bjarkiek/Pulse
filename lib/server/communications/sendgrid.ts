@@ -1,7 +1,8 @@
 import sgMail from "@sendgrid/mail";
 import type { PulseIdentity } from "@/lib/domain";
 import { requireInternalRole } from "../authorization";
-import { getRuntimeCommunicationSettings, type CommunicationSettings } from "./settings";
+import { domainAllowed } from "./audience";
+import { communicationProviderStatus, getRuntimeCommunicationSettings, type CommunicationSettings } from "./settings";
 import { renderCommunication } from "./templates/index";
 
 // The mail provider behind a small interface: the worker hands a batch to a `MailTransport` and learns whether it was accepted. Nothing from a
@@ -115,22 +116,26 @@ export function createMailTransport(settings: CommunicationSettings, overrides?:
 /**
  * One test mail to the signed-in System admin, through the real transport and with the saved settings: how an admin finds out, before any campaign,
  * that the key, the sender and the region work. It does not go through the worker or its queue and does not need `enabled`, but safe mode holds:
- * the caller's own address must be on its list (compared by whole domain, as the audience does) or safe mode must be off.
+ * the caller's own address must be on its list (the whole domain, as for the audience of a campaign) or safe mode must be off. The mail says what a
+ * campaign would do now, in the words of the status line on the Settings card (`Sending state: safe-mode.`).
+ *
+ * Like the worker, production refuses the console transport: with no key the answer there is `INVALID_EMAIL_PROVIDER_CONFIGURATION`, not a mail
+ * that only reached the log. Elsewhere the console transport takes the mail and logs a count.
  *
  * A refusal from the provider is named by its code alone, `INVALID_EMAIL_PROVIDER_<code>`: the body of an error can echo an address, so it is never read.
- * Nothing is logged here; without a key the console transport takes the mail and logs a count. `settingsOverride` is for tests, the route never passes it.
+ * Nothing is logged here. `settingsOverride` is for tests, the route never passes it.
  */
 export async function sendConfigurationTest(identity: PulseIdentity, options: { settingsOverride?: CommunicationSettings } = {}) {
   await requireInternalRole(identity, ["System admin"]);
   const settings = options.settingsOverride ?? (await getRuntimeCommunicationSettings());
-  if (!settings.fromEmail) throw new Error("INVALID_EMAIL_PROVIDER_CONFIGURATION");
+  const status = communicationProviderStatus(settings);
+  if (!settings.fromEmail || (process.env.NODE_ENV === "production" && !status.providerConfigured)) throw new Error("INVALID_EMAIL_PROVIDER_CONFIGURATION");
   const email = identity.email.toLowerCase();
-  const domain = email.slice(email.lastIndexOf("@") + 1);
-  if (settings.safeMode.enabled && !settings.safeMode.allowedDomains.some((allowed) => allowed.toLowerCase() === domain)) throw new Error("INVALID_SAFE_MODE_BLOCKS_RECIPIENT");
+  if (settings.safeMode.enabled && !domainAllowed(email, settings.safeMode.allowedDomains)) throw new Error("INVALID_SAFE_MODE_BLOCKS_RECIPIENT");
   const publicUrl = (process.env.PULSE_PUBLIC_URL || "http://localhost:3000").replace(/\/+$/, "");
   const rendered = renderCommunication("plain", {
     subject: { en: "Pulse communications configuration test" },
-    body: { en: { title: "Configuration test", paragraphs: ["This message confirms that Pulse can send customer communications through SendGrid with the current settings.", `Sending state: ${settings.sandboxMode ? "sandbox" : settings.safeMode.enabled ? "safe mode" : "live"}.`] } },
+    body: { en: { title: "Configuration test", paragraphs: ["This message confirms that Pulse can send customer communications through SendGrid with the current settings.", `Sending state: ${status.effectiveSendingState}.`] } },
   }, "en", { publicUrl, boilerplate: settings.boilerplate.en, unsubscribeTags: settings.unsubscribeGroupId !== null, testPrefix: true });
   const transport = createMailTransport(settings);
   try {

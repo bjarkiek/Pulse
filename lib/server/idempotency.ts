@@ -7,7 +7,7 @@ import {
   requirePublishRole,
 } from "./authorization";
 import { getRequest } from "./request-repository";
-import { readJson } from "./validation";
+import { readJson, requestHasBody } from "./validation";
 
 type Entry = {
   hash: string;
@@ -55,7 +55,9 @@ export async function executeIdempotent<T>(
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key || !/^[A-Za-z0-9._:-]{8,100}$/.test(key))
     throw new Error("INVALID_IDEMPOTENCY_KEY");
-  const payload = request.body ? await readJson(request.clone()) : null;
+  const payload = (await requestHasBody(request))
+    ? await readJson(request.clone())
+    : null;
   const hash = digest(
     canonicalJson({
       method: request.method,

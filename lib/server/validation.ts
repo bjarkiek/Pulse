@@ -33,6 +33,27 @@ export async function readJsonValue(
   validateStructure(value);
   return value;
 }
+/**
+ * Whether a request has a body to read. The server gives a handler a body stream for every method but GET and HEAD, an empty one when the client
+ * sent none, so `request.body` alone cannot tell a POST with nothing to say from a POST with a body. A declared length decides when there is one
+ * (0 is no body); without one the first chunk of a copy does, and only that chunk is read, so asking never buffers a large body or waits for the
+ * end of a slow one. The request itself is left unread.
+ */
+export async function requestHasBody(request: Request): Promise<boolean> {
+  if (!request.body) return false;
+  const declared = request.headers.get("content-length");
+  if (declared !== null) return Number(declared) !== 0;
+  const reader = request.clone().body!.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return false;
+      if (value.byteLength > 0) return true;
+    }
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+}
 function validateStructure(value: unknown, depth = 0) {
   if (depth > 12) throw new Error("INVALID_JSON_DEPTH");
   if (typeof value === "string" && value.length > 16000)
