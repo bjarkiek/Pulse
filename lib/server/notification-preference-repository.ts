@@ -136,7 +136,8 @@ export async function saveNotificationPreference(
       .input("id", sql.UniqueIdentifier, crypto.randomUUID())
       .input("actor", sql.UniqueIdentifier, identity.id)
       .input("organizationId", sql.NVarChar(32), identity.organizationId)
-      .input("before", sql.NVarChar(sql.MAX), JSON.stringify(prior.recordset[0] || null))
+      // No earlier choice is no before-image: the audit column takes JSON objects (ISJSON), and the text "null" is not one.
+      .input("before", sql.NVarChar(sql.MAX), prior.recordset[0] ? JSON.stringify(prior.recordset[0]) : null)
       .input(
         "after",
         sql.NVarChar(sql.MAX),

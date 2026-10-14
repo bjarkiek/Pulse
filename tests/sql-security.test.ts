@@ -13,6 +13,10 @@ import { sql, atomicSql, getSqlPool } from "../lib/server/database";
 import { issueOtpCode, verifyOtpCode } from "../lib/server/otp-login";
 import { executeIdempotent } from "../lib/server/idempotency";
 import { requireActiveAccount } from "../lib/server/active-account";
+import {
+  listNotificationPreferences,
+  saveNotificationPreference,
+} from "../lib/server/notification-preference-repository";
 import type { PulseIdentity } from "../lib/domain";
 
 // Explicit opt-in: use only a disposable database with migrations 001-014 applied.
@@ -66,6 +70,7 @@ after(async () => {
     .input("email", identity.email).query(`
     DELETE dbo.AuditEvents WHERE actor_user_id=@id;
     DELETE dbo.Notifications WHERE user_id=@id;
+    DELETE dbo.NotificationPreferences WHERE user_id=@id;
     DELETE dbo.Attachments WHERE organization_id=@org;
     DELETE dbo.Requests WHERE organization_id=@org;
     DELETE dbo.IdempotencyKeys WHERE organization_id=@org;
@@ -214,6 +219,8 @@ sqlTest(
         "INSERT dbo.Requests(id,public_id,organization_id,created_by_user_id,title,problem) VALUES(NEWID(),@id,@org,@user,'Version fixture','Fixture')",
       );
     const [observed] = await addVersions("Requests", [{ id }]);
+    // A client sends the version back in If-Match, so it has to be text a header can carry: 0x and sixteen hexadecimal digits.
+    assert.match(observed.version, /^0x[0-9A-F]{16}$/);
     const edit = () =>
       checkedMutation(identity, "Requests", id, observed.version, async () => {
         await (
@@ -232,6 +239,40 @@ sqlTest(
       ),
       /PRECONDITION_FAILED/,
     );
+  },
+);
+sqlTest(
+  "SQL the first save of a notification preference is audited without a before-image, and the next one carries it",
+  async () => {
+    // The audit columns take JSON objects only (ISJSON), and the text "null" is not one: with no earlier choice there is no before-image.
+    const eventType = "communication.service-notices";
+    const first = await saveNotificationPreference(identity, eventType, "Off");
+    assert.equal(first.cadence, "Off");
+    const second = await saveNotificationPreference(
+      identity,
+      eventType,
+      "Immediate",
+    );
+    assert.equal(second.cadence, "Immediate");
+    const audit = await pool
+      .request()
+      .input("id", sql.UniqueIdentifier, identity.id)
+      .query(
+        "SELECT before_json before,after_json after FROM dbo.AuditEvents WHERE actor_user_id=@id AND action='notification.preference.updated'",
+      );
+    assert.equal(audit.recordset.length, 2);
+    const created = audit.recordset.find((row) => row.before === null);
+    const changed = audit.recordset.find((row) => row.before !== null);
+    assert.deepEqual(JSON.parse(created.after), { eventType, cadence: "Off" });
+    assert.deepEqual(JSON.parse(changed.before), { cadence: "Off" });
+    assert.deepEqual(JSON.parse(changed.after), {
+      eventType,
+      cadence: "Immediate",
+    });
+    const stored = (await listNotificationPreferences(identity)).find(
+      (preference) => preference.eventType === eventType,
+    );
+    assert.equal(stored?.cadence, "Immediate");
   },
 );
 sqlTest(

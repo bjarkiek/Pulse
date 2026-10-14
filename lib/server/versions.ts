@@ -22,7 +22,7 @@ export async function addVersions<T extends { id: string }>(
     .request()
     .input("ids", sql.NVarChar(sql.MAX), JSON.stringify(items.map((i) => i.id)))
     .query(
-      `SELECT public_id id,CONVERT(varchar(18),row_version,1) version FROM dbo.${entity} WHERE public_id IN (SELECT value FROM OPENJSON(@ids))`,
+      `SELECT public_id id,CONVERT(varchar(18),CAST(row_version AS binary(8)),1) version FROM dbo.${entity} WHERE public_id IN (SELECT value FROM OPENJSON(@ids))`,
     );
   const versions = new Map<string, string>(
     result.recordset.map((r) => [r.id, r.version]),
@@ -74,7 +74,7 @@ export async function checkedMutation<T>(
       .input("id", sql.NVarChar(32), id)
       .input("org", sql.NVarChar(32), identity.organizationId)
       .query(
-        `SELECT CONVERT(varchar(18),row_version,1) version FROM dbo.${entity} WITH (UPDLOCK,HOLDLOCK) WHERE public_id=@id ${entity === "Requests" ? "AND organization_id=@org AND deleted_at IS NULL" : ""}`,
+        `SELECT CONVERT(varchar(18),CAST(row_version AS binary(8)),1) version FROM dbo.${entity} WITH (UPDLOCK,HOLDLOCK) WHERE public_id=@id ${entity === "Requests" ? "AND organization_id=@org AND deleted_at IS NULL" : ""}`,
       );
     if (!result.recordset.length) throw new Error("NOT_FOUND");
     if (result.recordset[0].version !== version)
