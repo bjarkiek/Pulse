@@ -195,7 +195,7 @@ type CommunicationSettings = {
   fromEmail: string;                      // verified sender / authenticated domain; required when enabled
   replyTo: string;                        // optional
   dataResidency: "global" | "eu";         // sgMail.setDataResidency("eu") → api.eu.sendgrid.com
-  unsubscribeGroupId: number | null;      // SendGrid ASM group → one-click List-Unsubscribe
+  unsubscribeGroupId: number | null;      // SendGrid ASM group → one-click List-Unsubscribe; required while enabled with safe mode off
   sandboxMode: boolean;                   // mail_settings.sandbox_mode (validate, do not deliver)
   safeMode: { enabled: boolean; allowedDomains: string[] };   // default on, ["datacentral.ai"]
   tracking: { opens: boolean; clicks: boolean };             // default both on
@@ -209,9 +209,9 @@ type CommunicationSettings = {
 };
 ```
 
-The GET endpoint also returns derived, read-only status: `providerConfigured`, `webhookConfigured`, `webhookUrl` (`${PULSE_PUBLIC_URL}/api/v1/internal/communications/events`, for pasting into SendGrid), and `effectiveSendingState` (`disabled | provider-missing | sandbox | safe-mode | live`).
+The GET endpoint also returns derived, read-only status: `providerConfigured`, `webhookConfigured`, `webhookUrl` (`${PULSE_PUBLIC_URL}/api/v1/internal/communications/events`, for pasting into SendGrid), and `effectiveSendingState` (`disabled | provider-missing | sandbox | safe-mode | live`). The settings are for System admins, but the state is not secret: the audience estimate (`GET /{id}/audience`, §8.3) carries `effectiveSendingState` too, for every internal role, so the people who send see the warnings.
 
-**Safe mode** is the main guard against an accidental blast: while on, recipients whose domain is not allow-listed are marked `Suppressed/SafeMode` at freeze time and the review step shows the count. Production starts with safe mode on; a System admin turns it off deliberately. `dailyCap` is a second brake: the worker stops claiming once the day's accepted count reaches the cap and the UI shows the backlog.
+**Safe mode** is the main guard against an accidental blast: while on, recipients whose domain is not allow-listed are marked `Suppressed/SafeMode` at freeze time, and again when the worker claims a row that has been waiting since (§8.4), so turning safe mode on after a send holds back the rows still waiting; the review step shows the count. Production starts with safe mode on; a System admin turns it off deliberately, and only with an `unsubscribeGroupId` set (§6.5). `dailyCap` is a second brake, and a soft one: the worker stops claiming once the day's accepted count reaches the cap and the UI shows the backlog, but it reads that count once per run, so two runs that overlap can each use the room that was left.
 
 ### 6.3 Sending
 
@@ -224,8 +224,8 @@ The GET endpoint also returns derived, read-only status: `providerConfigured`, `
   };
   ```
 
-  `createMailTransport(settings)` returns the SendGrid transport when `SENDGRID_API_KEY` is set, otherwise the console transport (logs subject and recipient count only — never addresses) which keeps local development and demo mode working.
-- One SendGrid request per (campaign, locale, batch of ≤ 500 recipients): shared `subject`, `html`, `text`, `from`, `reply_to`, `categories: ["<prefix>", "<prefix>-<topic>", "<COM-id>"]`, `asm.group_id`, `tracking_settings`, `mail_settings.sandbox_mode`, and one `personalizations[]` entry per recipient carrying `to`, `substitutions` (`-name-`, `-company-`) and `custom_args: { deliveryId, communicationId }`. The response's `x-message-id` is stored on every delivery in the batch.
+  `createMailTransport(settings)` returns the SendGrid transport when `SENDGRID_API_KEY` is set, otherwise the console transport (logs a recipient count only — never addresses). Send, schedule and test send need the key in every environment (`INVALID_EMAIL_PROVIDER_CONFIGURATION` without it), so a delivery is never marked Accepted for mail that went nowhere; the console transport serves only the configuration test, outside production (§11).
+- One SendGrid request per (campaign, locale, batch of ≤ 500 recipients): shared `subject`, `html`, `text`, `from`, `reply_to`, `categories: ["<prefix>", "<prefix>-<topic>", "<COM-id>"]`, `asm.group_id`, `tracking_settings`, `mail_settings.sandbox_mode`, and one `personalizations[]` entry per recipient carrying `to` and `custom_args: { deliveryId, communicationId }`. The response's `x-message-id` is stored on every delivery in the batch.
 - Failures are per request: `429` or `5xx` → every delivery in the batch goes to `Retry` with exponential backoff (honouring `Retry-After`); `4xx` other than 429 → `Dead letter` with the SendGrid error code (configuration errors are not retried); after 5 attempts → `Dead letter`. Dead letters are retried from the campaign page or the Settings delivery card.
 - Test sends use the same path with `source = 'Test'`, subject prefix `[TEST]`, category `<prefix>-test`, and are excluded from campaign counts and stats.
 
@@ -242,6 +242,8 @@ The GET endpoint also returns derived, read-only status: `providerConfigured`, `
 ### 6.5 Unsubscribe
 
 - With `unsubscribeGroupId` set, SendGrid injects `List-Unsubscribe` / `List-Unsubscribe-Post` headers and the `<%asm_group_unsubscribe_raw_url%>` link rendered in the footer. Unsubscribes come back through the webhook and land in the suppression list, so Pulse never emails that address again regardless of company or source.
+- A suppression or a safe-mode change that comes after the freeze (an unsubscribe reported through another campaign, a bounce, an admin's block) holds for the rows still waiting: when the worker claims, it first settles every waiting real row of a sending campaign whose address is now on the list, or outside safe mode's allow-list, as `Suppressed` with the reason the audience uses (the list's, else `SafeMode`), and never hands it to the transport. A retry or a requeued dead letter therefore never mails an address that has been suppressed since. Test mails go to the staff the sender names and were never held to the list or to safe mode, so they are not settled here.
+- Mail sent without an unsubscribe group has no `List-Unsubscribe` header and no unsubscribe link, so the settings cannot be saved with sending enabled and safe mode off while `unsubscribeGroupId` is empty (`INVALID_UNSUBSCRIBE_GROUP_REQUIRED`).
 - Pulse users additionally toggle topics in the Updates page; those preferences are honoured at audience freeze.
 - Security advisories are mandatory for members, but a global suppression (bounce, spam report, unsubscribe) still wins: Pulse never sends to a suppressed address.
 
@@ -328,14 +330,15 @@ Input rows (organisations, members with preferences, contacts, suppressions, set
 6. Safe mode → non-allow-listed domains → `Suppressed/SafeMode`.
 7. `maxRecipientsPerCampaign` exceeded → `INVALID_AUDIENCE_TOO_LARGE`.
 
-`GET /{id}/audience` returns the breakdown (companies, members, contacts, suppressed by reason, final count) without writing anything. `send` runs the same function inside the transaction that inserts `CommunicationDeliveries` and sets `recipient_count`.
+`GET /{id}/audience` returns the breakdown (companies, members, contacts, suppressed by reason, final count) without writing anything, and beside it the `effectiveSendingState` (§6.2). `send` runs the same function inside the transaction that inserts `CommunicationDeliveries` and sets `recipient_count`. Rules 5 and 6 are one function (`blockedReason`), which the worker applies again when it claims (§8.4).
 
 ### 8.4 Worker (`POST /api/v1/internal/jobs/communications`, every minute)
 
 ```text
 promoteScheduled(now)                 Scheduled & due → Sending (+ freeze audience)
 while claimed < limit:
-  batch = store.claimBatch(size ≤ 500)        one campaign, one locale, Queued/Retry due, UPDLOCK READPAST
+  batch = store.claimBatch(size ≤ 500)        first settles waiting real rows whose address is now suppressed or outside safe mode's list as Suppressed;
+                                              then one campaign, one locale, Queued/Retry due, UPDLOCK READPAST
   if dailyCap reached: stop
   render once per batch (content + locale + boilerplate)
   transport.sendBatch(...) → Accepted (+ x-message-id) | Retry | Dead letter
@@ -360,10 +363,10 @@ Internal (Product manager / System admin unless noted):
 | `POST /api/v1/internal/communications` | Create draft (`fromReleaseId` optional pre-fill) |
 | `GET /api/v1/internal/communications/{id}` | Campaign + stats (any internal role) |
 | `PATCH /api/v1/internal/communications/{id}` | Edit draft (If-Match) |
-| `DELETE /api/v1/internal/communications/{id}` | Soft-delete draft |
+| `DELETE /api/v1/internal/communications/{id}` | Soft-delete a draft, or a cancelled campaign that no mail left for (its delivery rows are the record of who was mailed) |
 | `POST /api/v1/internal/communications/{id}/duplicate` | New draft from any campaign |
 | `GET /api/v1/internal/communications/{id}/preview` | Rendered HTML/text (any internal role) |
-| `GET /api/v1/internal/communications/{id}/audience` | Audience estimate and breakdown |
+| `GET /api/v1/internal/communications/{id}/audience` | Audience estimate and breakdown, with `effectiveSendingState` (any internal role) |
 | `POST /api/v1/internal/communications/{id}/test` | Test send to self (+ optional internal addresses) |
 | `POST /api/v1/internal/communications/{id}/send` | Send now or `scheduledAt` (If-Match, Idempotency-Key) |
 | `POST /api/v1/internal/communications/{id}/cancel` | Cancel / unschedule (If-Match) |
@@ -388,7 +391,7 @@ Assistant/MCP tools are not part of release 1 (listed in §15).
 Tabs: **Campaigns**, **Contacts**, **Suppressions** (System admin).
 
 - Campaign list: `COM-012 · title · template · status pill · recipients · delivered % · opened % · sent at`, actions Open / Duplicate. Empty state with "New communication".
-- Editor (page view, not a modal; survives the short embed height): header with working title, template and topic; three steps as tabs — **Content** (form fields per template, locale switch en/is with "copy from English"), **Audience** (company picker with search and "all customers", member/contact/internal-copy toggles, role filter, live estimate with breakdown), **Review & send** (subject per locale, warnings: safe mode on / sandbox on / provider not configured / sending disabled, recipient summary, "Send test to me", "Send now" / "Schedule for…"). Right-hand live preview iframe on wide screens. Save draft is explicit (plus autosave of the form into device storage via the existing draft helpers is a Phase 2 nicety).
+- Editor (page view, not a modal; survives the short embed height): header with working title, template and topic; three steps as tabs — **Content** (form fields per template, locale switch en/is with "copy from English"), **Audience** (company picker with search and "all customers", member/contact/internal-copy toggles, role filter, live estimate with breakdown), **Review & send** (subject per locale, warnings: safe mode on / sandbox on / provider not configured / sending disabled (from the `effectiveSendingState` of the audience estimate, so every sender sees them, not only System admins), recipient summary, "Send test to me", "Send now" / "Schedule for…"). Right-hand live preview iframe on wide screens. Save draft is explicit (plus autosave of the form into device storage via the existing draft helpers is a Phase 2 nicety).
 - Confirmation dialog repeats the recipient and company counts and the sending state (`live`, `safe mode`, `sandbox`) before Send.
 - Campaign detail: stat tiles, per-company table, deliveries table with state filter and search, Retry dead letters, Cancel (Scheduled/Sending), Duplicate.
 - Contacts tab: company selector, table (name, e-mail, locale, topics, status, source), Add contact modal, Paste import (one `Name, email` per line, up to 250), Remove.
@@ -417,7 +420,7 @@ All new UI strings get Icelandic entries (`lib/i18n-internal.ts` for staff scree
 - Customer addresses are PII: never logged (worker and webhook log counts and codes only), never in telemetry, hashed nowhere needed. Delivery rows carry the address so the audit question "who received COM-012" is answerable.
 - Webhook: signature + timestamp window + idempotency; payloads trimmed before storage.
 - Outbound: only SendGrid's API host; no user-supplied URLs are fetched server-side. Links in content must be `https://` and are rendered escaped.
-- Secrets: environment / Key Vault only. The production configuration check validates only environment values: `SENDGRID_API_KEY` and `SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY` must be resolved, non-blank values (not a Key Vault placeholder) when they are set, and an empty value counts as not set. A valid `fromEmail` when `enabled` is enforced when the settings are saved, by the schema (`communicationSettingsInputSchema`), not at startup, because the settings live in the database. In production the worker and the configuration test also refuse to send without `SENDGRID_API_KEY` (`INVALID_EMAIL_PROVIDER_CONFIGURATION`).
+- Secrets: environment / Key Vault only. The production configuration check validates only environment values: `SENDGRID_API_KEY` and `SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY` must be resolved, non-blank values (not a Key Vault placeholder) when they are set, and an empty value counts as not set. A valid `fromEmail` when `enabled` is enforced when the settings are saved, by the schema (`communicationSettingsInputSchema`), not at startup, because the settings live in the database. Send, schedule and test send refuse without `SENDGRID_API_KEY` in every environment (`INVALID_EMAIL_PROVIDER_CONFIGURATION`); the console transport serves only the configuration test, and in production the worker and the configuration test refuse it as well.
 - Rate limits: internal routes under the existing `api` group; webhook in its own group.
 - Audit events: `communication.created|updated|deleted|duplicated|test-sent|scheduled|unscheduled|sent|cancelled|deliveries.retried`, `communication.contact.saved|removed`, `communication.suppression.added|removed`, `communication.settings.updated`, each with `before/after` where applicable — these also feed the outbound webhook outbox automatically via the `AuditEvents` trigger.
 - Retention: `CommunicationEvents` older than 90 days purged by the retention job; deliveries follow the campaign's lifetime.
@@ -474,6 +477,7 @@ Grouped by value; none are required for release 1.
 2. Database-backed template presets with versioning and a block editor; saved snippets (standard callouts, sign-offs).
 3. Autosave of in-progress campaign content into the existing device/server draft helpers.
 4. Assistant and MCP tools: `list_communications`, `get_communication_stats`, `draft_communication_from_release`, `list_communication_contacts`, `add_communication_contact`.
+5. Per-recipient substitutions (`-name-`, `-company-`) in the personalizations, so a mail can greet each person by name and company.
 
 ### Audience and consent
 

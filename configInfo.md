@@ -386,10 +386,15 @@ Pulse under **Settings → Customer communications (SendGrid)**.
 
 Everything here is optional. Without `SENDGRID_API_KEY`,
 `createMailTransport()` (`lib/server/communications/sendgrid.ts`) returns the
-console transport: it logs a count, never an address, and sends nothing. The
-worker and the configuration test refuse that transport in production. The
-two SendGrid values are environment settings only, never stored in the
-database, and the Settings card shows only whether each one is set.
+console transport: it logs a count, never an address, and sends nothing.
+Sending or scheduling a communication and sending a test mail need the key in
+every environment, and are refused without it (400
+`INVALID_EMAIL_PROVIDER_CONFIGURATION`), so that no delivery is marked Accepted
+for mail that went nowhere. The console transport serves only the
+configuration test, and only outside production: in production the
+configuration test and the worker refuse it too. The two SendGrid values are
+environment settings only, never stored in the database, and the Settings card
+shows only whether each one is set.
 
 1. **API key.** In SendGrid, Settings → API Keys → **Create API Key** →
    **Restricted Access**, and switch on **Mail Send** only. SendGrid shows the
@@ -429,7 +434,10 @@ database, and the Settings card shows only whether each one is set.
    Pulse. Mail then carries the one-click `List-Unsubscribe` headers and the
    unsubscribe link in the footer. Turn off SendGrid's own **Subscription
    Tracking** footer (Settings → Tracking), so that recipients do not see two
-   unsubscribe links.
+   unsubscribe links. Pulse does not save settings with sending enabled and
+   safe mode off while this id is empty (`INVALID_UNSUBSCRIBE_GROUP_REQUIRED`):
+   mail without it has no unsubscribe link or header, and the recipient could
+   not leave.
 4. **Event Webhook.** In SendGrid, Settings → Mail Settings → **Event Webhook**:
    - Set the **HTTP POST URL** to the **Event webhook URL** the Pulse Settings
      card shows: `{PULSE_PUBLIC_URL}/api/v1/internal/communications/events`.
@@ -470,7 +478,8 @@ database, and the Settings card shows only whether each one is set.
    2. Switch **Enable sending** on and send a real communication to internal
       recipients. Safe mode keeps everyone else out. **Sandbox mode** can come
       first: SendGrid validates the request and delivers nothing.
-   3. Run the checklist below. Switch safe mode off only after it passes.
+   3. Run the checklist below. Switch safe mode off only after it passes, and
+      only with the unsubscribe group of step 3 set.
 7. **Verification checklist.**
    - The configuration test mail arrives with the subject prefix `[TEST]` from
      the address you set. Its last line, `Sending state: …`, is the status the
@@ -480,9 +489,19 @@ database, and the Settings card shows only whether each one is set.
      URL, the signature and the verification key.
    - Following the unsubscribe link in one of those mails puts the address on
      the suppression list (reason Unsubscribed), and the next communication
-     skips it.
+     skips it. So does a row of the current communication that is still
+     waiting (a retry, a requeued dead letter): when the worker is about to
+     claim it, it is settled as Suppressed instead. Safe mode is checked again
+     the same way, against the list as it is then.
    - Settings → Background delivery shows no `Communications · Dead letter`
      rows.
+
+The **daily cap** is a soft brake, not a hard limit. The worker reads the
+day's accepted count once per run, and the scheduler starts a run every minute
+whether or not the one before has finished, so two runs that overlap can each
+use the room that was left, and the day can end above the cap by the rows of
+the overlapping run (a run takes at most 5,000 rows). Leave a margin when you
+set it.
 
 What the operations log says, and the alerts to set, are in
 [`docs/launch-runbook.md`](docs/launch-runbook.md) §5. A 400
