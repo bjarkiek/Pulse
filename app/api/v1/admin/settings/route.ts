@@ -8,7 +8,12 @@ export async function GET(request: Request) {
   const id = correlationId(request);
   try {
     return json(
-      { item: await getSettings(await getIdentity(request)) },
+      {
+        item: await getSettings(await getIdentity(request)),
+        // Production never shows demo data (saveSettings refuses it), so the
+        // Settings card can disable the switch instead of letting a save fail.
+        demoDataAvailable: process.env.NODE_ENV !== "production",
+      },
       {},
       id,
     );

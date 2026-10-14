@@ -367,9 +367,17 @@ export function UserEditor({
                         <option value="Requester">{t("Requester")}</option>
                         <option value="Viewer">{t("Viewer")}</option>
                         {company.type === "Internal" && (
-                          <option value="Product manager">
-                            {t("Product manager")}
-                          </option>
+                          <>
+                            <option value="Product manager">
+                              {t("Product manager")}
+                            </option>
+                            <option value="Internal contributor">
+                              {t("Internal contributor")}
+                            </option>
+                            <option value="System admin">
+                              {t("System admin")}
+                            </option>
+                          </>
                         )}
                       </select>
                     )}

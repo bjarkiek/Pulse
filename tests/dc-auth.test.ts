@@ -5,8 +5,8 @@ import {
   createSessionToken, readSession, sessionSetCookie, sessionClearCookie, SESSION_COOKIE,
 } from "../lib/server/session";
 import { verifyDcLaunch } from "../lib/server/datacentral";
-import { resolveUserForDcLaunch, resolveUserForEntra } from "../lib/server/user-directory";
-import { listUsers } from "../lib/server/admin-repository";
+import { resolveUserForDcLaunch, resolveUserForEntra, resolveUserForOtp } from "../lib/server/user-directory";
+import { listUsers, saveUser } from "../lib/server/admin-repository";
 import { getIdentity } from "../lib/server/auth";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
 import { GET as dcEmbedGet } from "../app/dc-embed/route";
@@ -211,6 +211,59 @@ test("dc launch resolves a provisioned user by email and claims the dc subject",
   });
   assert.equal(user.id, seeded.id);
   assert.equal(user.externalSubject, "dc:42");
+});
+
+// An invited user (created on the Users page, status "Invited") is allowed to
+// sign in, and that first successful sign-in makes them Active. Suspended users
+// are still refused. Covered for Entra, the DataCentral launch and OTP.
+async function inviteUser(email: string, authentication: "OTP" | "Entra ID", status: "Invited" | "Suspended" = "Invited") {
+  return saveUser(admin, {
+    id: "",
+    name: "Invited Person",
+    email,
+    status,
+    authentication,
+    // The memory seed holds one customer company (ORG-001, Origo); a customer role keeps the invite valid there.
+    memberships: [{ companyId: "ORG-001", role: "Requester" }],
+  });
+}
+
+test("an invited user becomes Active at the first Entra sign-in", async () => {
+  const invited = await inviteUser("invited.entra@uidata.com", "Entra ID");
+  const user = await resolveUserForEntra("oid-invited-1", "tenant-1", "invited.entra@uidata.com", "Invited Person");
+  assert.equal(user.id, invited.id);
+  assert.equal(user.status, "Active");
+  assert.equal(user.externalSubject, "oid-invited-1");
+  const listed = (await listUsers(admin)).find((u) => u.email === "invited.entra@uidata.com");
+  assert.equal(listed?.status, "Active", "the stored record is Active afterwards");
+});
+
+test("an invited user becomes Active at the first DataCentral launch", async () => {
+  await inviteUser("invited.dc@uidata.com", "Entra ID");
+  const user = await resolveUserForDcLaunch({
+    userId: 314, userName: "invited.dc@uidata.com", userDisplayName: "Invited Person",
+    userEmail: "invited.dc@uidata.com", tenancyName: "Origo", tenantId: 1,
+    roleDisplayNames: [], roleIds: [], clientUrl: "https://app.datacentral.ai",
+    timeStamp: "2026-07-15T09:00:00Z",
+  });
+  assert.equal(user.status, "Active");
+  assert.equal(user.externalSubject, "dc:314");
+});
+
+test("OTP: the start step leaves an invited user Invited; the verify step makes them Active", async () => {
+  await inviteUser("invited.otp@uidata.com", "OTP");
+  assert.equal((await resolveUserForOtp("invited.otp@uidata.com")).status, "Invited", "a code request proves nothing yet");
+  assert.equal((await resolveUserForOtp("invited.otp@uidata.com", { activate: true })).status, "Active");
+  const listed = (await listUsers(admin)).find((u) => u.email === "invited.otp@uidata.com");
+  assert.equal(listed?.status, "Active");
+});
+
+test("a suspended user is refused by every sign-in path", async () => {
+  await inviteUser("suspended@uidata.com", "OTP", "Suspended");
+  await assert.rejects(resolveUserForOtp("suspended@uidata.com", { activate: true }), /USER_DISABLED/);
+  await assert.rejects(resolveUserForEntra("oid-suspended", "tenant-1", "suspended@uidata.com", "Suspended"), /USER_DISABLED/);
+  const listed = (await listUsers(admin)).find((u) => u.email === "suspended@uidata.com");
+  assert.equal(listed?.status, "Suspended", "a refused sign-in changes nothing");
 });
 
 test("dc launch for an unknown email throws NOT_PROVISIONED", async () => {

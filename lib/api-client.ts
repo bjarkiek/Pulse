@@ -33,6 +33,7 @@ const REFUSALS: Record<string, string> = {
   INVALID_EMAIL_PROVIDER_CONFIGURATION:
     "SendGrid is not configured: add the API key and a verified from address.",
   INVALID_COMMUNICATIONS_DISABLED: "Sending is disabled in Settings.",
+  INVALID_DEMO_MODE_DISABLED: "Demo data is not available in production.",
   INVALID_AUDIENCE_EMPTY: "Nobody matches this audience.",
   INVALID_AUDIENCE_TOO_LARGE:
     "This audience exceeds the maximum recipients per communication.",

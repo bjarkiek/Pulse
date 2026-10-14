@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<Response> {
 
   let user;
   try {
-    user = await resolveUserForOtp(email);
+    user = await resolveUserForOtp(email, { activate: true });
   } catch {
     // The account changed between code issue and verify (deactivated, switched
     // to Entra). The code was already consumed; refuse the session.

@@ -29,8 +29,14 @@ function toProvisioned(user: UserRecord): ProvisionedUser {
   };
 }
 
-function assertActive(user: UserRecord) {
-  if (user.status !== "Active") throw new Error("USER_DISABLED");
+// Active users sign in. Invited users sign in too, and their first successful
+// sign-in makes them Active (activate). Suspended users are refused.
+function assertSignInAllowed(status: string) {
+  if (status !== "Active" && status !== "Invited") throw new Error("USER_DISABLED");
+}
+
+function activate(user: UserRecord) {
+  if (user.status === "Invited") user.status = "Active";
 }
 
 const SELECT_COLUMNS =
@@ -68,19 +74,21 @@ function resolveUserForEntraMemory(
   if (!user) user = store.find((u) => u.id.toLowerCase() === normalizedOid);
 
   if (user) {
-    assertActive(user);
+    assertSignInAllowed(user.status);
     user.externalSubject = oid;
+    activate(user);
     return toProvisioned(user);
   }
 
   // ③ email match — claim/upgrade a placeholder subject, refuse to rebind a real one
   user = store.find((u) => u.email.toLowerCase() === normalizedEmail);
   if (user) {
-    assertActive(user);
+    assertSignInAllowed(user.status);
     const subject = user.externalSubject;
     const claimable = !subject || subject.startsWith("pending:") || subject.startsWith("dc:");
     if (!claimable && subject !== oid) throw new Error("NOT_PROVISIONED");
     user.externalSubject = oid;
+    activate(user);
     return toProvisioned(user);
   }
 
@@ -142,17 +150,18 @@ async function resolveUserForEntraSql(
     }
 
     if (!row) throw new Error("NOT_PROVISIONED");
-    if (row.status !== "Active") throw new Error("USER_DISABLED");
+    assertSignInAllowed(row.status);
 
+    // A successful sign-in also turns an invited user Active.
     await new sql.Request(transaction)
       .input("id", sql.UniqueIdentifier, row.id)
       .input("oid", sql.NVarChar(128), oid)
       .input("tenantId", sql.NVarChar(64), tenantId)
       .query(
-        "UPDATE dbo.Users SET external_subject=@oid, entra_tenant_id=@tenantId, last_login_at=SYSUTCDATETIME(), last_login_method='entra' WHERE id=@id",
+        "UPDATE dbo.Users SET external_subject=@oid, entra_tenant_id=@tenantId, status='Active', last_login_at=SYSUTCDATETIME(), last_login_method='entra' WHERE id=@id",
       );
     await scope.commit();
-    return { id: row.id, email: row.email, name: row.name, status: row.status, externalSubject: oid };
+    return { id: row.id, email: row.email, name: row.name, status: "Active", externalSubject: oid };
   } catch (error) {
     await scope.rollback();
     throw error;
@@ -178,14 +187,15 @@ function resolveUserForDcLaunchMemory(launch: DataCentralLaunch): ProvisionedUse
   // ① subject already claimed
   let user = store.find((u) => u.externalSubject === subject);
   if (user) {
-    assertActive(user);
+    assertSignInAllowed(user.status);
+    activate(user);
     return toProvisioned(user);
   }
 
   // ② email match
   user = store.find((u) => u.email.toLowerCase() === email);
   if (user) {
-    assertActive(user);
+    assertSignInAllowed(user.status);
     const existing = user.externalSubject;
     if (!existing || existing.startsWith("pending:")) {
       user.externalSubject = subject;
@@ -193,6 +203,7 @@ function resolveUserForDcLaunchMemory(launch: DataCentralLaunch): ProvisionedUse
       if (existing !== subject) throw new Error("NOT_PROVISIONED");
     }
     // else: a real Entra oid — sign in without touching the subject.
+    activate(user);
     return toProvisioned(user);
   }
 
@@ -248,27 +259,28 @@ async function resolveUserForDcLaunchSql(launch: DataCentralLaunch): Promise<Pro
     }
 
     if (!row) throw new Error("NOT_PROVISIONED");
-    if (row.status !== "Active") throw new Error("USER_DISABLED");
+    assertSignInAllowed(row.status);
 
+    // A successful sign-in also turns an invited user Active.
     if (shouldStampSubject) {
       await new sql.Request(transaction)
         .input("id", sql.UniqueIdentifier, row.id)
         .input("subject", sql.NVarChar(128), subject)
         .query(
-          "UPDATE dbo.Users SET external_subject=@subject, last_login_at=SYSUTCDATETIME(), last_login_method='dc-hmac' WHERE id=@id",
+          "UPDATE dbo.Users SET external_subject=@subject, status='Active', last_login_at=SYSUTCDATETIME(), last_login_method='dc-hmac' WHERE id=@id",
         );
       row.externalSubject = subject;
     } else {
       await new sql.Request(transaction)
         .input("id", sql.UniqueIdentifier, row.id)
-        .query("UPDATE dbo.Users SET last_login_at=SYSUTCDATETIME(), last_login_method='dc-hmac' WHERE id=@id");
+        .query("UPDATE dbo.Users SET status='Active', last_login_at=SYSUTCDATETIME(), last_login_method='dc-hmac' WHERE id=@id");
     }
     await scope.commit();
     return {
       id: row.id,
       email: row.email,
       name: row.name,
-      status: row.status,
+      status: "Active",
       externalSubject: row.externalSubject,
     };
   } catch (error) {
@@ -277,16 +289,22 @@ async function resolveUserForDcLaunchSql(launch: DataCentralLaunch): Promise<Pro
   }
 }
 
-// Email one-time-passcode sign-in (standalone login screen). Only Active users
-// the admin designated authentication = "OTP" may sign in this way — Entra
-// users must SSO, so a compromised mailbox alone can never bypass their SSO
-// (and its MFA). No subject stamping: the email IS the identity here.
-export async function resolveUserForOtp(email: string): Promise<ProvisionedUser> {
+// Email one-time-passcode sign-in (standalone login screen). Only Active or
+// invited users the admin designated authentication = "OTP" may sign in this
+// way — Entra users must SSO, so a compromised mailbox alone can never bypass
+// their SSO (and its MFA). No subject stamping: the email IS the identity here.
+// The start step only checks; the verify step passes `activate` so an invited
+// user becomes Active once a code has actually been proven.
+export async function resolveUserForOtp(
+  email: string,
+  options: { activate?: boolean } = {},
+): Promise<ProvisionedUser> {
   const normalized = email.trim().toLowerCase();
   if (!isAzureSqlConfigured()) {
     const user = memoryUsers().find((u) => u.email.toLowerCase() === normalized);
     if (!user || user.authentication !== "OTP") throw new Error("NOT_PROVISIONED");
-    assertActive(user);
+    assertSignInAllowed(user.status);
+    if (options.activate) activate(user);
     return toProvisioned(user);
   }
   const pool = await getSqlPool();
@@ -296,9 +314,16 @@ export async function resolveUserForOtp(email: string): Promise<ProvisionedUser>
       .query(`SELECT ${SELECT_COLUMNS}, auth_method authMethod FROM dbo.Users WHERE email=@email`)
   ).recordset[0];
   if (!row || row.authMethod !== "OTP") throw new Error("NOT_PROVISIONED");
-  if (row.status !== "Active") throw new Error("USER_DISABLED");
+  assertSignInAllowed(row.status);
+  let status: string = row.status;
+  if (options.activate && row.status === "Invited") {
+    await pool.request()
+      .input("id", sql.UniqueIdentifier, row.id)
+      .query("UPDATE dbo.Users SET status='Active' WHERE id=@id AND status='Invited'");
+    status = "Active";
+  }
   return {
     id: row.id, email: row.email, name: row.name,
-    status: row.status, externalSubject: row.externalSubject ?? null,
+    status, externalSubject: row.externalSubject ?? null,
   };
 }

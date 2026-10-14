@@ -49,6 +49,8 @@ export function SettingsPage({
     },
   });
   const [saving, setSaving] = useState(false);
+  // Production refuses demo data; the GET says so and the switch is disabled.
+  const [demoDataAvailable, setDemoDataAvailable] = useState(true);
   const [taxonomy, setTaxonomy] = useState<TaxonomyValue[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookSubscriptionItem[]>([]);
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -59,8 +61,11 @@ export function SettingsPage({
       fetch("/api/v1/internal/webhooks"),
     ])
       .then(async ([settingsResponse, taxonomyResponse, webhooksResponse]) => {
-        if (settingsResponse.ok)
-          setSettings((await settingsResponse.json()).item);
+        if (settingsResponse.ok) {
+          const data = await settingsResponse.json();
+          setSettings(data.item);
+          setDemoDataAvailable(data.demoDataAvailable !== false);
+        }
         if (taxonomyResponse.ok)
           setTaxonomy((await taxonomyResponse.json()).items);
         if (webhooksResponse.ok)
@@ -326,6 +331,7 @@ export function SettingsPage({
             <input
               type="checkbox"
               checked={settings.showDemoData}
+              disabled={!demoDataAvailable}
               onChange={(event) =>
                 setSettings({
                   ...settings,
@@ -337,9 +343,16 @@ export function SettingsPage({
               {t(
                 "Show demo data — requests, ideas, releases, triage, and analytics come from the built-in sample set. Changes made while enabled are demo-only and reset on restart; live data is untouched and returns when switched off.",
               )}
+              {!demoDataAvailable && (
+                <small>{t("Demo data is not available in production.")}</small>
+              )}
             </span>
           </label>
-          <Button variant="secondary" onClick={save} disabled={saving}>
+          <Button
+            variant="secondary"
+            onClick={save}
+            disabled={saving || !demoDataAvailable}
+          >
             {saving ? "Saving…" : "Save demo mode"}
           </Button>
         </article>
