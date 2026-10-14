@@ -37,6 +37,19 @@ const STATUS_TONE = {
 const API = "/api/v1/internal/communications";
 const PARAM = "communication";
 
+/**
+ * What a new draft's English text says until the author replaces it. It is content, not interface, so it is English whatever language
+ * the page is shown in (the draft's working title, a label for this list, is the one thing that is translated where it is made).
+ */
+const PLACEHOLDER = {
+  title: "Untitled communication",
+  announcement: "Write your announcement here.",
+  notice: "Describe the notice here.",
+  introduction: "Write the introduction here.",
+  highlight: "First highlight",
+  change: "Describe the change here.",
+} as const;
+
 const readParam = () =>
   typeof window === "undefined"
     ? null
@@ -125,27 +138,27 @@ export function CommunicationsPage({
         title: t("Untitled communication"),
         // Placeholders satisfy the content schema's min(1) fields; authors replace them in the editor.
         content: {
-          subject: { en: t("Untitled communication") },
+          subject: { en: PLACEHOLDER.title },
           body: {
             en:
               templateKey === "plain"
                 ? {
-                    title: t("Untitled communication"),
-                    paragraphs: [t("Write your announcement here.")],
+                    title: PLACEHOLDER.title,
+                    paragraphs: [PLACEHOLDER.announcement],
                   }
                 : templateKey === "service-notice"
                   ? {
-                      title: t("Untitled communication"),
-                      summary: t("Describe the notice here."),
+                      title: PLACEHOLDER.title,
+                      summary: PLACEHOLDER.notice,
                       actions: [],
                     }
                   : {
-                      title: t("Untitled communication"),
-                      intro: t("Write the introduction here."),
+                      title: PLACEHOLDER.title,
+                      intro: PLACEHOLDER.introduction,
                       sections: [
                         {
-                          heading: t("First highlight"),
-                          body: t("Describe the change here."),
+                          heading: PLACEHOLDER.highlight,
+                          body: PLACEHOLDER.change,
                         },
                       ],
                     },

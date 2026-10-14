@@ -505,11 +505,6 @@ Object.assign(internalTranslations, {
   Sending: "Í sendingu",
   Cancelled: "Hætt við",
   "Untitled communication": "Ónefnd sending",
-  "Write your announcement here.": "Skrifaðu tilkynninguna þína hér.",
-  "Describe the notice here.": "Lýstu tilkynningunni hér.",
-  "Write the introduction here.": "Skrifaðu inngang hér.",
-  "First highlight": "Fyrsta atriði",
-  "Describe the change here.": "Lýstu breytingunni hér.",
   "Tip: published releases offer “Draft customer email” on the Releases page.":
     "Ábending: á útgáfusíðunni er hægt að velja „Semja tölvupóst til viðskiptavina“ fyrir útgefnar útgáfur.",
   "That communication could not be found.": "Þessi sending fannst ekki.",
