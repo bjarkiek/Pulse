@@ -1,14 +1,17 @@
 import { communicationInputSchema, httpsUrl } from "@/lib/contracts";
 import type { PulseIdentity } from "@/lib/domain";
 import type { z } from "zod";
+import { organizations, users } from "../admin-repository";
 import { requireInternalRole, requirePublishRole } from "../authorization";
-import { atomicSql, getSqlPool, isContentSqlActive, sql } from "../database";
+import { atomicSql, getSqlPool, isAzureSqlConfigured, isContentSqlActive, sql } from "../database";
 import { listReleases } from "../operations-repository";
 import { listInternalIdeas } from "../product-repository";
 import { parseInput } from "../validation";
 import { addVersions } from "../versions";
+import { loadAudienceInput, resolveAudience, type AudienceBreakdown } from "./audience";
+import { cancelOpenDeliveries, communicationStats, freezeAudience, insertTestDeliveries, listDeliveryRows, requeueDeadLetters } from "./delivery-store";
 import { memoryAuditEvent, memoryCommunications, memoryDeliveries, nextMemoryPublicId } from "./memory";
-import { getRuntimeCommunicationSettings } from "./settings";
+import { communicationProviderStatus, getRuntimeCommunicationSettings } from "./settings";
 import { renderCommunication, type RenderedEmail } from "./templates/index";
 import type { CommunicationRecord, CommunicationStats, EmailLocale } from "./types";
 
@@ -17,9 +20,6 @@ export type CommunicationInput = z.infer<typeof communicationInputSchema>;
 // Campaigns follow the content switch (`isContentSqlActive`), like releases, ideas and `addVersions` do: with "Show demo data" on, campaigns,
 // their versions and the releases they are drafted from all live in memory together. Who the caller is, the settings, contacts and
 // suppressions are identity-adjacent and keep following `isAzureSqlConfigured` in their own modules.
-
-/** The stats of a campaign nobody was sent. A new object on every call, so what one caller does to it is never seen by the next. */
-const emptyStats = (): CommunicationStats => ({ recipients: 0, queued: 0, accepted: 0, delivered: 0, bounced: 0, dropped: 0, deadLettered: 0, suppressed: 0, cancelled: 0, opened: 0, clicked: 0, byOrganization: [] });
 
 const SELECT = `SELECT c.public_id id,c.template_key templateKey,c.topic,c.title,c.content_json contentJson,c.audience_json audienceJson,c.status,
   CONVERT(nvarchar(33),c.scheduled_at,127) scheduledAt,CONVERT(nvarchar(33),c.started_at,127) startedAt,CONVERT(nvarchar(33),c.completed_at,127) completedAt,
@@ -142,7 +142,8 @@ export async function getCommunication(identity: PulseIdentity, id: string): Pro
   assertPublicId(id); // before the unit of work: an id that cannot exist costs no transaction
   const read = async () => (await addVersions("Communications", [await loadOne(id)]))[0];
   const item = await (isContentSqlActive() ? atomicSql(read) : read());
-  return { ...item, stats: emptyStats() }; // Task 9 replaces emptyStats() with `await communicationStats(id)`
+  // The stats are counted from the delivery rows after the unit of work above: they are informational, and a read under SERIALIZABLE would hold range locks the delivery worker waits for.
+  return { ...item, stats: await communicationStats(id) };
 }
 
 export async function createCommunication(identity: PulseIdentity, input: Partial<CommunicationInput> & { fromReleaseId?: string }) {
@@ -256,5 +257,173 @@ export async function previewCommunication(identity: PulseIdentity, id: string, 
     publicUrl: (process.env.PULSE_PUBLIC_URL || "http://localhost:3000").replace(/\/+$/, ""),
     boilerplate: settings.boilerplate[locale],
     unsubscribeTags: settings.unsubscribeGroupId !== null,
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Sending: the audience estimate, send and schedule, cancel and unschedule, test sends, and the delivery list and retry. These functions
+// authorise, check the state and audit; delivery-store writes the delivery rows. In SQL each write and its audit row share one unit of work.
+
+type VersionedCampaign = CommunicationRecord & { version: string };
+
+/** Sending needs the master switch on and a provider key. */
+async function assertSendable() {
+  const settings = await getRuntimeCommunicationSettings();
+  if (!settings.enabled) throw new Error("INVALID_COMMUNICATIONS_DISABLED");
+  if (!communicationProviderStatus(settings).providerConfigured) throw new Error("INVALID_EMAIL_PROVIDER_CONFIGURATION");
+}
+
+/**
+ * The counts the review step shows. Never the recipients: nothing is written and no address leaves the server. An audience over the
+ * recipient limit is refused with INVALID_AUDIENCE_TOO_LARGE, as a send would refuse it; one nobody belongs to is reported (total 0).
+ */
+export async function audienceEstimate(identity: PulseIdentity, id: string): Promise<AudienceBreakdown & { recipients?: undefined }> {
+  await requireInternalRole(identity);
+  const item = await loadOne(id);
+  const settings = await getRuntimeCommunicationSettings();
+  return resolveAudience(item.audience, item.topic, await loadAudienceInput(item.topic), settings).breakdown;
+}
+
+/**
+ * Sends a Draft or Scheduled campaign now, or (with `scheduledAt`, one minute to 30 days ahead) schedules it; scheduling again moves the time.
+ * A scheduled campaign freezes its audience when the worker promotes it, not here. Sending now freezes it at once and refuses an audience
+ * nobody belongs to; one where everybody is suppressed is not empty and completes as Sent with no recipients.
+ */
+export async function sendCommunication(identity: PulseIdentity, id: string, input: { scheduledAt?: string }): Promise<VersionedCampaign> {
+  await requirePublishRole(identity);
+  await assertSendable();
+  const current = await loadOne(id);
+  if (!["Draft", "Scheduled"].includes(current.status)) throw new Error("INVALID_COMMUNICATION_STATE");
+  const now = new Date();
+  // "Now" is `scheduledAt` left out. A value that is there but empty or null is a malformed schedule, never a request to mail everybody at once.
+  if (input.scheduledAt !== undefined) {
+    const when = new Date(input.scheduledAt);
+    if (Number.isNaN(when.getTime()) || when.getTime() < now.getTime() + 60_000 || when.getTime() > now.getTime() + 30 * 86_400_000) throw new Error("INVALID_SCHEDULE_TIME");
+    if (!isContentSqlActive()) {
+      const item = memoryCommunications().find((c) => c.id === id)!;
+      Object.assign(item, { status: "Scheduled", scheduledAt: when.toISOString(), updatedAt: now.toISOString() });
+      memoryAuditEvent(identity, "communication.scheduled", "Communication", id, { scheduledAt: when.toISOString() });
+      return (await addVersions("Communications", [structuredClone(item)]))[0];
+    }
+    return atomicSql(async () => {
+      const uuid = await findCommunicationUuid(id);
+      // The status guard is repeated in the UPDATE: a send or a cancel that wins the race leaves it with no row, and nothing is written.
+      const result = await (await getSqlPool()).request().input("id", sql.NVarChar(32), id).input("when", sql.DateTime2, when).input("actor", sql.UniqueIdentifier, identity.id)
+        .query(`UPDATE dbo.Communications SET status='Scheduled',scheduled_at=@when,sent_by_user_id=@actor,updated_by_user_id=@actor,updated_at=SYSUTCDATETIME()
+          WHERE public_id=@id AND status IN ('Draft','Scheduled') AND deleted_at IS NULL`);
+      if (!result.rowsAffected[0]) throw new Error("NOT_FOUND");
+      await insertAudit(identity, "communication.scheduled", uuid, { scheduledAt: when.toISOString() });
+      return (await addVersions("Communications", [await loadOne(id)]))[0];
+    });
+  }
+  if (!isContentSqlActive()) {
+    const breakdown = await freezeAudience(id, identity.id, now, { rejectEmpty: true });
+    memoryAuditEvent(identity, "communication.sent", "Communication", id, { recipients: breakdown.sendable, suppressed: breakdown.suppressed });
+    return (await addVersions("Communications", [await loadOne(id)]))[0];
+  }
+  return atomicSql(async () => {
+    const breakdown = await freezeAudience(id, identity.id, now, { rejectEmpty: true });
+    await insertAudit(identity, "communication.sent", await findCommunicationUuid(id), { recipients: breakdown.sendable, suppressed: breakdown.suppressed });
+    return (await addVersions("Communications", [await loadOne(id)]))[0];
+  });
+}
+
+/**
+ * `unschedule` turns a Scheduled campaign back into a Draft. `cancel` stops a Scheduled or Sending one for good: deliveries still waiting
+ * (Queued or Retry) become Cancelled, and what was already handed to the provider keeps its state.
+ */
+export async function cancelCommunication(identity: PulseIdentity, id: string, mode: "cancel" | "unschedule"): Promise<VersionedCampaign> {
+  await requirePublishRole(identity);
+  const current = await loadOne(id);
+  const unschedule = mode === "unschedule";
+  if (unschedule ? current.status !== "Scheduled" : !["Scheduled", "Sending"].includes(current.status)) throw new Error("INVALID_COMMUNICATION_STATE");
+  const now = new Date();
+  if (!isContentSqlActive()) {
+    const item = memoryCommunications().find((c) => c.id === id)!;
+    if (unschedule) {
+      Object.assign(item, { status: "Draft", scheduledAt: undefined, updatedAt: now.toISOString() });
+      memoryAuditEvent(identity, "communication.unscheduled", "Communication", id, {});
+    } else {
+      const cancelled = await cancelOpenDeliveries(id);
+      Object.assign(item, { status: "Cancelled", cancelledAt: now.toISOString(), updatedAt: now.toISOString() });
+      memoryAuditEvent(identity, "communication.cancelled", "Communication", id, { cancelledDeliveries: cancelled });
+    }
+    return (await addVersions("Communications", [await loadOne(id)]))[0];
+  }
+  return atomicSql(async () => {
+    const uuid = await findCommunicationUuid(id);
+    const pool = await getSqlPool();
+    // The status guard is repeated in each UPDATE: a send, a promotion or another cancel that wins the race leaves it with no row, and the unit of work is rolled back.
+    if (unschedule) {
+      const result = await pool.request().input("id", sql.NVarChar(32), id).input("actor", sql.UniqueIdentifier, identity.id)
+        .query("UPDATE dbo.Communications SET status='Draft',scheduled_at=NULL,updated_by_user_id=@actor,updated_at=SYSUTCDATETIME() WHERE public_id=@id AND status='Scheduled' AND deleted_at IS NULL");
+      if (!result.rowsAffected[0]) throw new Error("NOT_FOUND");
+      await insertAudit(identity, "communication.unscheduled", uuid, {});
+    } else {
+      const cancelled = await cancelOpenDeliveries(id);
+      const result = await pool.request().input("id", sql.NVarChar(32), id).input("now", sql.DateTime2, now).input("actor", sql.UniqueIdentifier, identity.id)
+        .query("UPDATE dbo.Communications SET status='Cancelled',cancelled_at=@now,updated_by_user_id=@actor,updated_at=SYSUTCDATETIME() WHERE public_id=@id AND status IN ('Scheduled','Sending') AND deleted_at IS NULL");
+      if (!result.rowsAffected[0]) throw new Error("NOT_FOUND");
+      await insertAudit(identity, "communication.cancelled", uuid, { cancelledDeliveries: cancelled });
+    }
+    return (await addVersions("Communications", [await loadOne(id)]))[0];
+  });
+}
+
+/** Who counts as DataCentral staff for a test send. Identity-adjacent, so it follows `isAzureSqlConfigured` like the other account reads. */
+async function internalStaffEmails(): Promise<Set<string>> {
+  if (!isAzureSqlConfigured()) {
+    // The memory seed has no Internal-type organisation, so a user holding an internal role in any organisation counts as well.
+    const internalIds = new Set(organizations().filter((o) => o.type === "Internal").map((o) => o.id));
+    return new Set(users().filter((u) => u.status === "Active" && u.memberships.some((m) => internalIds.has(m.companyId) || ["System admin", "Product manager", "Internal contributor"].includes(m.role))).map((u) => u.email.toLowerCase()));
+  }
+  const result = await (await getSqlPool()).request().query("SELECT DISTINCT u.email FROM dbo.Users u JOIN dbo.Memberships m ON m.user_id=u.id AND m.status='Active' JOIN dbo.Organizations o ON o.id=m.organization_id AND o.type='Internal' WHERE u.status='Active'");
+  return new Set(result.recordset.map((r) => String(r.email).toLowerCase()));
+}
+
+/** Queues a test mail to the caller and to the given addresses that belong to DataCentral staff; any other address is ignored. Test rows never count in a campaign's stats. */
+export async function testSendCommunication(identity: PulseIdentity, id: string, extraRecipients: string[]): Promise<{ queued: number }> {
+  await requirePublishRole(identity);
+  await assertSendable();
+  await loadOne(id);
+  const staff = await internalStaffEmails();
+  const recipients = [{ email: identity.email.toLowerCase(), displayName: identity.name, locale: "en" as const }];
+  for (const extra of extraRecipients.map((e) => e.trim().toLowerCase()))
+    if (staff.has(extra) && !recipients.some((r) => r.email === extra)) recipients.push({ email: extra, displayName: extra, locale: "en" });
+  if (!isContentSqlActive()) {
+    const queued = await insertTestDeliveries(id, recipients);
+    memoryAuditEvent(identity, "communication.test-sent", "Communication", id, { queued });
+    return { queued };
+  }
+  return atomicSql(async () => {
+    const queued = await insertTestDeliveries(id, recipients);
+    await insertAudit(identity, "communication.test-sent", await findCommunicationUuid(id), { queued });
+    return { queued };
+  });
+}
+
+/** A whole number from a paging value, or `fallback` when it is missing or not a number. */
+const whole = (value: number | undefined, fallback: number) => (value !== undefined && Number.isFinite(value) ? Math.floor(value) : fallback);
+
+/** Pages of 100 deliveries by default, 250 at most. */
+export async function listDeliveries(identity: PulseIdentity, id: string, filter: { state?: string; organizationId?: string; page?: number; pageSize?: number }) {
+  await requireInternalRole(identity);
+  await loadOne(id);
+  return listDeliveryRows(id, { state: filter.state, organizationId: filter.organizationId, page: Math.max(1, whole(filter.page, 1)), pageSize: Math.min(Math.max(whole(filter.pageSize, 100) || 100, 1), 250) });
+}
+
+/** Queues every Dead letter row of the campaign again, with its attempts started over. */
+export async function retryDeadLetters(identity: PulseIdentity, id: string): Promise<{ requeued: number }> {
+  await requirePublishRole(identity);
+  await loadOne(id);
+  if (!isContentSqlActive()) {
+    const requeued = await requeueDeadLetters(id);
+    memoryAuditEvent(identity, "communication.deliveries.retried", "Communication", id, { requeued });
+    return { requeued };
+  }
+  return atomicSql(async () => {
+    const requeued = await requeueDeadLetters(id);
+    await insertAudit(identity, "communication.deliveries.retried", await findCommunicationUuid(id), { requeued });
+    return { requeued };
   });
 }

@@ -338,6 +338,8 @@ export const communicationInputSchema = z
   });
 export const communicationSendInputSchema = z.object({ scheduledAt: z.iso.datetime().optional() }).strict();
 export const communicationTestSendSchema = z.object({ extraRecipients: z.array(emailAddress).max(5).default([]) }).strict();
+/** `cancel` stops a Scheduled or Sending campaign for good; `unschedule` turns a Scheduled one back into a Draft. */
+export const communicationCancelInputSchema = z.object({ mode: z.enum(["cancel", "unschedule"]).default("cancel") }).strict();
 const topicEnum = z.enum(["product-updates", "service-notices", "security-advisories", "general"]);
 export const communicationContactInputSchema = z.object({
   id: z.union([z.uuid(), z.literal("")]).optional(),

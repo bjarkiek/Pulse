@@ -4783,6 +4783,21 @@
           "visibility"
         ]
       },
+      "communicationCancelInputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "default": "cancel",
+            "type": "string",
+            "enum": [
+              "cancel",
+              "unschedule"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "communicationContactCreateSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",

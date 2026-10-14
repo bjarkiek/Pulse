@@ -108,7 +108,9 @@ const localeOf = (value: unknown): "en" | "is" => (value === "is" ? "is" : "en")
 
 /**
  * No identity: the callers authorise. The SQL reads are awaited one after the other because `atomicSql` gives every request
- * the same transaction and a transaction carries a single request at a time (mssql answers a second one with EREQINPROG).
+ * the same transaction and a transaction carries a single request at a time (mssql answers a second one with EREQINPROG). Members and
+ * contacts are read in organisation, then address, order: the resolver gives an address that belongs to several organisations to the
+ * first row it meets, so the order must not depend on the plan the database picks.
  */
 export async function loadAudienceInput(topic: CommunicationTopic): Promise<AudienceInput> {
   const suppressions = await loadSuppressionMap();
@@ -136,10 +138,10 @@ export async function loadAudienceInput(topic: CommunicationTopic): Promise<Audi
     `SELECT CAST(u.id AS nvarchar(36)) userId,m.organization_id organizationId,u.email,u.display_name displayName,u.locale,m.role,p.cadence preference
      FROM dbo.Memberships m JOIN dbo.Users u ON u.id=m.user_id AND u.status='Active'
      LEFT JOIN dbo.NotificationPreferences p ON p.user_id=m.user_id AND p.organization_id=m.organization_id AND p.event_type=@eventType
-     WHERE m.status='Active'`);
+     WHERE m.status='Active' ORDER BY m.organization_id,u.email`);
   const contactRows = await pool.request().query(
     `SELECT CAST(c.id AS nvarchar(36)) id,c.organization_id organizationId,CAST(c.user_id AS nvarchar(36)) userId,c.email,c.display_name displayName,c.locale,c.topics_json topicsJson,c.status,c.source
-     FROM dbo.CommunicationContacts c WHERE c.deleted_at IS NULL`);
+     FROM dbo.CommunicationContacts c WHERE c.deleted_at IS NULL ORDER BY c.organization_id,c.email`);
   return {
     organizations: orgRows.recordset.map((o) => ({ id: o.id, name: o.name, type: o.type, status: o.status, isTest: Boolean(o.isTest), locale: localeOf(o.locale) })),
     members: memberRows.recordset.map((m) => ({

@@ -15,6 +15,7 @@ import { getTemplate, renderCommunication } from "../lib/server/communications/t
 import { executeIdempotent } from "../lib/server/idempotency";
 import { checkedMutation } from "../lib/server/versions";
 import {
+  communicationCancelInputSchema,
   communicationInputSchema,
   communicationSendInputSchema,
   communicationTestSendSchema,
@@ -32,9 +33,10 @@ import { loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/s
 import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
 import type { AudienceSpec, CommunicationTopic, DeliveryRecord } from "../lib/server/communications/types";
 import {
-  createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication, listCommunications,
-  prefillFromRelease, previewCommunication, updateCommunication,
+  audienceEstimate, cancelCommunication, createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication,
+  listCommunications, listDeliveries, prefillFromRelease, previewCommunication, retryDeadLetters, sendCommunication, testSendCommunication, updateCommunication,
 } from "../lib/server/communications/campaign-repository";
+import { communicationStats, freezeAudience, getDeliveryStore } from "../lib/server/communications/delivery-store";
 import { sql } from "../lib/server/database";
 import { createRelease, publishRelease } from "../lib/server/operations-repository";
 import { createIdea, listInternalIdeas } from "../lib/server/product-repository";
@@ -350,6 +352,14 @@ test("contracts: per-locale bodies are validated, send and test-send inputs are 
   assert.deepEqual(communicationTestSendSchema.parse({}), { extraRecipients: [] });
   assert.equal(communicationTestSendSchema.safeParse({ extraRecipients: ["a@b.co", "c@d.co", "e@f.co", "g@h.co", "i@j.co", "k@l.co"] }).success, false);
   assert.equal(communicationTestSendSchema.safeParse({ extraRecipients: ["not-an-email"] }).success, false);
+});
+
+test("contracts: a cancel input defaults to cancel, takes only cancel or unschedule and is strict", () => {
+  assert.deepEqual(communicationCancelInputSchema.parse({}), { mode: "cancel" });
+  assert.deepEqual(communicationCancelInputSchema.parse({ mode: "unschedule" }), { mode: "unschedule" });
+  assert.deepEqual(communicationCancelInputSchema.parse({ mode: "cancel" }), { mode: "cancel" });
+  assert.equal(communicationCancelInputSchema.safeParse({ mode: "delete" }).success, false);
+  assert.equal(communicationCancelInputSchema.safeParse({ mode: "cancel", extra: 1 }).success, false);
 });
 
 test("assets: the email logo is a PNG at the 2x width the layout shows at 170px", () => {
@@ -974,6 +984,9 @@ test("audience: the SQL loader sends its queries one at a time, as a transaction
     ]);
     assert.deepEqual([...input.suppressions], [["bounced@origo.is", "Bounced"]]);
     assert.equal(calls.find((c) => /NotificationPreferences/.test(c.text))?.inputs.eventType, "communication.product-updates", "the preference join is bound to the topic's event type");
+    // The resolver gives an address that belongs to several organisations to the first row it meets, so the rows must come in a fixed order.
+    assert.match(calls.find((c) => /FROM dbo\.Memberships/.test(c.text))!.text, /ORDER BY m\.organization_id,\s*u\.email\s*$/, "members come in organisation, then address, order");
+    assert.match(calls.find((c) => /FROM dbo\.CommunicationContacts/.test(c.text))!.text, /ORDER BY c\.organization_id,\s*c\.email\s*$/, "contacts come in organisation, then address, order");
   } finally {
     delete process.env.AZURE_SQL_SERVER;
     globalThis.pulseSqlPool = undefined;
@@ -1399,7 +1412,7 @@ test("campaigns, SQL: reads map the rows and attach row versions, and an id that
   ];
   await withFakeSql(answers, async (calls, events) => {
     // The statements that read campaigns and their row versions, from `since` on: the unit of work they ran in is what keeps a row and its version together.
-    const reads = (since: number) => calls.slice(since).filter((c) => /dbo\.Communications|OPENJSON/.test(c.text));
+    const reads = (since: number) => calls.slice(since).filter((c) => /dbo\.Communications|OPENJSON/.test(c.text) && !/CommunicationDeliveries/.test(c.text));
     const list = await listCommunications(CONTRIBUTOR);
     assert.deepEqual(list.map((c) => [c.id, c.title, c.status, c.version, c.scheduledAt, c.releaseId]), [
       ["COM-008", "Newer", "Draft", "0x0000000000000008", undefined, undefined],
@@ -1417,6 +1430,9 @@ test("campaigns, SQL: reads map the rows and attach row versions, and an id that
     assert.match(calls.find((c) => /WHERE c\.public_id=@id/.test(c.text))!.text, /WHERE c\.public_id=@id AND c\.deleted_at IS NULL$/, "a deleted campaign is gone");
     assert.deepEqual(events, ["begin", "commit", "begin", "commit"], "a get is one unit of work as well");
     assert.deepEqual(reads(seenGet).map((c) => c.inTransaction), [true, true], "the row and its version ran inside it");
+    const statsReads = calls.slice(seenGet).filter((c) => /FROM dbo\.CommunicationDeliveries/.test(c.text));
+    assert.deepEqual(statsReads.map((c) => [c.inTransaction, c.inputs.id]), [[false, "COM-007"]], "the stats are counted from the delivery rows once, after the unit of work and outside it");
+    assert.match(statsReads[0].text, /d\.source<>'Test'/, "test sends are not part of the stats");
     assert.equal((await previewCommunication(CONTRIBUTOR, "COM-007", "is")).subject, "DataCentral 3.0.0 (is)");
     await assert.rejects(getCommunication(CONTRIBUTOR, "COM-404"), /NOT_FOUND/, "a well-formed id that is not there");
     assert.deepEqual(events.slice(4), ["begin", "rollback"], "a read that finds nothing rolls its unit of work back");
@@ -1586,6 +1602,941 @@ test("campaigns, demo data: with SQL configured and the demo-data switch on, cam
       assert.deepEqual(events, [], "and no transaction was opened");
       assert.ok(calls.some((c) => /FROM dbo\.Users WHERE id=@id/.test(c.text)), "who the caller is was still asked of SQL");
       assert.ok(calls.some((c) => /FROM dbo\.Settings/.test(c.text)), "and so were the settings the preview reads");
+    } finally {
+      globalThis.pulseShowDemoData = undefined;
+    }
+  });
+});
+
+// Module scope: the worker, webhook and route tests of later tasks reuse both.
+/** Sending on: the provider key is set and the settings are enabled with safe mode off. */
+async function enableSending() {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+}
+/** Two organisations and four people in the audience of "all customers": bjarki, jon (ORG-001 members), anna (ORG-002 member), and cio (an Icelandic contact of ORG-001). */
+async function seedAudience() {
+  await seedOrganizations();
+  globalThis.pulseMemoryUsers!.push(
+    { id: "22222222-2222-4222-8222-222222222222", name: "Jón", email: "jon@origo.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Requester" }] },
+    { id: "66666666-6666-4666-8666-666666666666", name: "Anna", email: "anna@advania.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-002", role: "Company admin" }] },
+  );
+  await saveContact(PM, { organizationId: "ORG-001", email: "cio@origo.is", displayName: "CIO", locale: "is", topics: ["product-updates"] });
+}
+
+test("send: requires enabled settings and a provider, freezes the audience and moves to Sending", async () => {
+  await seedAudience();
+  const created = await createCommunication(PM, draftInput);
+  await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_COMMUNICATIONS_DISABLED/);
+  await enableSending();
+  const estimate = await audienceEstimate(PM, created.id);
+  assert.equal(estimate.sendable, 4); // bjarki + jon (ORG-001 members), cio (contact, is), anna (ORG-002 member)
+  const sent = await sendCommunication(PM, created.id, {});
+  assert.equal(sent.status, "Sending");
+  assert.equal(sent.recipientCount, 4);
+  const deliveries = await listDeliveries(CONTRIBUTOR, created.id, { page: 1, pageSize: 50 });
+  assert.equal(deliveries.total, 4);
+  assert.ok(deliveries.items.every((d) => d.state === "Queued"));
+  assert.equal(deliveries.items.find((d) => d.email === "cio@origo.is")?.locale, "is");
+  await assert.rejects(updateCommunication(PM, created.id, draftInput), /INVALID_COMMUNICATION_NOT_EDITABLE/);
+  await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_COMMUNICATION_STATE/);
+  assert.equal(globalThis.pulseMemoryAudit?.[0]?.action, "communication.sent");
+});
+
+test("send: schedule, unschedule and cancel; cancel keeps accepted rows", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await assert.rejects(sendCommunication(PM, created.id, { scheduledAt: new Date(Date.now() - 1000).toISOString() }), /INVALID_SCHEDULE_TIME/);
+  const scheduled = await sendCommunication(PM, created.id, { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() });
+  assert.equal(scheduled.status, "Scheduled");
+  assert.equal((await listDeliveries(PM, created.id, { page: 1, pageSize: 10 })).total, 0, "audience freezes at promotion, not at scheduling");
+  const back = await cancelCommunication(PM, created.id, "unschedule");
+  assert.equal(back.status, "Draft");
+  const sending = await sendCommunication(PM, created.id, {});
+  const store = getDeliveryStore();
+  const batch = await store.claimBatch(1);
+  await store.markAccepted([batch!.deliveries[0].id], "msg-1", new Date());
+  const cancelled = await cancelCommunication(PM, created.id, "cancel");
+  assert.equal(cancelled.status, "Cancelled");
+  const rows = (await listDeliveries(PM, sending.id, { page: 1, pageSize: 10 })).items;
+  assert.equal(rows.filter((r) => r.state === "Accepted").length, 1);
+  assert.equal(rows.filter((r) => r.state === "Cancelled").length, 3);
+});
+
+test("send: an all-suppressed audience completes immediately as Sent with zero recipients", async () => {
+  await seedAudience();
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai" }); // safe mode on, datacentral.ai only
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const created = await createCommunication(PM, draftInput);
+  const sent = await sendCommunication(PM, created.id, {});
+  assert.equal(sent.status, "Sent");
+  assert.equal(sent.recipientCount, 0);
+  const stats = await communicationStats(created.id);
+  assert.equal(stats.suppressed, 4);
+});
+
+test("send: an audience nobody belongs to is refused and leaves the draft as it was", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, { ...draftInput, audience: { ...draftInput.audience, organizations: [] } });
+  await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_AUDIENCE_EMPTY/);
+  const kept = await getCommunication(PM, created.id);
+  assert.deepEqual([kept.status, kept.recipientCount, kept.startedAt, kept.completedAt], ["Draft", 0, undefined, undefined]);
+  assert.equal(memoryDeliveries().length, 0, "no delivery row was written");
+  assert.equal(globalThis.pulseMemoryAudit?.some((a) => a.action === "communication.sent"), false, "and nothing was audited as sent");
+  assert.equal((await audienceEstimate(PM, created.id)).total, 0, "the estimate reports the empty audience instead of refusing it");
+});
+
+test("test send: queues Test rows for the caller and internal extras only; never counts in stats", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  const result = await testSendCommunication(PM, created.id, ["staff@datacentral.ai", "jon@origo.is"]);
+  assert.equal(result.queued, 1, "jon@origo.is is not internal staff; only the caller is queued");
+  const batch = await getDeliveryStore().claimBatch(10);
+  assert.equal(batch?.deliveries[0].source, "Test");
+  assert.equal((await communicationStats(created.id)).recipients, 0);
+});
+
+test("deliveries: retry dead letters requeues only Dead letter rows", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  const store = getDeliveryStore();
+  const batch = await store.claimBatch(10);
+  await store.markFailed(batch!.deliveries.map((d) => d.id), "HTTP_400", null);
+  assert.equal((await communicationStats(created.id)).deadLettered, 3);
+  assert.deepEqual(await retryDeadLetters(PM, created.id), { requeued: 3 });
+  assert.equal((await communicationStats(created.id)).queued, 4, "3 requeued English rows plus the never-claimed Icelandic row");
+});
+
+test("freeze: only a Draft or Scheduled campaign freezes, and what it writes is the whole send", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  const breakdown = await freezeAudience(created.id, PM.id);
+  assert.deepEqual([breakdown.total, breakdown.sendable], [4, 4]);
+  await assert.rejects(freezeAudience(created.id, PM.id), /INVALID_COMMUNICATION_STATE/, "a frozen campaign cannot freeze twice");
+  await assert.rejects(freezeAudience("COM-404", PM.id), /NOT_FOUND/);
+  assert.equal(memoryDeliveries().length, 4, "the second freeze added nothing");
+});
+
+const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
+/** How many of the rows are in each state. */
+const countByState = (rows: Array<{ state: string }>) => rows.reduce<Record<string, number>>((counts, row) => ({ ...counts, [row.state]: (counts[row.state] ?? 0) + 1 }), {});
+/** A delivery row for the stores to chew on; `extra` overrides any field. */
+const deliveryRow = (communicationId: string, state: DeliveryRecord["state"], extra: Partial<DeliveryRecord> = {}): DeliveryRecord => ({
+  id: crypto.randomUUID(), communicationId, organizationId: "ORG-001", email: `${crypto.randomUUID()}@origo.is`, displayName: null, locale: "en",
+  source: "Member", state, attemptCount: 0, createdAt: new Date().toISOString(), ...extra,
+});
+
+test("send: only the publish roles send, cancel, test-send and retry, any internal role reads, and an unknown or malformed id is NOT_FOUND", async () => {
+  await seedAudience();
+  const created = await createCommunication(PM, draftInput);
+  await assert.rejects(sendCommunication(CONTRIBUTOR, created.id, {}), /FORBIDDEN/, "the role is checked before the settings, so the answer says nothing about them");
+  await assert.rejects(testSendCommunication(CONTRIBUTOR, created.id, []), /FORBIDDEN/);
+  await enableSending();
+  await assert.rejects(sendCommunication(CONTRIBUTOR, created.id, {}), /FORBIDDEN/);
+  await assert.rejects(sendCommunication(CONTRIBUTOR, "COM-404", {}), /FORBIDDEN/, "the role is checked before the campaign is looked up");
+  await assert.rejects(cancelCommunication(CONTRIBUTOR, created.id, "cancel"), /FORBIDDEN/);
+  await assert.rejects(cancelCommunication(CONTRIBUTOR, created.id, "unschedule"), /FORBIDDEN/);
+  await assert.rejects(testSendCommunication(CONTRIBUTOR, created.id, []), /FORBIDDEN/);
+  await assert.rejects(retryDeadLetters(CONTRIBUTOR, created.id), /FORBIDDEN/);
+  for (const customer of [COMPANY_ADMIN, REQUESTER]) {
+    await assert.rejects(audienceEstimate(customer, created.id), /FORBIDDEN/);
+    await assert.rejects(listDeliveries(customer, created.id, {}), /FORBIDDEN/);
+    await assert.rejects(sendCommunication(customer, created.id, {}), /FORBIDDEN/);
+  }
+  assert.deepEqual([(await getCommunication(PM, created.id)).status, memoryDeliveries().length], ["Draft", 0], "the refused calls changed nothing");
+  assert.equal((await audienceEstimate(CONTRIBUTOR, created.id)).sendable, 4, "any internal role reads the estimate");
+  assert.equal((await listDeliveries(CONTRIBUTOR, created.id, {})).total, 0, "and the deliveries");
+  for (const id of ["COM-404", "REL-1", "", "COM-1; DROP TABLE dbo.Communications"]) {
+    await assert.rejects(audienceEstimate(PM, id), /NOT_FOUND/, id);
+    await assert.rejects(sendCommunication(PM, id, {}), /NOT_FOUND/, id);
+    await assert.rejects(sendCommunication(PM, id, { scheduledAt: inAnHour() }), /NOT_FOUND/, id);
+    await assert.rejects(cancelCommunication(PM, id, "cancel"), /NOT_FOUND/, id);
+    await assert.rejects(cancelCommunication(PM, id, "unschedule"), /NOT_FOUND/, id);
+    await assert.rejects(testSendCommunication(PM, id, []), /NOT_FOUND/, id);
+    await assert.rejects(listDeliveries(PM, id, {}), /NOT_FOUND/, id);
+    await assert.rejects(retryDeadLetters(PM, id), /NOT_FOUND/, id);
+  }
+  assert.equal((await sendCommunication(ADMIN, created.id, {})).status, "Sending", "a System admin sends too");
+});
+
+test("send: sending needs the master switch and a provider key; the estimate, cancelling and retrying do not", async () => {
+  await seedAudience();
+  const created = await createCommunication(PM, draftInput);
+  process.env.SENDGRID_API_KEY = "SG.test";
+  await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_COMMUNICATIONS_DISABLED/, "the key alone is not enough");
+  await assert.rejects(sendCommunication(PM, created.id, { scheduledAt: inAnHour() }), /INVALID_COMMUNICATIONS_DISABLED/, "scheduling is a send too");
+  await assert.rejects(testSendCommunication(PM, created.id, []), /INVALID_COMMUNICATIONS_DISABLED/);
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+  for (const key of [undefined, "", "   "]) {
+    if (key === undefined) delete process.env.SENDGRID_API_KEY; else process.env.SENDGRID_API_KEY = key;
+    await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, `enabled settings and key ${JSON.stringify(key)}`);
+    await assert.rejects(testSendCommunication(PM, created.id, []), /INVALID_EMAIL_PROVIDER_CONFIGURATION/);
+  }
+  assert.equal(memoryDeliveries().length, 0);
+  assert.equal(globalThis.pulseMemoryAudit?.some((a) => /^communication\.(sent|scheduled|test-sent)$/.test(a.action)), false, "nothing was audited as sent");
+  assert.equal((await audienceEstimate(PM, created.id)).sendable, 4, "the estimate needs neither the switch nor the key");
+  assert.deepEqual(await retryDeadLetters(PM, created.id), { requeued: 0 }, "nor does a retry");
+  memoryCommunications()[0].status = "Scheduled";
+  assert.equal((await cancelCommunication(PM, created.id, "unschedule")).status, "Draft", "nor does taking a campaign back");
+});
+
+test("send: a schedule must lie between a minute and 30 days ahead, an empty one is not 'now', scheduling again moves the time, and sending now freezes at once", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  const ahead = (ms: number) => new Date(Date.now() + ms).toISOString();
+  for (const bad of [ahead(-1000), ahead(30_000), ahead(31 * 86_400_000), "tomorrow", ""])
+    await assert.rejects(sendCommunication(PM, created.id, { scheduledAt: bad }), /INVALID_SCHEDULE_TIME/, `${JSON.stringify(bad)} is not a time to send at (and must not be taken for a send now)`);
+  assert.deepEqual([(await getCommunication(PM, created.id)).status, memoryDeliveries().length], ["Draft", 0], "a refused schedule changes nothing");
+  const first = ahead(2 * 60_000);
+  const scheduled = await sendCommunication(PM, created.id, { scheduledAt: first });
+  assert.deepEqual([scheduled.status, scheduled.scheduledAt, scheduled.recipientCount], ["Scheduled", first, 0]);
+  const later = ahead(29 * 86_400_000);
+  const moved = await sendCommunication(PM, created.id, { scheduledAt: later });
+  assert.deepEqual([moved.status, moved.scheduledAt], ["Scheduled", later], "scheduling again moves the time");
+  await assert.rejects(updateCommunication(PM, created.id, draftInput), /INVALID_COMMUNICATION_NOT_EDITABLE/, "a scheduled campaign is no longer editable");
+  const now = await sendCommunication(PM, created.id, {});
+  assert.deepEqual([now.status, now.recipientCount, now.scheduledAt], ["Sending", 4, undefined], "sending a scheduled campaign now drops the schedule");
+  assert.ok(now.startedAt && !now.completedAt);
+  assert.deepEqual(globalThis.pulseMemoryAudit?.filter((a) => a.entityType === "Communication").map((a) => a.action).reverse(), ["communication.created", "communication.scheduled", "communication.scheduled", "communication.sent"]);
+  assert.deepEqual(globalThis.pulseMemoryAudit?.find((a) => a.action === "communication.scheduled")?.after, { scheduledAt: later });
+});
+
+test("freeze: suppressed addresses are stored with their reason and not counted, and an audience over the limit writes nothing", async () => {
+  await seedAudience();
+  await enableSending();
+  await suppressAddress("jon@origo.is", "Bounced", "Webhook");
+  const created = await createCommunication(PM, draftInput);
+  const sent = await sendCommunication(PM, created.id, {});
+  assert.deepEqual([sent.status, sent.recipientCount], ["Sending", 3]);
+  const rows = memoryDeliveries();
+  assert.equal(rows.length, 4, "the suppressed address keeps a row so the review can show it");
+  const jon = rows.find((d) => d.email === "jon@origo.is")!;
+  assert.deepEqual([jon.state, jon.suppressedReason, jon.source, jon.organizationId], ["Suppressed", "Bounced", "Member", "ORG-001"]);
+  assert.deepEqual(rows.filter((d) => d.state === "Queued").map((d) => d.email).sort(), ["anna@advania.is", "bjarki@uidata.com", "cio@origo.is"]);
+  assert.ok(rows.every((d) => d.communicationId === created.id && d.attemptCount === 0 && d.createdAt), "every row belongs to the campaign and has not been tried");
+  assert.deepEqual(globalThis.pulseMemoryAudit?.[0]?.after, { recipients: 3, suppressed: { Bounced: 1 } }, "the audit row carries counts, never addresses");
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 2 });
+  const big = await createCommunication(PM, draftInput);
+  await assert.rejects(sendCommunication(PM, big.id, {}), /INVALID_AUDIENCE_TOO_LARGE/);
+  assert.deepEqual([(await getCommunication(PM, big.id)).status, memoryDeliveries().filter((d) => d.communicationId === big.id).length], ["Draft", 0], "an audience over the limit writes nothing");
+});
+
+test("freeze: a scheduled campaign freezes with whatever the audience is then and drops its schedule", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, { scheduledAt: inAnHour() });
+  globalThis.pulseMemoryUsers!.push({ id: "77777777-7777-4777-8777-777777777777", name: "Late", email: "late@origo.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Viewer" }] });
+  const breakdown = await freezeAudience(created.id, null); // what the worker does when the time comes
+  assert.deepEqual([breakdown.total, breakdown.sendable], [5, 5], "a person who joined after the campaign was scheduled is included");
+  const frozen = await getCommunication(PM, created.id);
+  assert.deepEqual([frozen.status, frozen.recipientCount, frozen.scheduledAt], ["Sending", 5, undefined]);
+  assert.ok(frozen.startedAt && !frozen.completedAt);
+  const nobody = await createCommunication(PM, { ...draftInput, audience: { ...draftInput.audience, organizations: [] } });
+  assert.deepEqual((await freezeAudience(nobody.id, null)).total, 0, "an empty audience is refused only when a person sends now");
+  const empty = await getCommunication(PM, nobody.id);
+  assert.deepEqual([empty.status, empty.recipientCount, Boolean(empty.completedAt)], ["Sent", 0, true]);
+});
+
+test("freeze: the worker's freeze takes a campaign only while it is still scheduled for a time that has come", async () => {
+  await seedAudience();
+  await enableSending();
+  const unscheduled = await createCommunication(PM, draftInput); // a Draft again: its owner took it back after the worker had listed it
+  const moved = await createCommunication(PM, draftInput);
+  const due = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, moved.id, { scheduledAt: inAnHour() }); // and this one was moved to a later time
+  await sendCommunication(PM, due.id, { scheduledAt: inAnHour() });
+  const now = new Date();
+  await assert.rejects(freezeAudience(unscheduled.id, null, now, { onlyIfDue: true }), /INVALID_COMMUNICATION_STATE/, "not sent, although a Draft can be sent by a person");
+  await assert.rejects(freezeAudience(moved.id, null, now, { onlyIfDue: true }), /INVALID_COMMUNICATION_STATE/, "not sent before its new time");
+  assert.deepEqual([memoryDeliveries().length, (await getCommunication(PM, unscheduled.id)).status, (await getCommunication(PM, moved.id)).status], [0, "Draft", "Scheduled"], "nothing was written");
+  memoryCommunications().find((c) => c.id === due.id)!.scheduledAt = new Date(now.getTime() - 1000).toISOString();
+  assert.equal((await freezeAudience(due.id, null, now, { onlyIfDue: true })).sendable, 4);
+  assert.equal((await freezeAudience(unscheduled.id, PM.id, now)).sendable, 4, "a person can still send the draft");
+});
+
+test("cancel: unschedule takes back a Scheduled campaign only, cancel stops a Scheduled or Sending one and leaves what is in flight, and both are audited", async () => {
+  await seedAudience();
+  await enableSending();
+  const draft = await createCommunication(PM, draftInput);
+  await assert.rejects(cancelCommunication(PM, draft.id, "cancel"), /INVALID_COMMUNICATION_STATE/, "a draft has nothing to cancel");
+  await assert.rejects(cancelCommunication(PM, draft.id, "unschedule"), /INVALID_COMMUNICATION_STATE/);
+  await sendCommunication(PM, draft.id, { scheduledAt: inAnHour() });
+  const back = await cancelCommunication(PM, draft.id, "unschedule");
+  assert.deepEqual([back.status, back.scheduledAt], ["Draft", undefined]);
+  assert.equal((await updateCommunication(PM, draft.id, { ...draftInput, title: "Edited again" })).title, "Edited again", "a draft taken back is editable again");
+  await sendCommunication(PM, draft.id, { scheduledAt: inAnHour() });
+  const early = await cancelCommunication(PM, draft.id, "cancel");
+  assert.deepEqual([early.status, Boolean(early.cancelledAt), memoryDeliveries().length], ["Cancelled", true, 0], "a scheduled campaign has no deliveries yet");
+  await assert.rejects(cancelCommunication(PM, draft.id, "cancel"), /INVALID_COMMUNICATION_STATE/, "it is cancelled already");
+  await assert.rejects(cancelCommunication(PM, draft.id, "unschedule"), /INVALID_COMMUNICATION_STATE/);
+
+  const second = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, second.id, {});
+  await assert.rejects(cancelCommunication(PM, second.id, "unschedule"), /INVALID_COMMUNICATION_STATE/, "a campaign that is sending cannot go back to a draft");
+  const store = getDeliveryStore();
+  await store.claimBatch(2); // two rows are with the provider now
+  await store.markFailed([memoryDeliveries().find((d) => d.state === "Queued" && d.email === "anna@advania.is")!.id], "HTTP_429", new Date(Date.now() + 3_600_000)); // and one is waiting to be retried
+  const cancelled = await cancelCommunication(PM, second.id, "cancel");
+  assert.deepEqual([cancelled.status, Boolean(cancelled.cancelledAt)], ["Cancelled", true]);
+  const rows = (await listDeliveries(PM, second.id, {})).items;
+  assert.deepEqual(countByState(rows), { Processing: 2, Cancelled: 2 }, "the waiting rows (Queued, Retry) are cancelled, the ones in flight are left");
+  assert.equal(rows.find((d) => d.state === "Cancelled" && d.email === "anna@advania.is")?.nextAttemptAt, null, "a cancelled row has no next attempt");
+  assert.equal(await store.claimBatch(10), null, "nothing of a cancelled campaign is claimed");
+  await assert.rejects(cancelCommunication(PM, second.id, "cancel"), /INVALID_COMMUNICATION_STATE/);
+  const sent = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, sent.id, {});
+  memoryCommunications().find((c) => c.id === sent.id)!.status = "Sent";
+  await assert.rejects(cancelCommunication(PM, sent.id, "cancel"), /INVALID_COMMUNICATION_STATE/, "a campaign that has been sent cannot be cancelled");
+  const audit = (globalThis.pulseMemoryAudit ?? []).filter((a) => a.entityType === "Communication" && /scheduled|cancelled/.test(a.action)).reverse();
+  assert.deepEqual(audit.map((a) => [a.action, a.entityId]), [
+    ["communication.scheduled", draft.id], ["communication.unscheduled", draft.id], ["communication.scheduled", draft.id],
+    ["communication.cancelled", draft.id], ["communication.cancelled", second.id],
+  ]);
+  assert.deepEqual([audit[1].after, audit[3].after, audit[4].after], [{}, { cancelledDeliveries: 0 }, { cancelledDeliveries: 2 }], "a cancel records how many deliveries it stopped");
+});
+
+test("promote: due scheduled campaigns freeze at that moment and start sending; the ones not due stay scheduled", async () => {
+  await seedAudience();
+  await enableSending();
+  const due = await createCommunication(PM, draftInput);
+  const later = await createCommunication(PM, draftInput);
+  const nobody = await createCommunication(PM, { ...draftInput, audience: { ...draftInput.audience, organizations: [] } });
+  for (const campaign of [due, later, nobody]) await sendCommunication(PM, campaign.id, { scheduledAt: inAnHour() });
+  globalThis.pulseMemoryUsers!.push({ id: "77777777-7777-4777-8777-777777777777", name: "Late", email: "late@origo.is", status: "Active", authentication: "OTP", memberships: [{ companyId: "ORG-001", role: "Viewer" }] });
+  for (const campaign of memoryCommunications().filter((c) => c.id !== later.id)) campaign.scheduledAt = new Date(Date.now() - 60_000).toISOString();
+  const store = getDeliveryStore();
+  assert.deepEqual(await store.promoteScheduled(new Date()), [due.id, nobody.id]);
+  const started = await getCommunication(PM, due.id);
+  assert.deepEqual([started.status, started.recipientCount, started.scheduledAt], ["Sending", 5, undefined], "the audience is the one at promotion, not at scheduling");
+  assert.equal((await listDeliveries(PM, due.id, {})).total, 5);
+  const emptied = await getCommunication(PM, nobody.id);
+  assert.deepEqual([emptied.status, emptied.recipientCount], ["Sent", 0], "an audience that turned out empty completes instead of stopping the worker");
+  assert.deepEqual([(await getCommunication(PM, later.id)).status, (await listDeliveries(PM, later.id, {})).total], ["Scheduled", 0]);
+  assert.deepEqual(await store.promoteScheduled(new Date()), [], "promoting again does nothing");
+});
+
+test("promote: a campaign that cannot be promoted stays scheduled and does not stop the others; only its id and a code are logged", async () => {
+  await seedAudience();
+  process.env.SENDGRID_API_KEY = "SG.test";
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 2 });
+  const big = await createCommunication(PM, draftInput); // four recipients, over the limit of two
+  const small = await createCommunication(PM, { ...draftInput, audience: { ...draftInput.audience, organizations: ["ORG-002"] } }); // anna only
+  for (const campaign of [big, small]) await sendCommunication(PM, campaign.id, { scheduledAt: inAnHour() });
+  for (const campaign of memoryCommunications()) campaign.scheduledAt = new Date(Date.now() - 60_000).toISOString();
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  let promoted: string[];
+  try {
+    promoted = await getDeliveryStore().promoteScheduled(new Date());
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(promoted, [small.id]);
+  assert.deepEqual([(await getCommunication(PM, big.id)).status, (await getCommunication(PM, small.id)).status], ["Scheduled", "Sending"]);
+  assert.equal(memoryDeliveries().filter((d) => d.communicationId === big.id).length, 0, "the campaign that failed wrote nothing");
+  assert.equal(logged.length, 1);
+  assert.deepEqual((({ level, communicationId, code }) => ({ level, communicationId, code }))(JSON.parse(logged[0])), { level: "error", communicationId: big.id, code: "INVALID_AUDIENCE_TOO_LARGE" });
+  assert.ok(!/@/.test(logged[0]), "no address in the log");
+});
+
+test("claim: one campaign and one locale per batch, oldest first, never more than asked for, each row once, and the content is a copy", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  const store = getDeliveryStore();
+  assert.equal(await store.claimBatch(0), null);
+  assert.equal(await store.claimBatch(-1), null);
+  assert.equal(countByState(memoryDeliveries()).Queued, 4, "asking for nothing claims nothing");
+  const first = (await store.claimBatch(2))!;
+  assert.deepEqual([first.communicationId, first.locale, first.templateKey, first.topic], [created.id, "en", "product-update", "product-updates"]);
+  assert.deepEqual(first.deliveries.map((d) => [d.email, d.displayName, d.source, d.attemptCount]), [["bjarki@uidata.com", "Bjarki Kristjánsson", "Member", 1], ["jon@origo.is", "Jón", "Member", 1]]);
+  first.content.subject.en = "Changed by the worker";
+  assert.equal((await getCommunication(PM, created.id)).content.subject.en, "DataCentral 3.0.0", "the batch holds a copy of the campaign's content");
+  assert.deepEqual(countByState(memoryDeliveries()), { Processing: 2, Queued: 2 });
+  const second = (await store.claimBatch(500))!;
+  assert.deepEqual([second.locale, second.deliveries.map((d) => d.email)], ["en", ["anna@advania.is"]], "the rest of the English rows");
+  const third = (await store.claimBatch(500))!;
+  assert.deepEqual([third.locale, third.deliveries.map((d) => d.email)], ["is", ["cio@origo.is"]], "then the Icelandic one, in a batch of its own");
+  assert.equal(await store.claimBatch(500), null, "every row is claimed once");
+  const other = await createCommunication(PM, draftInput);
+  memoryDeliveries().push(deliveryRow(other.id, "Queued")); // a draft's real row: not claimable, only a Sending campaign's rows are
+  assert.equal(await store.claimBatch(500), null, "a row of a campaign that is not sending is not claimed");
+});
+
+test("claim: a row waits for its next attempt, a failed row is retried or dead-lettered, and an accepted row keeps the provider's id", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  const store = getDeliveryStore();
+  const [a, b, c] = (await store.claimBatch(3))!.deliveries.map((d) => d.id);
+  const soon = new Date(Date.now() + 3_600_000);
+  await store.markFailed([a], "HTTP_429", soon);
+  await store.markFailed([b], "HTTP_400", null);
+  await store.markAccepted([c], "msg-9", new Date("2026-10-14T10:00:00Z"));
+  const row = (id: string) => memoryDeliveries().find((d) => d.id === id)!;
+  assert.deepEqual([row(a).state, row(a).nextAttemptAt, row(a).lastErrorCode], ["Retry", soon.toISOString(), "HTTP_429"]);
+  assert.deepEqual([row(b).state, row(b).nextAttemptAt, row(b).lastErrorCode], ["Dead letter", null, "HTTP_400"]);
+  assert.deepEqual([row(c).state, row(c).providerMessageId, row(c).acceptedAt, row(c).nextAttemptAt, row(c).lastErrorCode], ["Accepted", "msg-9", "2026-10-14T10:00:00.000Z", null, null]);
+  const next = (await store.claimBatch(10))!;
+  assert.deepEqual([next.locale, next.deliveries.map((d) => d.email)], ["is", ["cio@origo.is"]], "only the Icelandic row is due; the Retry row waits for its time");
+  assert.equal(await store.claimBatch(10), null);
+  row(a).nextAttemptAt = new Date(Date.now() - 1000).toISOString();
+  const again = (await store.claimBatch(10))!;
+  assert.deepEqual(again.deliveries.map((d) => [d.id, d.attemptCount]), [[a, 2]], "once due it is claimed again, and the attempt is counted");
+  await store.markAccepted([a], null, new Date());
+  assert.deepEqual([row(a).state, row(a).providerMessageId, row(a).nextAttemptAt, row(a).lastErrorCode], ["Accepted", null, null, null], "accepting clears the error and the next attempt");
+});
+
+test("worker store: accepted rows are counted per UTC day, and a campaign completes once nothing of it is open", async () => {
+  await seedAudience();
+  await enableSending();
+  const first = await createCommunication(PM, draftInput);
+  const second = await createCommunication(PM, draftInput);
+  const draft = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, first.id, {});
+  await sendCommunication(PM, second.id, {});
+  await testSendCommunication(PM, first.id, []);
+  const store = getDeliveryStore();
+  const real = (id: string) => memoryDeliveries().filter((d) => d.communicationId === id && d.source !== "Test");
+  assert.deepEqual(await store.completeCampaigns(new Date()), [], "both campaigns still have open rows");
+  const [one, two, three, four] = real(first.id).map((d) => d.id);
+  await store.markAccepted([one, two], "msg-a", new Date("2026-10-14T00:00:01Z"));
+  await store.markAccepted([three, four], "msg-b", new Date("2026-10-13T23:59:59Z"));
+  assert.equal(await store.acceptedToday(new Date("2026-10-14T12:00:00Z")), 2);
+  assert.equal(await store.acceptedToday(new Date("2026-10-13T08:00:00Z")), 2);
+  assert.equal(await store.acceptedToday(new Date("2026-10-15T12:00:00Z")), 0);
+  assert.deepEqual(await store.completeCampaigns(new Date("2026-10-14T13:00:00Z")), [first.id], "a Test row still queued does not hold the campaign open");
+  await store.markAccepted([memoryDeliveries().find((d) => d.source === "Test")!.id], "msg-t", new Date("2026-10-14T01:00:00Z"));
+  assert.equal(await store.acceptedToday(new Date("2026-10-14T12:00:00Z")), 3, "a test mail counts against the day's cap");
+  const done = memoryCommunications().find((c) => c.id === first.id)!;
+  assert.deepEqual([done.status, done.completedAt, done.updatedAt], ["Sent", "2026-10-14T13:00:00.000Z", "2026-10-14T13:00:00.000Z"]);
+  assert.equal(memoryCommunications().find((c) => c.id === second.id)!.status, "Sending");
+  assert.equal(memoryCommunications().find((c) => c.id === draft.id)!.status, "Draft");
+  const [s1, s2, s3, s4] = real(second.id).map((d) => d.id);
+  await store.markFailed([s1, s2, s3], "HTTP_400", null);
+  await store.markFailed([s4], "HTTP_429", new Date(Date.now() + 3_600_000));
+  assert.deepEqual(await store.completeCampaigns(new Date()), [], "a row waiting for a retry keeps the campaign open");
+  await store.markFailed([s4], "HTTP_400", null);
+  assert.deepEqual(await store.completeCampaigns(new Date()), [second.id], "dead letters are finished");
+  assert.deepEqual(await store.completeCampaigns(new Date()), [], "a campaign completes once");
+});
+
+test("stats: every state is counted once, test rows and other campaigns are left out, and the companies come in a fixed order", async () => {
+  const created = await createCommunication(PM, draftInput);
+  const other = await createCommunication(PM, draftInput);
+  const at = "2026-10-14T09:00:00.000Z";
+  memoryDeliveries().push(
+    deliveryRow(created.id, "Processing", { organizationId: "ORG-002" }),
+    deliveryRow(created.id, "Queued"), deliveryRow(created.id, "Retry"),
+    deliveryRow(created.id, "Accepted"), deliveryRow(created.id, "Accepted", { organizationId: "ORG-002", openedAt: at }),
+    deliveryRow(created.id, "Deferred", { organizationId: "ORG-002" }),
+    deliveryRow(created.id, "Delivered", { openedAt: at, clickedAt: at }), deliveryRow(created.id, "Delivered", { organizationId: "ORG-002", openedAt: at }),
+    deliveryRow(created.id, "Bounced", { organizationId: "ORG-002" }), deliveryRow(created.id, "Dropped"), deliveryRow(created.id, "Dead letter"),
+    deliveryRow(created.id, "Suppressed", { suppressedReason: "SafeMode" }), deliveryRow(created.id, "Cancelled", { organizationId: "ORG-002" }),
+    deliveryRow(created.id, "Delivered", { source: "Test", organizationId: null, openedAt: at, clickedAt: at }),
+    deliveryRow(other.id, "Delivered", { openedAt: at }),
+  );
+  const expected = {
+    recipients: 12, queued: 3, accepted: 5, delivered: 2, bounced: 1, dropped: 1, deadLettered: 1, suppressed: 1, cancelled: 1, opened: 3, clicked: 1,
+    byOrganization: [
+      { organizationId: "ORG-001", recipients: 6, delivered: 1, opened: 1 }, // the suppressed row is not a recipient
+      { organizationId: "ORG-002", recipients: 6, delivered: 1, opened: 2 }, // although the first row counted belongs to this company
+    ],
+  };
+  assert.deepEqual(await communicationStats(created.id), expected);
+  assert.deepEqual((await getCommunication(CONTRIBUTOR, created.id)).stats, expected, "the campaign carries the same stats");
+  assert.deepEqual((await communicationStats(other.id)).delivered, 1);
+  assert.deepEqual((await communicationStats("COM-404")).byOrganization, [], "a campaign without rows has empty stats");
+});
+
+test("deliveries: the list filters by state and company, pages, clamps its paging inputs and hands out copies", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  const page1 = await listDeliveries(PM, created.id, { page: 1, pageSize: 3 });
+  assert.deepEqual([page1.items.map((d) => d.email), page1.total], [["bjarki@uidata.com", "jon@origo.is", "anna@advania.is"], 4]);
+  const page2 = await listDeliveries(PM, created.id, { page: 2, pageSize: 3 });
+  assert.deepEqual([page2.items.map((d) => d.email), page2.total], [["cio@origo.is"], 4]);
+  assert.deepEqual((await listDeliveries(PM, created.id, { page: 3, pageSize: 3 })).items, [], "past the end there is nothing, and the total still says 4");
+  assert.deepEqual((await listDeliveries(PM, created.id, { organizationId: "ORG-002" })).items.map((d) => d.email), ["anna@advania.is"]);
+  assert.deepEqual((await listDeliveries(PM, created.id, { organizationId: "ORG-001", state: "Queued" })).items.map((d) => d.email), ["bjarki@uidata.com", "jon@origo.is", "cio@origo.is"]);
+  assert.equal((await listDeliveries(PM, created.id, { state: "Queued" })).total, 4);
+  assert.equal((await listDeliveries(PM, created.id, { state: "Dead letter" })).total, 0);
+  for (const page of [0, -3, Number.NaN, 1.5, undefined])
+    assert.equal((await listDeliveries(PM, created.id, { page })).items.length, 4, `page ${page} is the first page`);
+  for (const [pageSize, expected] of [[0, 4], [-5, 1], [1000, 4], [2.9, 2], [undefined, 4]] as const)
+    assert.equal((await listDeliveries(PM, created.id, { pageSize })).items.length, expected, `page size ${pageSize}`);
+  assert.deepEqual((await listDeliveries(PM, created.id, { page: 2, pageSize: 2.9 })).items.map((d) => d.email), ["anna@advania.is", "cio@origo.is"], "a fractional page size pages by whole rows");
+  const crowded = await createCommunication(PM, draftInput);
+  memoryDeliveries().push(...Array.from({ length: 300 }, () => deliveryRow(crowded.id, "Queued")));
+  const sizes = [];
+  for (const filter of [{}, { pageSize: 1000 }, { pageSize: 50 }, { page: 2, pageSize: 250 }]) sizes.push((await listDeliveries(PM, crowded.id, filter)).items.length);
+  assert.deepEqual(sizes, [100, 250, 50, 50], "a page is 100 rows unless asked otherwise, and never more than 250");
+  const listed = await listDeliveries(PM, created.id, { pageSize: 1 });
+  listed.items[0].email = "tampered@example.com";
+  assert.equal(memoryDeliveries()[0].email, "bjarki@uidata.com", "the list hands out copies, never the store");
+});
+
+test("test send: staff addresses are queued once and normalised, a repeat queues the same rows again, and the audit row holds a count only", async () => {
+  await seedAudience();
+  users().push(
+    { id: "88888888-8888-4888-8888-888888888888", name: "Staff", email: "Staff@DataCentral.ai", status: "Active", authentication: "Entra ID", memberships: [{ companyId: "ORG-INTERNAL", role: "Internal contributor" }] },
+    { id: "99999999-9999-4999-8999-999999999999", name: "Gone", email: "gone@datacentral.ai", status: "Suspended", authentication: "Entra ID", memberships: [{ companyId: "ORG-INTERNAL", role: "Product manager" }] },
+  );
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  const first = await testSendCommunication(PM, created.id, [" STAFF@datacentral.ai ", "PM@datacentral.ai", "gone@datacentral.ai", "jon@origo.is"]);
+  assert.deepEqual(first, { queued: 2 }, "the caller and the one staff address, however it is spelled; a suspended account and a customer are left out");
+  const tests = () => memoryDeliveries().filter((d) => d.source === "Test");
+  assert.deepEqual(tests().map((d) => [d.email, d.displayName, d.organizationId, d.locale, d.state, d.communicationId]), [
+    ["pm@datacentral.ai", "Product Manager", null, "en", "Queued", created.id],
+    ["staff@datacentral.ai", "staff@datacentral.ai", null, "en", "Queued", created.id],
+  ]);
+  const store = getDeliveryStore();
+  const batch = (await store.claimBatch(10))!;
+  assert.deepEqual([batch.deliveries.map((d) => d.source), batch.communicationId], [["Test", "Test"], created.id]);
+  await store.markAccepted(batch.deliveries.map((d) => d.id), "msg-t", new Date());
+  assert.deepEqual(await testSendCommunication(PM, created.id, ["staff@datacentral.ai", "STAFF@DataCentral.ai"]), { queued: 2 }, "an address named twice is queued once");
+  assert.equal(tests().length, 2, "a second test send queues the same two rows again instead of adding rows");
+  assert.deepEqual(tests().map((d) => [d.state, d.attemptCount, d.nextAttemptAt, d.lastErrorCode]), [["Queued", 0, null, null], ["Queued", 0, null, null]]);
+  assert.deepEqual(await communicationStats(created.id), { recipients: 0, queued: 0, accepted: 0, delivered: 0, bounced: 0, dropped: 0, deadLettered: 0, suppressed: 0, cancelled: 0, opened: 0, clicked: 0, byOrganization: [] }, "test rows never count in the stats");
+  assert.equal((await getCommunication(PM, created.id)).status, "Draft", "a test send leaves the campaign alone");
+  const audit = (globalThis.pulseMemoryAudit ?? []).filter((a) => a.action === "communication.test-sent");
+  assert.deepEqual(audit.map((a) => [a.entityId, a.after]), [[created.id, { queued: 2 }], [created.id, { queued: 2 }]]);
+});
+
+test("deliveries: retrying requeues the dead letters of that campaign only, starts their attempts over and is audited with a count", async () => {
+  await seedAudience();
+  await enableSending();
+  const first = await createCommunication(PM, draftInput);
+  const second = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, first.id, {});
+  await sendCommunication(PM, second.id, {});
+  const store = getDeliveryStore();
+  const dead = memoryDeliveries().filter((d) => d.state === "Queued").map((d) => d.id);
+  await store.markFailed(dead, "HTTP_400", null); // every row of both campaigns is a dead letter
+  const keep = memoryDeliveries().find((d) => d.communicationId === first.id && d.email === "cio@origo.is")!;
+  Object.assign(keep, { state: "Bounced", attemptCount: 3 }); // and one of them is not
+  Object.assign(memoryDeliveries().find((d) => d.communicationId === first.id && d.email === "jon@origo.is")!, { attemptCount: 5, nextAttemptAt: new Date().toISOString() });
+  assert.deepEqual(await retryDeadLetters(PM, first.id), { requeued: 3 });
+  const rows = (await listDeliveries(PM, first.id, {})).items;
+  assert.deepEqual(rows.map((d) => [d.email, d.state, d.attemptCount, d.nextAttemptAt, d.lastErrorCode]), [
+    ["bjarki@uidata.com", "Queued", 0, null, null], ["jon@origo.is", "Queued", 0, null, null], ["anna@advania.is", "Queued", 0, null, null], ["cio@origo.is", "Bounced", 3, null, "HTTP_400"],
+  ]);
+  assert.deepEqual(countByState((await listDeliveries(PM, second.id, {})).items), { "Dead letter": 4 }, "the other campaign's dead letters are left alone");
+  assert.deepEqual(await retryDeadLetters(PM, first.id), { requeued: 0 }, "nothing is left to requeue");
+  assert.deepEqual((globalThis.pulseMemoryAudit ?? []).filter((a) => a.action === "communication.deliveries.retried").map((a) => [a.entityId, a.after]).reverse(), [[first.id, { requeued: 3 }], [first.id, { requeued: 0 }]]);
+});
+
+test("send side: the audit trail records ids and counts only, never an address, a subject or a link", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, { scheduledAt: inAnHour() });
+  await cancelCommunication(PM, created.id, "unschedule");
+  await sendCommunication(PM, created.id, {});
+  await testSendCommunication(PM, created.id, ["staff@datacentral.ai"]);
+  const store = getDeliveryStore();
+  await store.markFailed(((await store.claimBatch(1))!).deliveries.map((d) => d.id), "HTTP_400", null);
+  await retryDeadLetters(PM, created.id);
+  await cancelCommunication(PM, created.id, "cancel");
+  const audit = [...(globalThis.pulseMemoryAudit ?? [])].reverse().filter((a) => a.entityType === "Communication");
+  assert.deepEqual(audit.map((a) => [a.action, a.entityId, a.actor]), [
+    ["communication.created", created.id, "Product Manager"],
+    ["communication.scheduled", created.id, "Product Manager"],
+    ["communication.unscheduled", created.id, "Product Manager"],
+    ["communication.sent", created.id, "Product Manager"],
+    ["communication.test-sent", created.id, "Product Manager"],
+    ["communication.deliveries.retried", created.id, "Product Manager"],
+    ["communication.cancelled", created.id, "Product Manager"],
+  ]);
+  const text = JSON.stringify(audit);
+  for (const forbidden of ["@", "DataCentral 3.0.0", "New built-in Admin Report", "docs.datacentral.ai"]) assert.ok(!text.includes(forbidden), `the audit trail must not carry: ${forbidden}`);
+});
+
+/** Settings as SQL answers them: sending on and safe mode off unless `extra` says otherwise. The provider key comes from the environment. */
+const sqlSettings = (extra: Record<string, unknown> = {}): SqlAnswers => [
+  [/FROM dbo\.Settings/, { recordset: [{ value: JSON.stringify({ ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, ...extra }) }] }],
+];
+const sqlMember = (i: number, extra: Record<string, unknown> = {}) => ({
+  userId: `AAAAAAAA-0000-4000-8000-${String(i).padStart(12, "0")}`, organizationId: "ORG-001", email: `user${i}@origo.is`, displayName: `User ${i}`, locale: "en", role: "Requester", preference: null, ...extra,
+});
+/** What SQL answers the audience loader: one Customer organisation, the given members and contacts, nobody suppressed. */
+const sqlAudience = (members: Array<Record<string, unknown>>, contacts: Array<Record<string, unknown>> = []): SqlAnswers => [
+  [/FROM dbo\.CommunicationSuppressions/, { recordset: [] }],
+  [/FROM dbo\.Organizations WHERE status/, { recordset: [{ id: "ORG-001", name: "Origo", type: "Customer", status: "Active", isTest: false, locale: "en" }] }],
+  [/FROM dbo\.Memberships m JOIN dbo\.Users u/, { recordset: members }],
+  [/FROM dbo\.CommunicationContacts/, { recordset: contacts }],
+];
+/** The locked read a freeze starts with, for COM-007 in the given state (`extra` overrides any column, e.g. `scheduledAt`). */
+const sqlLocked = (status: string, extra: Record<string, unknown> = {}): SqlAnswers => [
+  [/UPDLOCK,HOLDLOCK\) WHERE public_id=@id/, (inputs) => ({ recordset: inputs.id === "COM-007" ? [{ id: SQL_UUID, topic: "product-updates", audience: JSON.stringify(draftInput.audience), status, scheduledAt: null, ...extra }] : [] })],
+];
+const sqlFrozen: SqlAnswers = [
+  [/^\s*INSERT dbo\.CommunicationDeliveries/, { rowsAffected: [1] }],
+  [/^\s*UPDATE dbo\.Communications SET status=CASE/, { rowsAffected: [1] }],
+];
+
+test("send, SQL: a send locks the campaign, writes the audience in batches of 500, moves the campaign and audits it, all in one unit of work", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const members = Array.from({ length: 1100 }, (_, i) => sqlMember(i));
+  await withFakeSql([...sqlSettings(), ...sqlAudience(members), ...sqlLocked("Draft"), ...sqlFrozen, ...sqlCampaign("COM-007")], async (calls, events) => {
+    const sent = await sendCommunication(PM, "COM-007", {});
+    assert.deepEqual([sent.id, sent.version], ["COM-007", "0x0000000000000007"]);
+    const writes = sqlWrites(calls);
+    assert.equal(writes.length, 5, "three batches of rows, the campaign update and the audit row");
+    const [first, second, third, update, audit] = writes;
+    assert.deepEqual([first, second, third].map((c) => JSON.parse(String(c.inputs.rows)).length), [500, 500, 100]);
+    assert.ok([first, second, third].every((c) => c.inputs.communicationId === SQL_UUID && /^\s*INSERT dbo\.CommunicationDeliveries\(id,communication_id,organization_id,email,display_name,locale,source,user_id,contact_id,state,suppressed_reason\)/.test(c.text)));
+    assert.match(first.text, /FROM OPENJSON\(@rows\) WITH \(organizationId nvarchar\(32\),email nvarchar\(320\),displayName nvarchar\(200\),locale nvarchar\(12\),source nvarchar\(16\),userId nvarchar\(36\),contactId nvarchar\(36\),state nvarchar\(32\),suppressedReason nvarchar\(40\)\)/);
+    assert.deepEqual(JSON.parse(String(first.inputs.rows))[0], { organizationId: "ORG-001", email: "user0@origo.is", displayName: "User 0", locale: "en", source: "Member", userId: "AAAAAAAA-0000-4000-8000-000000000000", contactId: null, state: "Queued", suppressedReason: null });
+    assert.deepEqual([update.inputs.id, update.inputs.sendable, update.inputs.actor], [SQL_UUID, 1100, PM.id]);
+    assert.match(update.text, /SET status=CASE WHEN @sendable=0 THEN 'Sent' ELSE 'Sending' END,started_at=SYSUTCDATETIME\(\),\s+completed_at=CASE WHEN @sendable=0 THEN SYSUTCDATETIME\(\) ELSE NULL END,recipient_count=@sendable,sent_by_user_id=COALESCE\(@actor,sent_by_user_id\),scheduled_at=NULL,updated_at=SYSUTCDATETIME\(\) WHERE id=@id$/);
+    assert.deepEqual([audit.inputs.action, audit.inputs.entity, audit.inputs.actor, audit.inputs.before], ["communication.sent", SQL_UUID, PM.id, null]);
+    assert.deepEqual(JSON.parse(String(audit.inputs.after)), { recipients: 1100, suppressed: {} });
+    const lock = calls.find((c) => /UPDLOCK,HOLDLOCK/.test(c.text))!;
+    assert.deepEqual([lock.inTransaction, lock.inputs.id, calls.indexOf(lock) < calls.indexOf(first)], [true, "COM-007", true], "the campaign is locked, inside the transaction, before anything is written");
+    assert.ok(writes.every((c) => c.inTransaction), "every write ran inside the transaction");
+    assert.deepEqual(events, ["begin", "commit"], "one unit of work");
+  });
+  // Safe mode suppresses everybody: the rows are still written, so the review can show them, and the campaign completes with nobody to send to.
+  await withFakeSql([...sqlSettings({ safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] } }), ...sqlAudience([sqlMember(1), sqlMember(2)]), ...sqlLocked("Draft"), ...sqlFrozen, ...sqlCampaign("COM-007")], async (calls) => {
+    await sendCommunication(PM, "COM-007", {});
+    const [insert, update, audit] = sqlWrites(calls);
+    assert.deepEqual(JSON.parse(String(insert.inputs.rows)).map((r: { state: string; suppressedReason: string }) => [r.state, r.suppressedReason]), [["Suppressed", "SafeMode"], ["Suppressed", "SafeMode"]]);
+    assert.equal(update.inputs.sendable, 0);
+    assert.deepEqual(JSON.parse(String(audit.inputs.after)), { recipients: 0, suppressed: { SafeMode: 2 } });
+  });
+});
+
+test("send, SQL: a send that cannot go through writes nothing that stays", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const refused = async (answers: SqlAnswers, expected: RegExp, check: (writes: SqlCall[], events: string[]) => void) =>
+    withFakeSql([...sqlSettings(), ...answers, ...sqlCampaign("COM-007")], async (calls, events) => {
+      await assert.rejects(sendCommunication(PM, "COM-007", {}), expected);
+      check(sqlWrites(calls), events);
+    });
+  await refused([...sqlAudience([sqlMember(1)]), ...sqlLocked("Sending"), ...sqlFrozen], /INVALID_COMMUNICATION_STATE/, (writes, events) =>
+    assert.deepEqual([writes.length, events], [0, ["begin", "rollback"]]), // the campaign was sent by somebody else between the read and the lock
+  );
+  await refused([...sqlAudience([sqlMember(1)]), [/UPDLOCK,HOLDLOCK/, { recordset: [] }], ...sqlFrozen], /NOT_FOUND/, (writes, events) =>
+    assert.deepEqual([writes.length, events], [0, ["begin", "rollback"]]), // deleted between the read and the lock
+  );
+  await refused([...sqlAudience([]), ...sqlLocked("Draft"), ...sqlFrozen], /INVALID_AUDIENCE_EMPTY/, (writes, events) =>
+    assert.deepEqual([writes.length, events], [0, ["begin", "rollback"]]), // nobody belongs to the audience: refused before a row is written
+  );
+  await withFakeSql([...sqlSettings({ maxRecipientsPerCampaign: 2 }), ...sqlAudience([sqlMember(1), sqlMember(2), sqlMember(3)]), ...sqlLocked("Draft"), ...sqlFrozen, ...sqlCampaign("COM-007")], async (calls, events) => {
+    await assert.rejects(sendCommunication(PM, "COM-007", {}), /INVALID_AUDIENCE_TOO_LARGE/);
+    assert.deepEqual([sqlWrites(calls).length, events], [0, ["begin", "rollback"]]);
+  });
+  await refused([...sqlAudience([sqlMember(1)]), ...sqlLocked("Draft"), [/^\s*INSERT dbo\.CommunicationDeliveries/, { rowsAffected: [1] }], [/^\s*UPDATE dbo\.Communications SET status=CASE/, { rowsAffected: [0] }]], /NOT_FOUND/, (writes, events) => {
+    assert.deepEqual(writes.map((w) => w.text.trim().split(/\s/)[0]), ["INSERT", "UPDATE"], "the rows were written and the campaign update found no row: no audit row, and the rollback takes the rows back");
+    assert.deepEqual(events, ["begin", "rollback"]);
+  });
+  await withFakeSql([...sqlSettings({ enabled: false }), ...sqlCampaign("COM-007")], async (calls, events) => {
+    await assert.rejects(sendCommunication(PM, "COM-007", {}), /INVALID_COMMUNICATIONS_DISABLED/);
+    assert.deepEqual([calls.filter((c) => /dbo\.Communications\b/.test(c.text)).length, events], [0, []], "switched off: no statement about the campaign, no transaction");
+  });
+});
+
+test("send, SQL: scheduling is one guarded UPDATE with its audit row and freezes nothing; a refused schedule writes nothing", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const when = new Date(Date.now() + 3_600_000);
+  const schedule: SqlAnswers = [[/^\s*UPDATE dbo\.Communications SET status='Scheduled'/, { rowsAffected: [1] }]];
+  await withFakeSql([...sqlSettings(), ...schedule, ...sqlCampaign("COM-007")], async (calls, events) => {
+    const scheduled = await sendCommunication(PM, "COM-007", { scheduledAt: when.toISOString() });
+    assert.deepEqual([scheduled.id, scheduled.version], ["COM-007", "0x0000000000000007"]);
+    const [write, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.match(write.text, /SET status='Scheduled',scheduled_at=@when,sent_by_user_id=@actor,updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\)\s+WHERE public_id=@id AND status IN \('Draft','Scheduled'\) AND deleted_at IS NULL$/);
+    assert.deepEqual([write.inputs.id, (write.inputs.when as Date).toISOString(), write.inputs.actor], ["COM-007", when.toISOString(), PM.id]);
+    assert.deepEqual([audit.inputs.action, audit.inputs.entity, audit.inputs.actor], ["communication.scheduled", SQL_UUID, PM.id]);
+    assert.deepEqual(JSON.parse(String(audit.inputs.after)), { scheduledAt: when.toISOString() });
+    assert.ok(sqlWrites(calls).every((c) => c.inTransaction), "both writes ran inside the transaction");
+    assert.deepEqual(events, ["begin", "commit"]);
+    assert.equal(calls.some((c) => /CommunicationDeliveries|CommunicationContacts|Memberships m JOIN dbo\.Users/.test(c.text)), false, "no audience is resolved or frozen when a campaign is scheduled");
+  });
+  await withFakeSql([...sqlSettings(), [/^\s*UPDATE dbo\.Communications SET status='Scheduled'/, { rowsAffected: [0] }], ...sqlCampaign("COM-007")], async (calls, events) => {
+    await assert.rejects(sendCommunication(PM, "COM-007", { scheduledAt: when.toISOString() }), /NOT_FOUND/, "a send or cancel won the race: the UPDATE matched no row");
+    assert.deepEqual([sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).length, events], [0, ["begin", "rollback"]]);
+  });
+  await withFakeSql([...sqlSettings(), ...schedule, ...sqlCampaign("COM-007")], async (calls, events) => {
+    for (const bad of [new Date(Date.now() + 30_000).toISOString(), new Date(Date.now() + 31 * 86_400_000).toISOString(), "tomorrow", ""])
+      await assert.rejects(sendCommunication(PM, "COM-007", { scheduledAt: bad }), /INVALID_SCHEDULE_TIME/, JSON.stringify(bad));
+    assert.deepEqual([sqlWrites(calls).length, events], [0, []], "a refused schedule writes nothing and opens no transaction");
+  });
+  await withFakeSql([...sqlSettings(), ...schedule, ...sqlCampaign("COM-007", { status: "Sending" })], async (calls, events) => {
+    await assert.rejects(sendCommunication(PM, "COM-007", { scheduledAt: when.toISOString() }), /INVALID_COMMUNICATION_STATE/);
+    assert.deepEqual([sqlWrites(calls).length, events], [0, []]);
+  });
+});
+
+test("cancel, SQL: unscheduling is one guarded UPDATE; cancelling stops the waiting deliveries and the campaign together; both are audited in the same unit of work", async () => {
+  await withFakeSql([[/^\s*UPDATE dbo\.Communications SET status='Draft'/, { rowsAffected: [1] }], ...sqlCampaign("COM-007", { status: "Scheduled" })], async (calls, events) => {
+    const back = await cancelCommunication(PM, "COM-007", "unschedule");
+    assert.deepEqual([back.id, back.version], ["COM-007", "0x0000000000000007"]);
+    const [write, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.match(write.text, /SET status='Draft',scheduled_at=NULL,updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\) WHERE public_id=@id AND status='Scheduled' AND deleted_at IS NULL$/);
+    assert.deepEqual([write.inputs.id, write.inputs.actor], ["COM-007", PM.id]);
+    assert.deepEqual([audit.inputs.action, audit.inputs.entity, audit.inputs.after], ["communication.unscheduled", SQL_UUID, "{}"]);
+    assert.ok(sqlWrites(calls).every((c) => c.inTransaction));
+    assert.deepEqual(events, ["begin", "commit"]);
+  });
+  const stop: SqlAnswers = [
+    [/^\s*UPDATE d SET state='Cancelled'/, { rowsAffected: [3] }],
+    [/^\s*UPDATE dbo\.Communications SET status='Cancelled'/, { rowsAffected: [1] }],
+  ];
+  for (const status of ["Scheduled", "Sending"])
+    await withFakeSql([...stop, ...sqlCampaign("COM-007", { status })], async (calls, events) => {
+      const cancelled = await cancelCommunication(PM, "COM-007", "cancel");
+      assert.equal(cancelled.id, "COM-007", status);
+      const [deliveries, campaign, audit, ...more] = sqlWrites(calls);
+      assert.equal(more.length, 0, status);
+      assert.match(deliveries.text, /^UPDATE d SET state='Cancelled',next_attempt_at=NULL FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c ON c\.id=d\.communication_id WHERE c\.public_id=@id AND d\.state IN \('Queued','Retry'\)$/, "only the rows still waiting");
+      assert.equal(deliveries.inputs.id, "COM-007");
+      assert.match(campaign.text, /^UPDATE dbo\.Communications SET status='Cancelled',cancelled_at=@now,updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\) WHERE public_id=@id AND status IN \('Scheduled','Sending'\) AND deleted_at IS NULL$/);
+      assert.deepEqual([campaign.inputs.id, campaign.inputs.actor, campaign.inputs.now instanceof Date], ["COM-007", PM.id, true], status);
+      assert.deepEqual([audit.inputs.action, audit.inputs.entity], ["communication.cancelled", SQL_UUID]);
+      assert.deepEqual(JSON.parse(String(audit.inputs.after)), { cancelledDeliveries: 3 }, status);
+      assert.ok(sqlWrites(calls).every((c) => c.inTransaction), `${status}: all three writes ran inside the transaction`);
+      assert.deepEqual(events, ["begin", "commit"], status);
+    });
+  await withFakeSql([[/^\s*UPDATE d SET state='Cancelled'/, { rowsAffected: [3] }], [/^\s*UPDATE dbo\.Communications SET status='Cancelled'/, { rowsAffected: [0] }], ...sqlCampaign("COM-007", { status: "Sending" })], async (calls, events) => {
+    await assert.rejects(cancelCommunication(PM, "COM-007", "cancel"), /NOT_FOUND/, "the campaign changed after the read");
+    assert.deepEqual([sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).length, events], [0, ["begin", "rollback"]], "no audit row, and the rollback takes back the cancelled deliveries");
+  });
+  await withFakeSql([...stop, [/^\s*UPDATE dbo\.Communications SET status='Draft'/, { rowsAffected: [0] }], ...sqlCampaign("COM-007", { status: "Scheduled" })], async (calls, events) => {
+    await assert.rejects(cancelCommunication(PM, "COM-007", "unschedule"), /NOT_FOUND/);
+    assert.deepEqual([sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).length, events], [0, ["begin", "rollback"]]);
+  });
+  for (const [mode, status] of [["cancel", "Draft"], ["cancel", "Sent"], ["cancel", "Cancelled"], ["unschedule", "Draft"], ["unschedule", "Sending"]] as const)
+    await withFakeSql([...stop, ...sqlCampaign("COM-007", { status })], async (calls, events) => {
+      await assert.rejects(cancelCommunication(PM, "COM-007", mode), /INVALID_COMMUNICATION_STATE/, `${mode} on ${status}`);
+      assert.deepEqual([sqlWrites(calls).length, events], [0, []], `${mode} on ${status}: nothing is written and no transaction is opened`);
+    });
+});
+
+test("worker store, SQL: promotion freezes each due campaign in a unit of work of its own, skips one that is no longer due and logs one that fails by its code only", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const now = new Date("2026-10-14T09:00:00Z");
+  const due = new Date("2026-10-14T08:59:00Z");
+  const locked: SqlAnswers = [[/UPDLOCK,HOLDLOCK\) WHERE public_id=@id/, (inputs) => {
+    const row = { id: SQL_UUID, topic: "product-updates", audience: JSON.stringify(draftInput.audience) };
+    if (inputs.id === "COM-007") return { recordset: [{ ...row, status: "Scheduled", scheduledAt: due }] };
+    if (inputs.id === "COM-008") return { recordset: [{ ...row, status: "Scheduled", scheduledAt: new Date("2026-10-14T15:00:00Z") }] }; // moved to a later time
+    if (inputs.id === "COM-009") return { recordset: [{ ...row, status: "Draft", scheduledAt: null }] }; // unscheduled
+    throw new Error("Violation of UNIQUE KEY constraint 'UQ_CommunicationDeliveries_Recipient'. The duplicate key value is (c1, jon@origo.is, Member).");
+  }]];
+  const answers: SqlAnswers = [
+    ...sqlSettings(), ...sqlAudience([sqlMember(1)]), ...locked, ...sqlFrozen,
+    [/WHERE status='Scheduled' AND scheduled_at<=@now/, { recordset: [{ id: "COM-007" }, { id: "COM-008" }, { id: "COM-009" }, { id: "COM-010" }] }],
+  ];
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  try {
+    await withFakeSql(answers, async (calls, events) => {
+      const promoted = await getDeliveryStore().promoteScheduled(now);
+      assert.deepEqual(promoted, ["COM-007"]);
+      const dueQuery = calls.find((c) => /WHERE status='Scheduled'/.test(c.text))!;
+      assert.match(dueQuery.text, /SELECT public_id id FROM dbo\.Communications WHERE status='Scheduled' AND scheduled_at<=@now AND deleted_at IS NULL ORDER BY scheduled_at$/);
+      assert.equal(dueQuery.inputs.now, now);
+      assert.deepEqual(events, ["begin", "commit", "begin", "rollback", "begin", "rollback", "begin", "rollback"], "every campaign is frozen in a unit of work of its own, and a failed one is rolled back alone");
+      const [insert, update, ...more] = sqlWrites(calls);
+      assert.equal(more.length, 0, "only the campaign that was due wrote anything, and the worker writes no audit row");
+      assert.deepEqual([JSON.parse(String(insert.inputs.rows)).length, update.inputs.actor, update.inputs.sendable], [1, null, 1], "no person sent it");
+    });
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(logged.map((line) => JSON.parse(line)), [{ level: "error", event: "communications.promote.failed", communicationId: "COM-010", code: "UNEXPECTED" }], "a driver message is never logged, it can quote an address");
+});
+
+test("worker store, SQL: claim maps the batch of one campaign and locale; accept, fail, count and complete bind what they say", async () => {
+  const batchRow = (n: number, extra: Record<string, unknown>) => ({
+    id: `AAAAAAAA-0000-4000-8000-00000000000${n}`, email: `user${n}@origo.is`, displayName: `User ${n}`, source: "Member", attemptCount: n, locale: "is",
+    communicationId: "COM-007", templateKey: "product-update", topic: "product-updates", contentJson: JSON.stringify(productUpdate), ...extra,
+  });
+  const answers: SqlAnswers = [
+    [/WITH next_campaign AS/, (inputs) => ({ recordset: inputs.size === 5 ? [] : [batchRow(1, { source: "Contact" }), batchRow(2, { displayName: null, attemptCount: "1" })] })],
+    [/SELECT COUNT\(\*\) count FROM dbo\.CommunicationDeliveries/, { recordset: [{ count: "7" }] }],
+    [/OUTPUT INSERTED\.public_id id/, { recordset: [{ id: "COM-007" }, { id: "COM-008" }] }],
+  ];
+  await withFakeSql(answers, async (calls, events) => {
+    const store = getDeliveryStore();
+    const batch = (await store.claimBatch(2.9))!;
+    assert.deepEqual([batch.communicationId, batch.templateKey, batch.topic, batch.locale], ["COM-007", "product-update", "product-updates", "is"]);
+    assert.deepEqual(batch.content, productUpdate);
+    assert.deepEqual(batch.deliveries, [
+      { id: "AAAAAAAA-0000-4000-8000-000000000001", email: "user1@origo.is", displayName: "User 1", source: "Contact", attemptCount: 1 },
+      { id: "AAAAAAAA-0000-4000-8000-000000000002", email: "user2@origo.is", displayName: null, source: "Member", attemptCount: 1 },
+    ]);
+    const claim = calls.find((c) => /WITH next_campaign AS/.test(c.text))!;
+    assert.equal(claim.inputs.size, 2, "a fractional size is cut to whole rows");
+    assert.match(claim.text, /FROM dbo\.CommunicationDeliveries d WITH \(UPDLOCK,READPAST,ROWLOCK\)/);
+    assert.match(claim.text, /AND \(c\.status='Sending' OR d\.source='Test'\)/, "only a sending campaign's rows, and test rows whatever the campaign is");
+    assert.match(claim.text, /OUTPUT CAST\(INSERTED\.id AS nvarchar\(36\)\) id,INSERTED\.email,INSERTED\.display_name displayName,INSERTED\.source,INSERTED\.attempt_count attemptCount,INSERTED\.locale,/);
+    assert.match(claim.text, /JOIN dbo\.Communications c ON c\.id=d\.communication_id\s+WHERE d\.state IN \('Queued','Retry'\);\s*$/, "the UPDATE itself claims only rows that are still waiting");
+    assert.equal(claim.inTransaction, false, "READPAST cannot run in a unit of work, which is SERIALIZABLE");
+    const seen = calls.length;
+    for (const size of [0, -1, Number.NaN, 0.5]) assert.equal(await store.claimBatch(size), null, `size ${size}`);
+    assert.equal(calls.length, seen, "asking for no rows sends no statement");
+    assert.equal(await store.claimBatch(5), null, "an empty answer is no batch");
+
+    const at = new Date("2026-10-14T09:00:00Z");
+    await store.markAccepted(["id-1", "id-2"], "msg-1", at);
+    const accept = calls.find((c) => /SET state='Accepted'/.test(c.text))!;
+    assert.deepEqual([JSON.parse(String(accept.inputs.ids)), accept.inputs.message, accept.inputs.now], [["id-1", "id-2"], "msg-1", at]);
+    assert.match(accept.text, /^UPDATE dbo\.CommunicationDeliveries SET state='Accepted',provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/);
+    await store.markAccepted(["id-3"], null, at);
+    assert.equal(calls.filter((c) => /SET state='Accepted'/.test(c.text)).at(-1)!.inputs.message, null, "a batch can be accepted without a message id");
+
+    const retryAt = new Date("2026-10-14T10:00:00Z");
+    await store.markFailed(["id-1"], "HTTP_429", retryAt);
+    await store.markFailed(["id-2"], "X".repeat(150), null);
+    const [retry, dead] = calls.filter((c) => /SET state=@state/.test(c.text));
+    assert.deepEqual([retry.inputs.state, retry.inputs.next, retry.inputs.error, JSON.parse(String(retry.inputs.ids))], ["Retry", retryAt, "HTTP_429", ["id-1"]]);
+    assert.deepEqual([dead.inputs.state, dead.inputs.next, dead.inputs.error], ["Dead letter", null, "X".repeat(100)], "a dead letter has no next attempt, and the code fits its column");
+    assert.match(retry.text, /^UPDATE dbo\.CommunicationDeliveries SET state=@state,next_attempt_at=@next,last_error_code=@error WHERE id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/);
+
+    assert.equal(await store.acceptedToday(at), 7);
+    const today = calls.find((c) => /SELECT COUNT\(\*\) count/.test(c.text))!;
+    assert.equal(today.inputs.day, at);
+    assert.match(today.text, /WHERE accepted_at>=@day AND accepted_at<DATEADD\(day,1,@day\)$/);
+
+    assert.deepEqual(await store.completeCampaigns(at), ["COM-007", "COM-008"]);
+    const complete = calls.find((c) => /OUTPUT INSERTED\.public_id id/.test(c.text))!;
+    assert.equal(complete.inputs.now, at);
+    assert.match(complete.text, /UPDATE c SET status='Sent',completed_at=@now,updated_at=@now OUTPUT INSERTED\.public_id id FROM dbo\.Communications c\s+WHERE c\.status='Sending' AND NOT EXISTS \(SELECT 1 FROM dbo\.CommunicationDeliveries d WHERE d\.communication_id=c\.id AND d\.source<>'Test' AND d\.state IN \('Queued','Retry','Processing'\)\)$/);
+    assert.deepEqual(events, [], "the worker's statements run on their own, each one atomic, in no unit of work");
+  });
+});
+
+test("deliveries, SQL: stats are counted from the rows, the list pages and maps them, a test send merges its rows and a retry requeues, each audited in one unit of work", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const opened = new Date("2026-10-14T09:05:00Z");
+  const row = {
+    id: "AAAAAAAA-0000-4000-8000-000000000001", communicationId: "COM-007", organizationId: "ORG-001", email: "jon@origo.is", displayName: "Jón", locale: "is", source: "Member",
+    userId: "BBBBBBBB-0000-4000-8000-000000000001", contactId: null, state: "Retry", suppressedReason: null, attemptCount: 2, nextAttemptAt: "2026-10-14T10:00:00.0000000", providerMessageId: null,
+    lastEvent: null, lastEventAt: null, openedAt: null, clickedAt: null, lastErrorCode: "HTTP_429", createdAt: "2026-10-14T09:00:00.0000000", acceptedAt: null,
+  };
+  const answers: SqlAnswers = [
+    ...sqlSettings(),
+    [/SELECT COUNT\(\*\) total/, { recordset: [{ total: "120" }] }],
+    [/OFFSET @offset ROWS/, { recordset: [row] }],
+    [/SELECT d\.organization_id organizationId,d\.state/, { recordset: [
+      { organizationId: "ORG-002", state: "Dead letter", openedAt: null, clickedAt: null },
+      { organizationId: "ORG-001", state: "Delivered", openedAt: opened, clickedAt: opened },
+      { organizationId: "ORG-001", state: "Suppressed", openedAt: null, clickedAt: null },
+    ] }],
+    [/SELECT DISTINCT u\.email/, { recordset: [{ email: "Staff@DataCentral.ai" }] }],
+    [/^\s*MERGE dbo\.CommunicationDeliveries/, { rowsAffected: [2] }],
+    [/^\s*UPDATE d SET state='Queued'/, { rowsAffected: [3] }],
+    ...sqlCampaign("COM-007"),
+  ];
+  await withFakeSql(answers, async (calls, events) => {
+    const item = await getCommunication(CONTRIBUTOR, "COM-007");
+    assert.deepEqual(item.stats, {
+      recipients: 2, queued: 0, accepted: 1, delivered: 1, bounced: 0, dropped: 0, deadLettered: 1, suppressed: 1, cancelled: 0, opened: 1, clicked: 1,
+      byOrganization: [{ organizationId: "ORG-001", recipients: 1, delivered: 1, opened: 1 }, { organizationId: "ORG-002", recipients: 1, delivered: 0, opened: 0 }],
+    });
+
+    const listed = await listDeliveries(CONTRIBUTOR, "COM-007", { state: "Retry", organizationId: "ORG-001", page: 3, pageSize: 40 });
+    assert.equal(listed.total, 120);
+    assert.deepEqual(listed.items, [row]);
+    const page = calls.find((c) => /OFFSET @offset ROWS/.test(c.text))!;
+    const count = calls.find((c) => /SELECT COUNT\(\*\) total/.test(c.text))!;
+    assert.deepEqual([page.inputs.id, page.inputs.state, page.inputs.org, page.inputs.offset, page.inputs.pageSize], ["COM-007", "Retry", "ORG-001", 80, 40]);
+    assert.deepEqual([count.inputs.id, count.inputs.state, count.inputs.org], ["COM-007", "Retry", "ORG-001"]);
+    assert.match(page.text, /WHERE c\.public_id=@id AND \(@state IS NULL OR d\.state=@state\) AND \(@org IS NULL OR d\.organization_id=@org\) ORDER BY d\.created_at,d\.email,d\.source OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY$/);
+    assert.match(page.text, /CONVERT\(nvarchar\(33\),d\.next_attempt_at,127\) nextAttemptAt/, "timestamps come out in the format the campaigns use");
+    await listDeliveries(CONTRIBUTOR, "COM-007", {});
+    const unfiltered = calls.filter((c) => /OFFSET @offset ROWS/.test(c.text)).at(-1)!;
+    assert.deepEqual([unfiltered.inputs.state, unfiltered.inputs.org, unfiltered.inputs.offset, unfiltered.inputs.pageSize], [null, null, 0, 100], "no filter means no filter, and the first page of 100");
+    const seen = calls.length;
+    assert.deepEqual(await listDeliveries(CONTRIBUTOR, "COM-007", { state: "x".repeat(40) }), { items: [], total: 0 });
+    assert.deepEqual(await listDeliveries(CONTRIBUTOR, "COM-007", { organizationId: "O".repeat(33) }), { items: [], total: 0 });
+    assert.equal(calls.slice(seen).filter((c) => /CommunicationDeliveries/.test(c.text)).length, 0, "a value longer than its column matches nothing and never reaches the driver");
+
+    const before = events.length;
+    assert.deepEqual(await testSendCommunication(PM, "COM-007", ["staff@datacentral.ai", "other@origo.is"]), { queued: 2 });
+    const staffRead = calls.find((c) => /SELECT DISTINCT u\.email/.test(c.text))!;
+    assert.match(staffRead.text, /JOIN dbo\.Organizations o ON o\.id=m\.organization_id AND o\.type='Internal' WHERE u\.status='Active'$/);
+    assert.equal(staffRead.inTransaction, false, "who is staff is read before the unit of work");
+    const merge = calls.find((c) => /^\s*MERGE/.test(c.text))!;
+    assert.equal(merge.inputs.id, "COM-007");
+    assert.deepEqual(JSON.parse(String(merge.inputs.rows)), [
+      { email: "pm@datacentral.ai", displayName: "Product Manager", locale: "en" },
+      { email: "staff@datacentral.ai", displayName: "staff@datacentral.ai", locale: "en" },
+    ]);
+    assert.match(merge.text, /MERGE dbo\.CommunicationDeliveries WITH \(HOLDLOCK\) target/);
+    assert.match(merge.text, /CROSS JOIN OPENJSON\(@rows\) WITH \(email nvarchar\(320\),displayName nvarchar\(200\),locale nvarchar\(12\)\) r\s+WHERE c\.public_id=@id AND c\.deleted_at IS NULL\) incoming/);
+    assert.match(merge.text, /ON target\.communication_id=incoming\.communicationId AND target\.email=incoming\.email AND target\.source='Test'/);
+    assert.match(merge.text, /WHEN MATCHED THEN UPDATE SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL/);
+    assert.match(merge.text, /WHEN NOT MATCHED THEN INSERT\(id,communication_id,organization_id,email,display_name,locale,source,state\)\s+VALUES\(NEWID\(\),incoming\.communicationId,NULL,incoming\.email,incoming\.displayName,incoming\.locale,'Test','Queued'\);$/);
+    const testAudit = sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).at(-1)!;
+    assert.deepEqual([testAudit.inputs.action, testAudit.inputs.entity, JSON.parse(String(testAudit.inputs.after))], ["communication.test-sent", SQL_UUID, { queued: 2 }]);
+    assert.ok(merge.inTransaction && testAudit.inTransaction);
+    assert.deepEqual(events.slice(before), ["begin", "commit"], "the rows and their audit row share a unit of work");
+
+    const beforeRetry = events.length;
+    assert.deepEqual(await retryDeadLetters(PM, "COM-007"), { requeued: 3 });
+    const requeue = calls.find((c) => /^\s*UPDATE d SET state='Queued'/.test(c.text))!;
+    assert.match(requeue.text, /^UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c ON c\.id=d\.communication_id WHERE c\.public_id=@id AND d\.state='Dead letter'$/);
+    assert.equal(requeue.inputs.id, "COM-007");
+    const retryAudit = sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).at(-1)!;
+    assert.deepEqual([retryAudit.inputs.action, retryAudit.inputs.entity, JSON.parse(String(retryAudit.inputs.after))], ["communication.deliveries.retried", SQL_UUID, { requeued: 3 }]);
+    assert.ok(requeue.inTransaction && retryAudit.inTransaction);
+    assert.deepEqual(events.slice(beforeRetry), ["begin", "commit"]);
+
+    const beforeEstimate = calls.length;
+    const sqlEstimate = await audienceEstimate(CONTRIBUTOR, "COM-007");
+    assert.equal(sqlEstimate.total, 0, "no organisation or member answers: an empty audience is reported, not refused");
+    assert.deepEqual(sqlWrites(calls.slice(beforeEstimate)), [], "an estimate writes nothing");
+  });
+});
+
+test("send side, demo data: with SQL configured and the demo-data switch on, campaigns, deliveries and their audit stay in memory; accounts, settings, the audience and the staff list still come from SQL", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const answers: SqlAnswers = [...sqlSettings(), ...sqlAudience([sqlMember(1), sqlMember(2)]), [/SELECT DISTINCT u\.email/, { recordset: [{ email: "staff@datacentral.ai" }] }]];
+  await withFakeSql(answers, async (calls, events) => {
+    globalThis.pulseShowDemoData = true;
+    try {
+      const created = await createCommunication(PM, draftInput);
+      assert.equal((await audienceEstimate(PM, created.id)).sendable, 2, "the audience is read from SQL");
+      const sent = await sendCommunication(PM, created.id, {});
+      assert.deepEqual([sent.status, sent.recipientCount, sent.version], ["Sending", 2, "1"], "frozen into memory, with a memory version");
+      assert.equal(memoryDeliveries().length, 2);
+      assert.equal((await listDeliveries(CONTRIBUTOR, created.id, {})).total, 2);
+      assert.equal((await getCommunication(CONTRIBUTOR, created.id)).stats.recipients, 2);
+      const store = getDeliveryStore();
+      const batch = (await store.claimBatch(10))!;
+      assert.deepEqual([batch.communicationId, batch.deliveries.map((d) => d.source)], [created.id, ["Member", "Member"]], "the worker's store is the memory one");
+      await store.markFailed(batch.deliveries.map((d) => d.id), "HTTP_400", null);
+      assert.deepEqual(await retryDeadLetters(PM, created.id), { requeued: 2 });
+      assert.deepEqual(await testSendCommunication(PM, created.id, ["staff@datacentral.ai"]), { queued: 2 }, "the staff list still comes from SQL");
+      assert.equal((await cancelCommunication(PM, created.id, "cancel")).status, "Cancelled");
+      const scheduled = await createCommunication(PM, draftInput);
+      await sendCommunication(PM, scheduled.id, { scheduledAt: inAnHour() });
+      memoryCommunications().find((c) => c.id === scheduled.id)!.scheduledAt = new Date(Date.now() - 1000).toISOString();
+      assert.deepEqual(await store.promoteScheduled(new Date()), [scheduled.id]);
+      assert.deepEqual(calls.filter((c) => /dbo\.(Communications|CommunicationDeliveries|AuditEvents)\b|OPENJSON/.test(c.text)), [], "no campaign, delivery, audit or version statement reached SQL");
+      assert.deepEqual(events, [], "and no transaction was opened");
+      assert.ok(calls.some((c) => /FROM dbo\.Users WHERE id=@id/.test(c.text)), "who the caller is was still asked of SQL");
+      assert.ok(calls.some((c) => /FROM dbo\.Settings/.test(c.text)) && calls.some((c) => /FROM dbo\.Memberships m JOIN dbo\.Users u/.test(c.text)), "and so were the settings and the audience");
     } finally {
       globalThis.pulseShowDemoData = undefined;
     }
