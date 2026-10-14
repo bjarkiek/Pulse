@@ -1159,6 +1159,11 @@ test("campaigns: the list is newest first and leaves out deleted campaigns; read
   assert.deepEqual([(await getCommunication(PM, third.id)).title, (await getCommunication(PM, third.id)).content.subject.en, (await getCommunication(PM, third.id)).audience.includeMembers], ["Third", "DataCentral 3.0.0", true]);
   assert.equal((await getCommunication(PM, third.id)).stats.recipients, 0, "a campaign nobody was sent has empty stats");
   assert.deepEqual((await getCommunication(PM, third.id)).stats.byOrganization, []);
+  const stats = (await getCommunication(PM, third.id)).stats;
+  stats.recipients = 99;
+  stats.byOrganization.push({ organizationId: "ORG-001", recipients: 1, delivered: 1, opened: 1 });
+  const fresh = (await getCommunication(CONTRIBUTOR, first.id)).stats;
+  assert.deepEqual([fresh.recipients, fresh.byOrganization], [0, []], "every call gets its own stats object, not a shared one");
 });
 
 test("campaigns: the preview takes sign-off and footer from the settings for its locale, the logo from the public URL and the unsubscribe tag from the unsubscribe group", async () => {
@@ -1392,7 +1397,9 @@ test("campaigns, SQL: reads map the rows and attach row versions, and an id that
     [/ORDER BY c\.created_at DESC/, { recordset: [sqlRow("COM-008", { title: "Newer" }), sqlRow("COM-007", { status: "Scheduled", scheduledAt: "2026-10-14T09:00:00.0000000", releaseId: "REL-3" })] }],
     ...sqlCampaign("COM-007"),
   ];
-  await withFakeSql(answers, async (calls) => {
+  await withFakeSql(answers, async (calls, events) => {
+    // The statements that read campaigns and their row versions, from `since` on: the unit of work they ran in is what keeps a row and its version together.
+    const reads = (since: number) => calls.slice(since).filter((c) => /dbo\.Communications|OPENJSON/.test(c.text));
     const list = await listCommunications(CONTRIBUTOR);
     assert.deepEqual(list.map((c) => [c.id, c.title, c.status, c.version, c.scheduledAt, c.releaseId]), [
       ["COM-008", "Newer", "Draft", "0x0000000000000008", undefined, undefined],
@@ -1401,12 +1408,18 @@ test("campaigns, SQL: reads map the rows and attach row versions, and an id that
     assert.deepEqual(list[0].content, productUpdate, "the JSON columns come back as objects");
     assert.deepEqual(list[0].audience, draftInput.audience);
     assert.match(calls.find((c) => /ORDER BY/.test(c.text))!.text, /WHERE c\.deleted_at IS NULL ORDER BY c\.created_at DESC/);
+    assert.deepEqual(events, ["begin", "commit"], "the rows and their versions are read in one unit of work, so a write in between cannot pair old content with a new version");
+    assert.deepEqual(reads(0).map((c) => c.inTransaction), [true, true], "both the list and the version read ran inside it");
 
+    const seenGet = calls.length;
     const item = await getCommunication(CONTRIBUTOR, "COM-007");
     assert.deepEqual([item.id, item.createdBy, item.createdAt, item.updatedAt, item.recipientCount, item.version], ["COM-007", "Product Manager", "2026-10-13T09:00:00.0000000", "2026-10-13T09:30:00.0000000", 0, "0x0000000000000007"]);
     assert.match(calls.find((c) => /WHERE c\.public_id=@id/.test(c.text))!.text, /WHERE c\.public_id=@id AND c\.deleted_at IS NULL$/, "a deleted campaign is gone");
+    assert.deepEqual(events, ["begin", "commit", "begin", "commit"], "a get is one unit of work as well");
+    assert.deepEqual(reads(seenGet).map((c) => c.inTransaction), [true, true], "the row and its version ran inside it");
     assert.equal((await previewCommunication(CONTRIBUTOR, "COM-007", "is")).subject, "DataCentral 3.0.0 (is)");
     await assert.rejects(getCommunication(CONTRIBUTOR, "COM-404"), /NOT_FOUND/, "a well-formed id that is not there");
+    assert.deepEqual(events.slice(4), ["begin", "rollback"], "a read that finds nothing rolls its unit of work back");
 
     const seen = calls.length;
     for (const id of ["", "COM-", "com-7", "REL-7", "COM-7; DROP TABLE dbo.Communications", `COM-${"9".repeat(40)}`]) {
@@ -1415,6 +1428,7 @@ test("campaigns, SQL: reads map the rows and attach row versions, and an id that
       await assert.rejects(findCommunicationUuid(id), /NOT_FOUND/, id);
     }
     assert.deepEqual(calls.slice(seen).filter((c) => /dbo\.Communications/.test(c.text)), [], "no statement about campaigns was sent");
+    assert.equal(events.length, 6, "and no transaction was opened for an id that cannot exist");
     assert.equal(await findCommunicationUuid("COM-007"), SQL_UUID);
     assert.match(calls.at(-1)!.text, /FROM dbo\.Communications WHERE public_id=@id AND deleted_at IS NULL$/, "the uuid of a deleted campaign is not handed out");
   });

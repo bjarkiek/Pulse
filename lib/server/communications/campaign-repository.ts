@@ -18,7 +18,8 @@ export type CommunicationInput = z.infer<typeof communicationInputSchema>;
 // their versions and the releases they are drafted from all live in memory together. Who the caller is, the settings, contacts and
 // suppressions are identity-adjacent and keep following `isAzureSqlConfigured` in their own modules.
 
-const EMPTY_STATS: CommunicationStats = { recipients: 0, queued: 0, accepted: 0, delivered: 0, bounced: 0, dropped: 0, deadLettered: 0, suppressed: 0, cancelled: 0, opened: 0, clicked: 0, byOrganization: [] };
+/** The stats of a campaign nobody was sent. A new object on every call, so what one caller does to it is never seen by the next. */
+const emptyStats = (): CommunicationStats => ({ recipients: 0, queued: 0, accepted: 0, delivered: 0, bounced: 0, dropped: 0, deadLettered: 0, suppressed: 0, cancelled: 0, opened: 0, clicked: 0, byOrganization: [] });
 
 const SELECT = `SELECT c.public_id id,c.template_key templateKey,c.topic,c.title,c.content_json contentJson,c.audience_json audienceJson,c.status,
   CONVERT(nvarchar(33),c.scheduled_at,127) scheduledAt,CONVERT(nvarchar(33),c.started_at,127) startedAt,CONVERT(nvarchar(33),c.completed_at,127) completedAt,
@@ -46,10 +47,13 @@ async function insertAudit(identity: PulseIdentity, action: string, entityId: st
 
 /** A campaign's public id is `COM-` and a number. Nothing else can exist, so anything else is NOT_FOUND (404) in both modes and never reaches the driver, which binds ids as `NVarChar(32)`. */
 const PUBLIC_ID = /^COM-\d{1,20}$/;
+function assertPublicId(publicId: string) {
+  if (!PUBLIC_ID.test(publicId)) throw new Error("NOT_FOUND");
+}
 
 /** SQL only, for the audit rows of this module and of the send side. */
 export async function findCommunicationUuid(publicId: string): Promise<string> {
-  if (!PUBLIC_ID.test(publicId)) throw new Error("NOT_FOUND");
+  assertPublicId(publicId);
   const result = await (await getSqlPool()).request().input("id", sql.NVarChar(32), publicId)
     .query("SELECT CAST(id AS nvarchar(36)) id FROM dbo.Communications WHERE public_id=@id AND deleted_at IS NULL");
   if (!result.recordset.length) throw new Error("NOT_FOUND");
@@ -57,7 +61,7 @@ export async function findCommunicationUuid(publicId: string): Promise<string> {
 }
 
 async function loadOne(publicId: string): Promise<CommunicationRecord> {
-  if (!PUBLIC_ID.test(publicId)) throw new Error("NOT_FOUND");
+  assertPublicId(publicId);
   if (!isContentSqlActive()) {
     const item = memoryCommunications().find((c) => c.id === publicId);
     if (!item) throw new Error("NOT_FOUND");
@@ -121,17 +125,24 @@ export async function prefillFromRelease(identity: PulseIdentity, releaseId: str
   };
 }
 
+// The rows and their row versions (`addVersions` reads them in a second statement) are read in one unit of work in SQL mode, as the other
+// versioned reads do. Read apart, a write that commits in between would pair the old content with the new version, and an If-Match for
+// content the client never saw would be accepted.
 export async function listCommunications(identity: PulseIdentity): Promise<CommunicationRecord[]> {
   await requireInternalRole(identity);
   if (!isContentSqlActive()) return addVersions("Communications", structuredClone(memoryCommunications()).reverse());
-  const result = await (await getSqlPool()).request().query(`${SELECT} WHERE c.deleted_at IS NULL ORDER BY c.created_at DESC`);
-  return addVersions("Communications", result.recordset.map(fromRow));
+  return atomicSql(async () => {
+    const result = await (await getSqlPool()).request().query(`${SELECT} WHERE c.deleted_at IS NULL ORDER BY c.created_at DESC`);
+    return addVersions("Communications", result.recordset.map(fromRow));
+  });
 }
 
-export async function getCommunication(identity: PulseIdentity, id: string) {
+export async function getCommunication(identity: PulseIdentity, id: string): Promise<CommunicationRecord & { version: string; stats: CommunicationStats }> {
   await requireInternalRole(identity);
-  const [item] = await addVersions("Communications", [await loadOne(id)]);
-  return { ...item, stats: EMPTY_STATS }; // Task 9 replaces EMPTY_STATS with `await communicationStats(id)`
+  assertPublicId(id); // before the unit of work: an id that cannot exist costs no transaction
+  const read = async () => (await addVersions("Communications", [await loadOne(id)]))[0];
+  const item = await (isContentSqlActive() ? atomicSql(read) : read());
+  return { ...item, stats: emptyStats() }; // Task 9 replaces emptyStats() with `await communicationStats(id)`
 }
 
 export async function createCommunication(identity: PulseIdentity, input: Partial<CommunicationInput> & { fromReleaseId?: string }) {
