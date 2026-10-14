@@ -4,7 +4,7 @@ import type { TourAudience, TourStepPayload } from "@/lib/tours";
 // definitions are filtered per user and localized before they reach the client,
 // so a customer never downloads internal-audience tour content.
 //
-// Anchor convention: steps target data-tour="…" attributes in app/page.tsx and
+// Anchor convention: steps target data-tour="…" attributes in app/features/ and
 // app/chat-panel.tsx — never utility class chains. Pulse is a single-page view
 // switcher, so `route` values are pseudo-routes ("/home", "/triage", …) that the
 // TourHost glue maps to the AppShell `page` state; they intentionally never equal
@@ -70,14 +70,17 @@ export const tourStrings = (locale: string) =>
 export const TOUR_CATALOG: TourDefinition[] = [
   {
     key: "welcome",
-    version: 1,
+    version: 2,
     title: { en: "Welcome to Pulse", is: "Velkomin í Pulse" },
     defaultAutoStart: true,
     defaultAudience: "All",
     reofferOnNewVersion: false,
     steps: [
       {
-        title: { en: "Welcome to DataCentral Pulse", is: "Velkomin í DataCentral Pulse" },
+        title: {
+          en: "Welcome to DataCentral Pulse",
+          is: "Velkomin í DataCentral Pulse",
+        },
         description: {
           en: "This short tour shows you around — it takes about a minute. You can stop any time and pick it up later from the ? button in the corner.",
           is: "Þessi stutta leiðsögn sýnir þér helstu svæðin — hún tekur um eina mínútu. Þú getur hætt hvenær sem er og haldið áfram síðar með ?-hnappnum í horninu.",
@@ -122,10 +125,13 @@ export const TOUR_CATALOG: TourDefinition[] = [
       {
         element: "[data-tour='your-requests']",
         side: "top",
-        title: { en: "Follow your requests", is: "Fylgstu með beiðnunum þínum" },
+        title: {
+          en: "Follow your requests",
+          is: "Fylgstu með beiðnunum þínum",
+        },
         description: {
-          en: "The latest activity on your organization's requests — open one to see its full history and add comments.",
-          is: "Nýjasta virknin á beiðnum fyrirtækisins — opnaðu beiðni til að sjá sögu hennar og bæta við athugasemdum.",
+          en: "The latest activity on your organization's requests — open one to see its full history and add comments. Its URL can be shared with colleagues who have access. If saving an edit reports a conflict, reload the latest version and review it before retrying; your text stays in the form.",
+          is: "Nýjasta virknin á beiðnum fyrirtækisins — opnaðu beiðni til að sjá sögu hennar og bæta við athugasemdum. Deila má slóðinni með samstarfsfólki sem hefur aðgang. Ef vistun rekst á nýrri breytingu skaltu sækja nýjustu útgáfu og fara yfir hana áður en þú reynir aftur; textinn þinn helst í forminu.",
         },
       },
       {
@@ -144,8 +150,8 @@ export const TOUR_CATALOG: TourDefinition[] = [
         align: "end",
         title: { en: "Meet the assistant", is: "Aðstoðarmaðurinn" },
         description: {
-          en: "Ask the AI assistant to find ideas, summarize requests or draft a new one for you.",
-          is: "Biddu gervigreindar­aðstoðarmanninn um að finna hugmyndir, taka saman beiðnir eða semja nýja fyrir þig.",
+          en: "When the assistant is configured, ask it to find ideas, summarize requests or draft a new one for you.",
+          is: "Þegar aðstoðarmaðurinn er virkur geturðu beðið hann um að finna hugmyndir, taka saman beiðnir eða semja nýja fyrir þig.",
         },
       },
       {
@@ -153,15 +159,15 @@ export const TOUR_CATALOG: TourDefinition[] = [
         side: "top",
         title: { en: "Tours live here", is: "Leiðsagnir eru hér" },
         description: {
-          en: "Rerun this tour or start task guides any time from this button. That's it — enjoy Pulse!",
-          is: "Endurtaktu þessa leiðsögn eða opnaðu aðrar leiðbeiningar hvenær sem er með þessum hnappi. Það er allt — njóttu Pulse!",
+          en: "The ? button is at the bottom-right, below chat. Rerun this tour, open the help manual or start task guides here. That's it — enjoy Pulse!",
+          is: "?-hnappurinn er neðst til hægri, undir spjallinu. Hér geturðu endurtekið leiðsögn, opnað handbókina eða valið aðrar leiðbeiningar. Það er allt — njóttu Pulse!",
         },
       },
     ],
   },
   {
     key: "submit-request",
-    version: 1,
+    version: 2,
     title: { en: "Submitting a request", is: "Að senda inn beiðni" },
     defaultAutoStart: false,
     defaultAudience: "All",
@@ -185,7 +191,10 @@ export const TOUR_CATALOG: TourDefinition[] = [
         // deep-linking into steps 1-3 works even though the anchors live inside
         // a conditionally-rendered dialog (effectiveRoute covers steps 2-3 too)
         route: "/compose",
-        title: { en: "Start with a short title", is: "Byrjaðu á stuttum titli" },
+        title: {
+          en: "Start with a short title",
+          is: "Byrjaðu á stuttum titli",
+        },
         description: {
           en: "As you type, Pulse suggests existing ideas — following one is often faster than filing a new request.",
           is: "Á meðan þú skrifar stingur Pulse upp á hugmyndum sem þegar eru til — oft er fljótlegra að fylgja einni þeirra en að stofna nýja beiðni.",
@@ -196,8 +205,8 @@ export const TOUR_CATALOG: TourDefinition[] = [
         side: "top",
         title: { en: "Describe the outcome", is: "Lýstu útkomunni" },
         description: {
-          en: "Explain what you are trying to achieve, who is affected, and what happens today. Impact and context help triage.",
-          is: "Útskýrðu hverju þú vilt ná fram, hverja þetta snertir og hvernig staðan er í dag. Samhengi hjálpar við forgangsröðun.",
+          en: "Explain what you are trying to achieve, who is affected, and what happens today. Impact and context help triage. Watch the draft-save status: drafts are scoped to your account and organization, and device copies expire after 24 hours.",
+          is: "Útskýrðu hverju þú vilt ná fram, hverja þetta snertir og hvernig staðan er í dag. Samhengi hjálpar við forgangsröðun. Fylgstu með vistunarstöðu draga: þau tilheyra þínum aðgangi og fyrirtæki og afrit á tækinu renna út eftir 24 klukkustundir.",
         },
       },
       {
@@ -206,22 +215,25 @@ export const TOUR_CATALOG: TourDefinition[] = [
         align: "end",
         title: { en: "Submit when ready", is: "Sendu þegar allt er klárt" },
         description: {
-          en: "Attachments are malware-scanned and your organization's context stays private. The team picks it up in triage.",
-          is: "Viðhengi eru vírusskönnuð og samhengi fyrirtækisins helst leynt. Teymið tekur beiðnina fyrir í forgangsröðun.",
+          en: "Attachments stay unavailable until scanning reports Clean. If upload fails, keep the form open and use Retry attachments; Pulse retains the created request. Check scan status in the request details and use Retry if loading fails.",
+          is: "Viðhengi eru ekki aðgengileg fyrr en skönnun staðfestir að þau séu hrein. Ef upphleðsla bregst skaltu halda forminu opnu og reyna viðhengin aftur; stofnuð beiðni varðveitist. Skönnunarstaðan sést í beiðninni og hægt er að reyna aftur ef lestur bregst.",
         },
       },
     ],
   },
   {
     key: "team-workspace",
-    version: 1,
+    version: 2,
     title: { en: "The team workspace", is: "Vinnusvæði teymisins" },
     defaultAutoStart: false,
     defaultAudience: "Internal",
     reofferOnNewVersion: false,
     steps: [
       {
-        title: { en: "DataCentral team tools", is: "Verkfæri DataCentral-teymisins" },
+        title: {
+          en: "DataCentral team tools",
+          is: "Verkfæri DataCentral-teymisins",
+        },
         description: {
           en: "This tour covers the internal side of Pulse. Customers never see these views — they are gated to the internal organization.",
           is: "Þessi leiðsögn fer yfir innri hlið Pulse. Viðskiptavinir sjá aldrei þessi svæði — þau eru bundin við innra skipulagið.",
@@ -252,8 +264,8 @@ export const TOUR_CATALOG: TourDefinition[] = [
         side: "right",
         title: { en: "Product ideas", is: "Vöruhugmyndir" },
         description: {
-          en: "The internal workflow behind the public roadmap — scoring, merging and publishing ideas.",
-          is: "Innra vinnuflæðið á bak við opinbera vegvísinn — stigagjöf, sameining og útgáfa hugmynda.",
+          en: "The internal workflow behind the public roadmap — scoring, merging and publishing ideas. If an edit or publication conflicts with a newer version, reread and review it before trying again.",
+          is: "Innra vinnuflæðið á bak við opinbera vegvísinn — stigagjöf, sameining og útgáfa hugmynda. Ef breyting eða útgáfa rekst á nýrri útgáfu skaltu sækja hana og fara yfir áður en þú reynir aftur.",
         },
       },
       {
@@ -278,7 +290,7 @@ export const TOUR_CATALOG: TourDefinition[] = [
   },
   {
     key: "admin-settings",
-    version: 1,
+    version: 2,
     title: { en: "Admin controls", is: "Stjórnandastillingar" },
     defaultAutoStart: false,
     defaultAudience: "SystemAdmins",
@@ -310,6 +322,16 @@ export const TOUR_CATALOG: TourDefinition[] = [
         description: {
           en: "Per-user progress for every tour. Users who chose “hide tours forever” appear here — and only you can restore them.",
           is: "Framvinda hvers notanda í hverri leiðsögn. Notendur sem völdu að fela leiðsagnir birtast hér — og aðeins þú getur endurvirkjað þær.",
+        },
+      },
+      {
+        element: "[data-tour='settings-delivery']",
+        route: "/settings",
+        side: "top",
+        title: { en: "Background delivery", is: "Sendingar í bakgrunni" },
+        description: {
+          en: "Review email and webhook delivery queues here. Retry failed deliveries requeues up to 100 dead letters for that channel. The scheduled worker sends them later; queued is not a delivery confirmation.",
+          is: "Hér sérðu biðraðir tölvupósts og vefkróka. Endurtekning setur allt að 100 misheppnaðar sendingar aftur í biðröð fyrir valda rás. Bakgrunnsverk sendir þær síðar; biðröð staðfestir ekki afhendingu.",
         },
       },
     ],

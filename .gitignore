@@ -45,3 +45,6 @@ next-env.d.ts
 
 # Azure deploy environment facts written by infra/provision.ps1 (names/URLs, no secrets)
 infra/azure-env.*.json
+
+# Git worktrees that Claude Code creates for isolated branches; never commit them
+/.claude/worktrees/

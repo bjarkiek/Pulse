@@ -6,8 +6,7 @@ import type { TourPayload, TourStatePayload } from "@/lib/tours";
 // Onboarding-kit glue (DataCentralEmbedOnboardingTours.md §4, non-Blazor form):
 // loads the vendored Driver.js + tour-engine.js assets, feeds the server's tour
 // state to the engine, persists progress via the tours API, and renders the
-// floating "guided tours" help menu (bottom-left; the chat launcher owns
-// bottom-right). Renders nothing when the server suppresses tours (master
+// floating "guided tours" help menu (bottom-right, below the chat launcher). Renders nothing when the server suppresses tours (master
 // switch off, per-user opt-out, embed without the Onboard role).
 
 type TourEngine = {

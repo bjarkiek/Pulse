@@ -5,10 +5,10 @@
 //
 // Prereqs:
 //   npm i -D playwright && npx playwright install chromium
-//   dev server running in memory mode (npm run dev) — fresh start recommended
-//   so every tour shows as "not started" in the help-menu screenshot.
+//   isolated local server: node scripts/preview-security.mjs
+//   fresh start recommended so tours show as not started.
 // Run:
-//   node scripts/capture-help-screenshots.mjs [baseUrl]
+//   node scripts/capture-help-screenshots.mjs http://127.0.0.1:3107
 //
 // Notes: progress POSTs are blocked at the network layer, so capturing never
 // writes tour progress to the server (the glue swallows the failures by design).
@@ -18,8 +18,16 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const BASE = process.argv[2] || process.env.HELP_BASE_URL || "http://localhost:3000";
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "public", "help");
+const BASE =
+  process.argv[2] || process.env.HELP_BASE_URL || "http://localhost:3000";
+if (!["localhost", "127.0.0.1"].includes(new URL(BASE).hostname))
+  throw new Error("Use an isolated local preview for help captures.");
+const OUT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "public",
+  "help",
+);
 mkdirSync(OUT, { recursive: true });
 
 const browser = await chromium.launch();
@@ -51,7 +59,7 @@ await context.addInitScript(() => {
 const page = await context.newPage();
 
 async function freshPage() {
-  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForSelector("[data-tour='tour-help']", { timeout: 30_000 });
   await page.waitForFunction(() => Boolean(window.tourEngine));
   await page.evaluate(() => window.tourEngine.stop()); // kill any auto-started tour
@@ -65,10 +73,14 @@ const state = await page.evaluate(() =>
 );
 const tours = state.item.tours;
 if (!tours.length) {
-  console.error("No tours in state — is the master switch off or the user ineligible?");
+  console.error(
+    "No tours in state — is the master switch off or the user ineligible?",
+  );
   process.exit(1);
 }
-console.log(`Capturing ${tours.reduce((n, t) => n + t.steps.length, 0)} steps across ${tours.length} tours…`);
+console.log(
+  `Capturing ${tours.reduce((n, t) => n + t.steps.length, 0)} steps across ${tours.length} tours…`,
+);
 
 for (const tour of tours) {
   await freshPage(); // reset view/modals between tours (e.g. the composer)
@@ -80,7 +92,14 @@ for (const tour of tours) {
       },
       [tour.key, index],
     );
-    await page.waitForSelector(".driver-popover", { state: "visible", timeout: 15_000 });
+    await page.waitForSelector(".driver-popover", {
+      state: "visible",
+      timeout: 15_000,
+    });
+    await page.waitForFunction(
+      (title) => document.querySelector(".driver-popover-title")?.textContent === title,
+      tour.steps[index].title,
+    );
     await page.waitForTimeout(900); // spotlight animation + view/modal settle
     const file = join(OUT, `${tour.key}-step-${index + 1}.png`);
     await page.screenshot({ path: file });
