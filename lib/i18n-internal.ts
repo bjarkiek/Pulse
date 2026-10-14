@@ -449,3 +449,23 @@ Object.assign(internalTranslations, {
   "Sending: safe-mode": "Sendingar: öruggur hamur",
   "Sending: live": "Sendingar: í notkun",
 });
+
+// What a refused request says (errorMessage in lib/api-client.ts).
+Object.assign(internalTranslations, {
+  "Safe mode is on and your address's domain is not allow-listed.":
+    "Kveikt er á öruggum ham og lén netfangsins þíns er ekki á lista yfir leyfð lén.",
+  "SendGrid is not configured: add the API key and a verified from address.":
+    "SendGrid er ekki sett upp: bættu við API-lykli og staðfestu netfangi sendanda.",
+  "Sending is disabled in Settings.": "Sendingar eru óvirkar í stillingum.",
+  "Nobody matches this audience.": "Engir viðtakendur passa við þetta val.",
+  "This audience exceeds the maximum recipients per communication.":
+    "Þetta val á viðtakendum fer yfir hámarksfjölda viðtakenda í hverri sendingu.",
+  "Choose a time at least one minute ahead and within 30 days.":
+    "Veldu tíma sem er að minnsta kosti mínútu fram í tímann og innan 30 daga.",
+  "This communication is no longer in a state that allows that action.":
+    "Þessi sending er ekki lengur í stöðu sem leyfir þessa aðgerð.",
+  "That address is already on this company's list.":
+    "Þetta netfang er þegar á lista þessa fyrirtækis.",
+  "Some fields are missing or invalid.":
+    "Suma reiti vantar eða þeir eru ógildir.",
+});

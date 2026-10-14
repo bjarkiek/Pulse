@@ -8,6 +8,8 @@ import { NextRequest } from "next/server";
 import nextConfig from "../next.config";
 import { proxy } from "../proxy";
 import type { PulseIdentity } from "../lib/domain";
+import { ApiFailure, errorMessage } from "../lib/api-client";
+import { IS, makeT } from "../lib/i18n";
 import { createSessionToken } from "../lib/server/session";
 import { requestHasBody } from "../lib/server/validation";
 import { organizations, users } from "../lib/server/admin-repository";
@@ -1416,4 +1418,57 @@ test("requestHasBody: a declared length decides when there is one; without one t
   const sent = request("abc");
   assert.equal(await requestHasBody(sent), true);
   assert.equal(await sent.text(), "abc", "and the request is left unread");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// What a card says when a request is refused (lib/api-client.ts). The server answers every refusal it can explain with a 400 and a code
+// (INVALID_*); errorMessage turns the code into a sentence a person can act on, which the toasts and the error lines of the cards show.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/** The codes the communications screens meet, and what a person is told for each. */
+const REFUSAL_SENTENCES: Array<[string, string]> = [
+  ["INVALID_SAFE_MODE_BLOCKS_RECIPIENT", "Safe mode is on and your address's domain is not allow-listed."],
+  ["INVALID_EMAIL_PROVIDER_CONFIGURATION", "SendGrid is not configured: add the API key and a verified from address."],
+  ["INVALID_COMMUNICATIONS_DISABLED", "Sending is disabled in Settings."],
+  ["INVALID_AUDIENCE_EMPTY", "Nobody matches this audience."],
+  ["INVALID_AUDIENCE_TOO_LARGE", "This audience exceeds the maximum recipients per communication."],
+  ["INVALID_SCHEDULE_TIME", "Choose a time at least one minute ahead and within 30 days."],
+  ["INVALID_COMMUNICATION_STATE", "This communication is no longer in a state that allows that action."],
+  ["INVALID_CONTACT_EXISTS", "That address is already on this company's list."],
+  ["INVALID_INPUT", "Some fields are missing or invalid."],
+];
+
+test("errorMessage: a 400 says what its code means, followed by the support id when there is one", () => {
+  for (const [code, sentence] of REFUSAL_SENTENCES) {
+    assert.equal(errorMessage(new ApiFailure(400, code)), sentence, code);
+    assert.equal(errorMessage(new ApiFailure(400, code, "support-1")), `${sentence} Support ID: support-1`, `${code} with a support id`);
+  }
+});
+
+test("errorMessage: a 400 whose code has no sentence of its own is told in the words of the code, and anything else keeps the usual text", () => {
+  assert.equal(errorMessage(new ApiFailure(400, "INVALID_SOMETHING_NEW", "support-2")), "Something new. Support ID: support-2");
+  assert.equal(errorMessage(new ApiFailure(400, "INVALID_EMAIL_PROVIDER_HTTP_401")), "Email provider http 401.", "the provider's own code stays in it");
+  // only a 400 is a refusal that can be explained, and only an INVALID_ code has words to say
+  const usual = "The operation failed. Please try again.";
+  assert.equal(errorMessage(new ApiFailure(400, "REQUEST_FAILED")), usual, "a 400 without a code from the server");
+  assert.equal(errorMessage(new ApiFailure(400, "INVALID_")), usual, "an INVALID_ with nothing after it");
+  assert.equal(errorMessage(new ApiFailure(500, "INVALID_INPUT")), usual, "a code on another status");
+  assert.equal(errorMessage(new ApiFailure(400, "constructor")), usual, "a name every object has is not a code");
+  assert.equal(errorMessage(new ApiFailure(409, "IDEMPOTENCY_CONFLICT", "support-3")), `${usual} Support ID: support-3`);
+});
+
+test("errorMessage: the texts for an expired session, a changed item, a missing version and a lost connection are as they were", () => {
+  assert.equal(errorMessage(new ApiFailure(401, "UNAUTHORIZED", "support-4")), "Your session expired. Your input is still here. Sign in and retry. Support ID: support-4");
+  assert.equal(errorMessage(new ApiFailure(412, "VERSION_CONFLICT")), "This item changed. Reload it and review the latest version before saving.");
+  assert.equal(errorMessage(new ApiFailure(428, "PRECONDITION_REQUIRED", "support-5")), "Reload this item before saving. Support ID: support-5");
+  assert.equal(errorMessage(new TypeError("fetch failed")), "Unable to connect. Your input is still here; please retry.");
+});
+
+test("errorMessage: every sentence it says for a code has an Icelandic line, and the support id is carried over", () => {
+  for (const [code, sentence] of REFUSAL_SENTENCES) {
+    assert.ok(IS[sentence], `${code}: no Icelandic for "${sentence}"`);
+    assert.notEqual(IS[sentence], sentence, code);
+  }
+  const is = makeT("is");
+  assert.equal(is(errorMessage(new ApiFailure(400, "INVALID_AUDIENCE_EMPTY", "support-6"))), `${IS["Nobody matches this audience."]} Númer fyrir aðstoð: support-6`);
 });

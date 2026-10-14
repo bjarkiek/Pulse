@@ -26,8 +26,44 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     );
   return data as T;
 }
+/** What a refused request (a 400) means in words, for the codes whose cause the person at the screen can act on. */
+const REFUSALS: Record<string, string> = {
+  INVALID_SAFE_MODE_BLOCKS_RECIPIENT:
+    "Safe mode is on and your address's domain is not allow-listed.",
+  INVALID_EMAIL_PROVIDER_CONFIGURATION:
+    "SendGrid is not configured: add the API key and a verified from address.",
+  INVALID_COMMUNICATIONS_DISABLED: "Sending is disabled in Settings.",
+  INVALID_AUDIENCE_EMPTY: "Nobody matches this audience.",
+  INVALID_AUDIENCE_TOO_LARGE:
+    "This audience exceeds the maximum recipients per communication.",
+  INVALID_SCHEDULE_TIME:
+    "Choose a time at least one minute ahead and within 30 days.",
+  INVALID_COMMUNICATION_STATE:
+    "This communication is no longer in a state that allows that action.",
+  INVALID_CONTACT_EXISTS: "That address is already on this company's list.",
+  INVALID_INPUT: "Some fields are missing or invalid.",
+};
+
+/**
+ * The sentence for a failure. A 400 is the server explaining a refusal with a code: the sentence written for the code, else the words of
+ * the code itself ("INVALID_FOO_BAR" is "Foo bar."). Any other failure keeps the text it was built with.
+ */
+function failureSentence(error: ApiFailure) {
+  if (error.status !== 400) return error.message;
+  if (Object.hasOwn(REFUSALS, error.code)) return REFUSALS[error.code];
+  const words = error.code.startsWith("INVALID_")
+    ? error.code
+        .slice("INVALID_".length)
+        .toLowerCase()
+        .split("_")
+        .filter(Boolean)
+        .join(" ")
+    : "";
+  return words ? `${words[0].toUpperCase()}${words.slice(1)}.` : error.message;
+}
+
 export function errorMessage(error: unknown) {
   return error instanceof ApiFailure
-    ? `${error.message}${error.supportId ? ` Support ID: ${error.supportId}` : ""}`
+    ? `${failureSentence(error)}${error.supportId ? ` Support ID: ${error.supportId}` : ""}`
     : "Unable to connect. Your input is still here; please retry.";
 }
