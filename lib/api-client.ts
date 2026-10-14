@@ -45,7 +45,9 @@ const REFUSALS: Record<string, string> = {
   INVALID_COMMUNICATION_NOT_EDITABLE:
     "This communication is no longer a draft and cannot be edited.",
   INVALID_COMMUNICATION_NOT_DELETABLE:
-    "Only drafts and cancelled communications can be deleted.",
+    "Only drafts, and cancelled communications that sent nothing, can be deleted.",
+  INVALID_UNSUBSCRIBE_GROUP_REQUIRED:
+    "Set the SendGrid unsubscribe group before leaving safe mode.",
   INVALID_TEMPLATE: "Unknown template.",
 };
 

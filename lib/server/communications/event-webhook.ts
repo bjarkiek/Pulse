@@ -166,10 +166,12 @@ export async function applyEvents(events: SendGridEvent[]) {
         // The state follows STATE_RANK: an event that sets one moves the row when it weighs at least what the row does (a row still Processing has no rank, so it
         // takes any verdict); only a row the provider accepted is touched, or one still Processing when the event is a verdict (@rank>=3). The other columns are
         // recorded whatever the state.
+        // Without a delivery id the row is found by the message id the request got: SendGrid's id for a recipient is that id with a suffix, so the stored id must be
+        // the start of @message, compared exactly (LEFT, not LIKE: a base64url id carries `_`, which LIKE reads as a wildcard).
         .query(`UPDATE TOP(1) dbo.CommunicationDeliveries SET last_event=@last,last_event_at=@occurred,
           state=CASE WHEN @state IS NOT NULL AND @rank>=(CASE state WHEN 'Accepted' THEN 1 WHEN 'Deferred' THEN 2 WHEN 'Delivered' THEN 3 WHEN 'Bounced' THEN 4 WHEN 'Dropped' THEN 4 ELSE 0 END) THEN @state ELSE state END,
           opened_at=CASE WHEN @opened=1 THEN COALESCE(opened_at,@occurred) ELSE opened_at END,clicked_at=CASE WHEN @clicked=1 THEN COALESCE(clicked_at,@occurred) ELSE clicked_at END
-          WHERE ((@delivery IS NOT NULL AND id=@delivery) OR (@delivery IS NULL AND @message IS NOT NULL AND provider_message_id IS NOT NULL AND email=@email AND @message LIKE provider_message_id+'%'))
+          WHERE ((@delivery IS NOT NULL AND id=@delivery) OR (@delivery IS NULL AND @message IS NOT NULL AND provider_message_id IS NOT NULL AND email=@email AND LEFT(@message,LEN(provider_message_id))=provider_message_id))
             AND (state IN ('Accepted','Deferred','Delivered','Bounced','Dropped') OR (state='Processing' AND @rank>=3))`);
       await applySuppression(event, effect);
       return updated.rowsAffected[0] ? "applied" as const : "orphan" as const;

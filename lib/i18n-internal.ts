@@ -413,6 +413,8 @@ Object.assign(internalTranslations, {
   "Reply-to": "Svarnetfang",
   "Data residency": "Gagnasvæði",
   "Unsubscribe group id (ASM)": "Auðkenni afskráningarhóps (ASM)",
+  "Required once safe mode is off":
+    "Nauðsynlegt þegar slökkt er á öruggum ham",
   "Daily cap": "Hámark á dag",
   "Max recipients per communication":
     "Hámarksfjöldi viðtakenda í hverri sendingu",
@@ -470,8 +472,10 @@ Object.assign(internalTranslations, {
     "Suma reiti vantar eða þeir eru ógildir.",
   "This communication is no longer a draft and cannot be edited.":
     "Þessi sending er ekki lengur í drögum og ekki er hægt að breyta henni.",
-  "Only drafts and cancelled communications can be deleted.":
-    "Aðeins er hægt að eyða drögum og sendingum sem hætt var við.",
+  "Only drafts, and cancelled communications that sent nothing, can be deleted.":
+    "Aðeins er hægt að eyða drögum og sendingum sem hætt var við áður en nokkuð var sent.",
+  "Set the SendGrid unsubscribe group before leaving safe mode.":
+    "Stilltu afskráningarhóp SendGrid áður en slökkt er á öruggum ham.",
   "Unknown template.": "Óþekkt sniðmát.",
 });
 

@@ -9,6 +9,7 @@ import {
   useT,
   type AudienceBreakdownItem,
   type CommunicationItem,
+  type CommunicationProviderStatus,
   type Company,
 } from "./shared";
 import { ModalDialog } from "./communication-dialog";
@@ -86,10 +87,11 @@ export function CommunicationEditor({
     version: string | undefined;
     item: AudienceBreakdownItem;
   } | null>(null);
-  // undefined: not asked yet; null: not available to this person (only a System admin may read the settings).
-  const [sendingState, setSendingState] = useState<string | null | undefined>(
-    undefined,
-  );
+  // What the worker would do with a send now. It comes with the audience numbers, which every internal role may read, so the people who send see
+  // the warnings too (the settings themselves are for System admins). undefined until the first answer.
+  const [sendingState, setSendingState] = useState<
+    CommunicationProviderStatus["effectiveSendingState"] | undefined
+  >(undefined);
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
@@ -241,9 +243,14 @@ export function CommunicationEditor({
   useEffect(() => {
     if (step === "content") return;
     let current = true;
-    apiFetch<{ item: AudienceBreakdownItem }>(`${API}/${draft.id}/audience`)
+    apiFetch<{
+      item: AudienceBreakdownItem;
+      effectiveSendingState?: CommunicationProviderStatus["effectiveSendingState"];
+    }>(`${API}/${draft.id}/audience`)
       .then((data) => {
-        if (current) setEstimated({ version: draft.version, item: data.item });
+        if (!current) return;
+        setEstimated({ version: draft.version, item: data.item });
+        setSendingState(data.effectiveSendingState);
       })
       .catch((error) => {
         if (current) onToast(errorMessage(error));
@@ -252,16 +259,6 @@ export function CommunicationEditor({
       current = false;
     };
   }, [step, draft.id, draft.version, onToast]);
-
-  // Only a System admin can read the settings; for anybody else the answer is a 404 and no notice is shown.
-  useEffect(() => {
-    if (step !== "review" || sendingState !== undefined) return;
-    apiFetch<{ status: { effectiveSendingState: string } }>(
-      "/api/v1/admin/communications/settings",
-    )
-      .then((data) => setSendingState(data.status.effectiveSendingState))
-      .catch(() => setSendingState(null));
-  }, [step, sendingState]);
 
   // The preview is the saved draft in the language being edited.
   useEffect(() => {
@@ -801,7 +798,11 @@ function AudienceSummary({ estimate }: { estimate: AudienceBreakdownItem }) {
   );
 }
 
-function SendingStateNotice({ state }: { state: string | null | undefined }) {
+function SendingStateNotice({
+  state,
+}: {
+  state: CommunicationProviderStatus["effectiveSendingState"] | undefined;
+}) {
   const t = useT();
   if (!state || state === "live") return null;
   return (

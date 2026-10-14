@@ -31,6 +31,22 @@ export function domainAllowed(email: string, allowed: string[]) {
 }
 
 /**
+ * Why an address is not mailed although it is on a list: it is on the suppression list (that list's reason), or else safe mode is on and its
+ * domain is not allow-listed (`SafeMode`). The one rule for both moments it is applied: when the audience is frozen into delivery rows, and again
+ * when the worker claims a row that has been waiting since (see `claimBatch`), so an unsubscribe, a bounce or a change of the safe-mode list that
+ * came after the freeze holds for a retry or a requeued dead letter as well.
+ */
+export function blockedReason(
+  email: string,
+  suppressions: ReadonlyMap<string, SuppressionReason>,
+  safeMode: { enabled: boolean; allowedDomains: string[] },
+): SuppressionReason | "SafeMode" | null {
+  const reason = suppressions.get(normalise(email));
+  if (reason) return reason;
+  return safeMode.enabled && !domainAllowed(email, safeMode.allowedDomains) ? "SafeMode" : null;
+}
+
+/**
  * Pure: no I/O. Members come first, then contacts, then the optional internal copy, and the first row for an address wins
  * (so a member beats a contact). An address that belongs to a member who is Off for the topic in any selected organisation (even
  * on a row the role filter drops, and whether or not members are included) is kept as `Suppressed/PreferenceOff` when it is merged
@@ -96,9 +112,8 @@ export function resolveAudience(
     }
   for (const recipient of byEmail.values()) {
     if (recipient.state !== "Queued") continue;
-    const reason = input.suppressions.get(recipient.email);
+    const reason = blockedReason(recipient.email, input.suppressions, settings.safeMode);
     if (reason) suppress(recipient, reason);
-    else if (settings.safeMode.enabled && !domainAllowed(recipient.email, settings.safeMode.allowedDomains)) suppress(recipient, "SafeMode");
   }
   const recipients = [...byEmail.values()];
   breakdown.total = recipients.length;

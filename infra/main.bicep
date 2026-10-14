@@ -310,6 +310,9 @@ resource authentication 'Microsoft.Web/sites/config@2024-04-01' = if (!empty(ent
         '/api/v1/internal/jobs/webhooks'
         '/api/v1/internal/jobs/communications'
         '/api/v1/internal/communications/events'
+        // The logo every customer mail links to (public/email). A mail reader carries no
+        // session, so the images must load without a login if Easy Auth ever gates requests again.
+        '/email/*'
         // MCP endpoint + OAuth 2.1 discovery/registration/token routes must stay
         // reachable while Easy Auth remains deployed in AllowAnonymous-transition
         // mode; each route enforces its own MCP bearer-token authorization.

@@ -87,8 +87,8 @@ export async function listSuppressions(identity: PulseIdentity): Promise<Suppres
 }
 
 export async function addSuppression(identity: PulseIdentity, input: { email: string; note?: string }) {
-  const parsed = parseInput(communicationSuppressionInputSchema, input);
   await requireInternalRole(identity, ["System admin"]);
+  const parsed = parseInput(communicationSuppressionInputSchema, input);
   await suppressAddress(parsed.email, "Manual", "Admin", parsed.note, identity.id);
   const record: SuppressionRecord = { email: parsed.email, reason: "Manual", source: "Admin", note: noteOf(parsed.note), createdAt: new Date().toISOString() };
   // Audit rows never carry the address or the note: the suppression table is the only place that PII lives.

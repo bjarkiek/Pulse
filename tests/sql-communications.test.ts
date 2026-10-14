@@ -661,6 +661,111 @@ sqlTest("SQL cancel: the waiting rows are Cancelled with the campaign, a cancell
   assert.equal((await call(communication.DELETE, "DELETE", `/api/v1/internal/communications/${three.id}`, { params: { id: three.id } })).status, 200);
 });
 
+// ---- the last campaigns: the list and safe mode at the claim, the unsubscribe group, what keeps a cancelled campaign, the message-id match ------------
+const SETTINGS_URL = "/api/v1/admin/communications/settings";
+/** The saved settings with `over` laid on top, saved through the route as the System admin. */
+const saveSettings = async (over: Record<string, unknown>) => {
+  const current = (await call(settings.GET, "GET", SETTINGS_URL)).json.item;
+  return call(settings.PATCH, "PATCH", SETTINGS_URL, { body: { ...current, ...over } });
+};
+/** A security notice (plain template) to the contacts of one company who have asked for that topic; the suite's other audiences do not have it. */
+const noticeBody = (title: string, org: string) => ({
+  templateKey: "plain", topic: "security-advisories", title,
+  content: { subject: { en: `${title} subject` }, body: { en: { title, paragraphs: ["Please read this notice."] } } },
+  audience: { organizations: [org], includeOnboarding: false, includeTestOrganizations: false, includeMembers: false, memberRoles: null, includeContacts: true, includeInternalCopy: false },
+});
+const sendNotice = async (title: string, org: string) => {
+  const created = await call(communications.POST, "POST", "/api/v1/internal/communications", { key: true, body: noticeBody(title, org) });
+  assert.equal(created.status, 201, JSON.stringify(created.json));
+  const sent = await call(send.POST, "POST", `/api/v1/internal/communications/${created.json.item.id}/send`, { params: { id: created.json.item.id }, headers: { "if-match": created.json.item.version }, key: true });
+  assert.equal(sent.status, 200, JSON.stringify(sent.json));
+  return sent.json.item;
+};
+const rowsByEmail = async (id: string) => Object.fromEntries((await deliveriesOf(id)).items.filter((d: { source: string }) => d.source !== "Test").map((d: { email: string }) => [d.email, d])) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+sqlTest("SQL settings: sending cannot go live without an unsubscribe group — 400 with its own code and nothing saved — and the audience estimate tells the staff the sending state", async () => {
+  const before = (await call(settings.GET, "GET", SETTINGS_URL)).json.item;
+  const refused = await saveSettings({ enabled: true, fromEmail: `updates@${domain}`, sandboxMode: false, unsubscribeGroupId: null, safeMode: { enabled: false, allowedDomains: [] } });
+  assert.deepEqual([refused.status, refused.json.error.code], [400, "INVALID_UNSUBSCRIBE_GROUP_REQUIRED"], JSON.stringify(refused.json));
+  assert.deepEqual((await call(settings.GET, "GET", SETTINGS_URL)).json.item, before, "nothing was saved");
+  const saved = await saveSettings({ enabled: true, fromEmail: `updates@${domain}`, sandboxMode: false, unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] } });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  assert.equal(saved.json.status.effectiveSendingState, "live");
+  const estimate = await call(audience.GET, "GET", `/api/v1/internal/communications/${one.id}/audience`, { params: { id: one.id } });
+  assert.equal(estimate.status, 200, JSON.stringify(estimate.json));
+  assert.equal(estimate.json.effectiveSendingState, "live", "the state travels with the counts");
+  assert.ok(estimate.json.item && typeof estimate.json.item.sendable === "number");
+  assert.equal((await call(audience.GET, "GET", `/api/v1/internal/communications/${one.id}/audience`, { as: people.ann, params: { id: one.id } })).status, 404, "a customer is refused, state and all");
+});
+
+sqlTest("SQL claim: an address suppressed after the freeze, and safe mode switched on after it, settle the waiting rows as Suppressed instead of being claimed — a requeued dead letter of a suppressed address included", async () => {
+  const admin = identityOf(people.admin);
+  const who = { stays: `k-stays@${domain}`, unsub: `k-unsub@${domain}`, outside: `k-outside@${otherDomain}`, dead: `k-dead@${domain}` };
+  for (const email of Object.values(who)) await saveContact(admin, { organizationId: ORG.a, email, displayName: email.split("@")[0], locale: "en", topics: ["security-advisories"] });
+  const frozen = await sendNotice(`${tag} four`, ORG.a); // sending is live with safe mode off: all four go into the audience
+  assert.equal(frozen.recipientCount, 4);
+  const rows = await rowsByEmail(frozen.id);
+  assert.deepEqual(Object.values(rows).map((d: { state: string }) => d.state), ["Queued", "Queued", "Queued", "Queued"]);
+  // One of them was dead-lettered by an earlier run; then, after the freeze, two addresses unsubscribe or report us, and safe mode is switched on.
+  await q("UPDATE dbo.CommunicationDeliveries SET state='Dead letter',attempt_count=5,last_error_code='HTTP_422' WHERE id=@id", { id: rows[who.dead].id });
+  await suppressAddress(who.unsub, "Unsubscribed", "Webhook");
+  await suppressAddress(who.dead, "SpamReport", "Webhook");
+  assert.equal((await saveSettings({ safeMode: { enabled: true, allowedDomains: [domain] } })).status, 200);
+  const retried = await call(retry.POST, "POST", `/api/v1/internal/communications/${frozen.id}/deliveries/retry`, { params: { id: frozen.id }, key: true });
+  assert.deepEqual(retried.json, { requeued: 1, reopened: false }, JSON.stringify(retried.json));
+  const first = calls.length;
+  const run = await quiet(() => processCommunicationBatch(500, { transport: stubTransport() }));
+  assert.equal(run.accepted, 1, JSON.stringify(run));
+  assert.deepEqual(run.completed, [frozen.id], "the settled rows count as done: the campaign completes in the same run");
+  assert.deepEqual(calls.slice(first).flatMap((c) => c.recipients), [who.stays], "only the address that is still allowed reached the transport");
+  const after = await rowsByEmail(frozen.id);
+  const shape = (email: string) => [after[email].state, after[email].suppressedReason ?? null, after[email].attemptCount, after[email].nextAttemptAt ?? null];
+  assert.deepEqual(shape(who.stays), ["Accepted", null, 1, null]);
+  assert.deepEqual(shape(who.unsub), ["Suppressed", "Unsubscribed", 0, null], "on the list since the freeze: settled with the list's reason");
+  assert.deepEqual(shape(who.dead), ["Suppressed", "SpamReport", 0, null], "the retry requeued it, the claim settled it before any attempt");
+  assert.deepEqual(shape(who.outside), ["Suppressed", "SafeMode", 0, null], "outside the allow-list that came after the freeze");
+  const stats = (await campaign(frozen.id)).stats;
+  assert.deepEqual({ recipients: stats.recipients, accepted: stats.accepted, suppressed: stats.suppressed }, { recipients: 1, accepted: 1, suppressed: 3 });
+  assert.equal((await campaign(frozen.id)).status, "Sent");
+});
+
+sqlTest("SQL campaign: a cancelled campaign that mailed anyone is kept, one that mailed nobody is deleted; an event is matched to its row by the exact start of the message id, an underscore included", async () => {
+  const admin = identityOf(people.admin);
+  const [a, b] = [`k-a@${domain}`, `k-b@${domain}`];
+  for (const email of [a, b]) await saveContact(admin, { organizationId: ORG.b, email, displayName: email.split("@")[0], locale: "en", topics: ["security-advisories"] });
+  const five = await sendNotice(`${tag} five`, ORG.b);
+  assert.equal(five.recipientCount, 2);
+  // The worker takes one row of the two; the provider's message id has underscores, as a base64url id does.
+  const messageId = `${tag}_ab_cd`;
+  const run = await quiet(() => processCommunicationBatch(1, { transport: stubTransport(() => ({ providerMessageId: messageId })) }));
+  assert.equal(run.accepted, 1, JSON.stringify(run));
+  const accepted = Object.values(await rowsByEmail(five.id)).find((d: { state: string }) => d.state === "Accepted") as { id: string; email: string };
+  assert.ok(accepted, "one row was accepted");
+  const t = Math.floor(Date.now() / 1000);
+  const outcome = await applyEvents([
+    // Differs from the stored id only where it has an underscore: LIKE would read that underscore as a wildcard and match the row; the exact start does not.
+    { sg_event_id: `${tag}-msg-1`, event: "delivered", email: accepted.email, timestamp: t, sg_message_id: `${tag}_abXcd.filter0001.1.1.0` },
+    { sg_event_id: `${tag}-msg-2`, event: "delivered", email: accepted.email, timestamp: t + 1, sg_message_id: `${messageId}.filter0001.1.1.0` },
+  ]);
+  assert.deepEqual(outcome, { applied: 1, ignored: 1 }, "the id with another character where the underscore is matches nothing; the real one matches");
+  assert.equal((await rowsByEmail(five.id))[accepted.email].lastEventAt !== null, true);
+  assert.equal((await rowsByEmail(five.id))[accepted.email].state, "Delivered");
+  // Cancelled with one row Delivered and the other Cancelled: it mailed somebody, so it stays.
+  const item = await campaign(five.id);
+  const cancelled = await call(cancel.POST, "POST", `/api/v1/internal/communications/${five.id}/cancel`, { params: { id: five.id }, headers: { "if-match": item.version } });
+  assert.equal(cancelled.status, 200, JSON.stringify(cancelled.json));
+  assert.deepEqual(Object.values(await rowsByEmail(five.id)).map((d: { state: string }) => d.state).sort(), ["Cancelled", "Delivered"]);
+  const refused = await call(communication.DELETE, "DELETE", `/api/v1/internal/communications/${five.id}`, { params: { id: five.id } });
+  assert.deepEqual([refused.status, refused.json.error.code], [400, "INVALID_COMMUNICATION_NOT_DELETABLE"], JSON.stringify(refused.json));
+  assert.equal((await call(communication.GET, "GET", `/api/v1/internal/communications/${five.id}`, { params: { id: five.id } })).status, 200, "it is still there, with the record of who was mailed");
+  // Cancelled before anything went out: nothing to keep.
+  const six = await sendNotice(`${tag} six`, ORG.b);
+  const cancelledSix = await call(cancel.POST, "POST", `/api/v1/internal/communications/${six.id}/cancel`, { params: { id: six.id }, headers: { "if-match": six.version } });
+  assert.equal(cancelledSix.status, 200, JSON.stringify(cancelledSix.json));
+  assert.equal((await call(communication.DELETE, "DELETE", `/api/v1/internal/communications/${six.id}`, { params: { id: six.id } })).status, 200);
+  assert.equal((await call(communication.GET, "GET", `/api/v1/internal/communications/${six.id}`, { params: { id: six.id } })).status, 404);
+});
+
 // ---- the audit trail --------------------------------------------------------------------------------------------------------------------
 sqlTest("SQL audit: the writes of the feature have their audit rows, and none of them carries a customer's address", async () => {
   const rows = await q(

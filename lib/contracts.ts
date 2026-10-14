@@ -257,7 +257,14 @@ export const communicationSettingsInputSchema = z
     categoriesPrefix: z.string().trim().regex(/^[a-z0-9-]{1,40}$/),
     boilerplate: z.object({ en: boilerplateSchema, is: boilerplateSchema }),
   })
-  .refine((v) => !v.enabled || v.fromEmail !== "", { message: "fromEmail required when enabled" });
+  .refine((v) => !v.enabled || v.fromEmail !== "", { message: "fromEmail required when enabled" })
+  // Mail sent without an unsubscribe group has no List-Unsubscribe header and no unsubscribe link (the footer leaves the link out), so the
+  // recipient could not leave. While safe mode holds sending to the allow-listed domains that is tolerable; leaving safe mode needs the group first.
+  // The message is a code: `parseInput` answers with it, and `REFUSALS` in lib/api-client.ts says it in words.
+  .refine((v) => !v.enabled || v.safeMode.enabled || v.unsubscribeGroupId !== null, {
+    message: "INVALID_UNSUBSCRIBE_GROUP_REQUIRED",
+    path: ["unsubscribeGroupId"],
+  });
 export const httpsUrl = z.string().trim().url().max(2000).refine((v) => v.startsWith("https://"));
 const emailText = (max: number) => z.string().trim().max(max);
 export const localizedTextSchema = z.object({ en: emailText(200).min(1), is: emailText(200).optional() });

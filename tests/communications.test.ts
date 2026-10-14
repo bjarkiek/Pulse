@@ -20,6 +20,7 @@ import {
   communicationCancelInputSchema,
   communicationInputSchema,
   communicationSendInputSchema,
+  communicationSettingsInputSchema,
   communicationTestSendSchema,
   productUpdateBodySchema,
 } from "../lib/contracts";
@@ -31,11 +32,11 @@ import {
   addSuppression, listSuppressions, loadSuppressionMap, releaseAddress, removeSuppression, suppressAddress,
 } from "../lib/server/communications/suppression-repository";
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
-import { domainAllowed, loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
+import { blockedReason, domainAllowed, loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
 import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
-import type { AudienceSpec, CommunicationTopic, DeliveryRecord, DeliveryState } from "../lib/server/communications/types";
+import type { AudienceSpec, CommunicationTopic, DeliveryRecord, DeliveryState, SuppressionReason } from "../lib/server/communications/types";
 import {
-  audienceEstimate, cancelCommunication, createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication,
+  audienceEstimate, cancelCommunication, createCommunication, currentSendingState, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication,
   listCommunications, listDeliveries, prefillFromRelease, previewCommunication, retryDeadLetters, sendCommunication, testSendCommunication, updateCommunication,
 } from "../lib/server/communications/campaign-repository";
 import { BACKOFF_BASE_MS, communicationStats, freezeAudience, getDeliveryStore, LEASE_MS, MAX_ATTEMPTS, requeueDeadLetters, type DeliveryStore } from "../lib/server/communications/delivery-store";
@@ -46,6 +47,8 @@ import { deliveryStatus, retryDeliveries } from "../lib/server/delivery-status";
 import { productionConfigurationErrors } from "../lib/server/production-config";
 import { makeT } from "../lib/i18n";
 import sgMail from "@sendgrid/mail";
+import { z } from "zod";
+import { parseInput } from "../lib/server/validation";
 import { sql } from "../lib/server/database";
 import { createRelease, publishRelease } from "../lib/server/operations-repository";
 import { createIdea, listInternalIdeas } from "../lib/server/product-repository";
@@ -128,6 +131,73 @@ test("settings: effective sending state reflects provider, safe mode and sandbox
   assert.equal(communicationProviderStatus({ ...live, sandboxMode: true }).effectiveSendingState, "sandbox");
   assert.equal(communicationProviderStatus({ ...live, safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] } }).effectiveSendingState, "safe-mode");
   assert.equal(communicationProviderStatus({ ...live, enabled: false }).effectiveSendingState, "disabled");
+});
+
+test("settings: sending cannot go live without an unsubscribe group — enabled with safe mode off needs one; safe mode on, or sending off, does not", async () => {
+  const live = { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } };
+  // The contract: the one issue is the group, and it names itself with a code.
+  const refused = communicationSettingsInputSchema.safeParse(live);
+  assert.ok(!refused.success, "enabled, safe mode off, no group");
+  assert.deepEqual(refused.error.issues.map((issue) => [issue.path.join("."), issue.message]), [["unsubscribeGroupId", "INVALID_UNSUBSCRIBE_GROUP_REQUIRED"]]);
+  const accepted: Array<[string, unknown]> = [
+    ["with a group", { ...live, unsubscribeGroupId: 7 }],
+    ["safe mode on, no group", { ...live, safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] } }],
+    ["sending off, safe mode off, no group", { ...live, enabled: false }],
+  ];
+  for (const [what, settings] of accepted) assert.ok(communicationSettingsInputSchema.safeParse(settings).success, what);
+  assert.ok(!communicationSettingsInputSchema.safeParse({ ...live, unsubscribeGroupId: 0 }).success, "a group is a positive id, not 0");
+  // The save: refused with the code, and nothing is stored or audited.
+  await assert.rejects(saveCommunicationSettings(ADMIN, live), { message: "INVALID_UNSUBSCRIBE_GROUP_REQUIRED" });
+  assert.equal(globalThis.pulseMemoryCommunicationSettings, undefined, "nothing was stored");
+  assert.equal(globalThis.pulseMemoryAudit?.some((a) => a.action === "communication.settings.updated") ?? false, false, "and nothing was audited");
+  // Another problem in the same body keeps the usual refusal: the code is told only when the group is all that is wrong.
+  await assert.rejects(saveCommunicationSettings(ADMIN, { ...live, fromEmail: "" }), { message: "INVALID_INPUT" });
+  const saved = await saveCommunicationSettings(ADMIN, { ...live, unsubscribeGroupId: 7 });
+  assert.deepEqual([saved.enabled, saved.safeMode.enabled, saved.unsubscribeGroupId], [true, false, 7]);
+  assert.equal((await getCommunicationSettings(ADMIN)).unsubscribeGroupId, 7);
+  // Taking the group away again while sending is live is the same refusal.
+  await assert.rejects(saveCommunicationSettings(ADMIN, { ...saved, unsubscribeGroupId: null }), { message: "INVALID_UNSUBSCRIBE_GROUP_REQUIRED" });
+  assert.equal((await getCommunicationSettings(ADMIN)).unsubscribeGroupId, 7, "the group is still there");
+});
+
+test("parseInput: a check whose message is a code gives that code when it is all that is wrong; any other issue keeps INVALID_INPUT", () => {
+  const schema = z
+    .object({ a: z.number(), b: z.string() })
+    .refine((v) => v.a > 0, { message: "INVALID_A_MUST_BE_POSITIVE" })
+    .refine((v) => v.b !== "x", { message: "b must not be x" });
+  assert.deepEqual(parseInput(schema, { a: 1, b: "y" }), { a: 1, b: "y" });
+  assert.throws(() => parseInput(schema, { a: 0, b: "y" }), { message: "INVALID_A_MUST_BE_POSITIVE" });
+  assert.throws(() => parseInput(schema, { a: 0, b: "x" }), { message: "INVALID_INPUT" }, "a plain message beside it: the generic refusal");
+  assert.throws(() => parseInput(schema, { a: "0", b: "y" }), { message: "INVALID_INPUT" }, "a wrong type is not a named check");
+  assert.throws(() => parseInput(schema, undefined), { message: "INVALID_INPUT" });
+  const loose = z.object({ a: z.number() }).refine((v) => v.a > 0, { message: "INVALID_lowercase" });
+  assert.throws(() => parseInput(loose, { a: 0 }), { message: "INVALID_INPUT" }, "only a message shaped like a code is taken for one");
+});
+
+test("settings and suppressions: a caller who may not write is refused before the input is looked at — a malformed body is FORBIDDEN, not INVALID_INPUT", async () => {
+  await assert.rejects(saveCommunicationSettings(PM, { enabled: "yes" } as never), /FORBIDDEN/);
+  await assert.rejects(saveCommunicationSettings(CONTRIBUTOR, null as never), /FORBIDDEN/);
+  await assert.rejects(addSuppression(PM, { email: "not-an-address" }), /FORBIDDEN/);
+  await assert.rejects(addSuppression(COMPANY_ADMIN, {} as never), /FORBIDDEN/);
+  await assert.rejects(saveCommunicationSettings(ADMIN, { enabled: "yes" } as never), /INVALID_INPUT/, "the System admin is told what is wrong with the same input");
+  await assert.rejects(addSuppression(ADMIN, { email: "not-an-address" }), /INVALID_INPUT/);
+  assert.equal(globalThis.pulseMemoryCommunicationSettings, undefined, "nothing was stored");
+  assert.deepEqual(await listSuppressions(ADMIN), [], "and nothing was suppressed");
+});
+
+test("sending state: every internal role reads what the worker would do now — the state the Settings card shows — and a customer is refused", async () => {
+  const everyRole = async () => [await currentSendingState(PM), await currentSendingState(CONTRIBUTOR), await currentSendingState(ADMIN)];
+  assert.deepEqual(await everyRole(), ["disabled", "disabled", "disabled"], "a new installation: sending is off");
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai" });
+  assert.deepEqual(await everyRole(), ["provider-missing", "provider-missing", "provider-missing"], "on, without a key");
+  process.env.SENDGRID_API_KEY = "SG.test";
+  assert.deepEqual(await everyRole(), ["safe-mode", "safe-mode", "safe-mode"], "with a key: only the allow-listed domains");
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", sandboxMode: true });
+  assert.equal(await currentSendingState(PM), "sandbox", "sandbox comes before safe mode: nothing is delivered");
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] } });
+  assert.deepEqual(await everyRole(), ["live", "live", "live"]);
+  assert.equal(await currentSendingState(PM), communicationProviderStatus(await getCommunicationSettings(ADMIN)).effectiveSendingState, "the value the settings route computes");
+  for (const customer of [COMPANY_ADMIN, REQUESTER]) await assert.rejects(currentSendingState(customer), /FORBIDDEN/);
 });
 
 const ctx = {
@@ -1155,7 +1225,7 @@ test("campaigns: any internal role reads, only the publish roles write, and an u
   }
 });
 
-test("campaigns: only a Draft is editable, only a Draft or Cancelled campaign is deletable, and a copy is always a fresh Draft", async () => {
+test("campaigns: only a Draft is editable, only a Draft or a Cancelled campaign that no mail left for is deletable, and a copy is always a fresh Draft", async () => {
   const created = await createCommunication(PM, draftInput);
   const stored = memoryCommunications().find((c) => c.id === created.id)!;
   for (const status of ["Scheduled", "Sending", "Sent", "Cancelled"] as const) {
@@ -1176,9 +1246,24 @@ test("campaigns: only a Draft is editable, only a Draft or Cancelled campaign is
   );
   assert.deepEqual([copy.templateKey, copy.topic, copy.content, copy.audience], [stored.templateKey, stored.topic, stored.content, stored.audience], "but all of the content");
   stored.status = "Cancelled";
+  // A cancelled campaign that mailed anyone stays: its rows are the record of who was mailed. A real row with the provider (or on its way there) or answered
+  // for keeps it; rows that never left (waiting, cancelled, failed, suppressed) and test mails to staff do not.
+  const row = (state: DeliveryState, source: "Member" | "Test" = "Member"): DeliveryRecord => ({
+    id: crypto.randomUUID(), communicationId: created.id, organizationId: "ORG-001", email: `${state.toLowerCase().replace(" ", "-")}-${source.toLowerCase()}@origo.is`,
+    displayName: null, locale: "en", source, state, attemptCount: 1, createdAt: new Date().toISOString(),
+  });
+  for (const state of ["Processing", "Accepted", "Deferred", "Delivered", "Bounced", "Dropped"] as const) {
+    memoryDeliveries().push(row(state));
+    await assert.rejects(deleteCommunication(PM, created.id), /INVALID_COMMUNICATION_NOT_DELETABLE/, `${state}: mail has left, or is leaving`);
+    assert.deepEqual([memoryCommunications().length, memoryDeliveries().length], [2, 1], `${state}: the campaign and its row are still there`);
+    memoryDeliveries().pop();
+  }
+  for (const [state, source] of [["Queued", "Member"], ["Retry", "Member"], ["Cancelled", "Member"], ["Dead letter", "Member"], ["Suppressed", "Member"], ["Accepted", "Test"], ["Delivered", "Test"]] as const)
+    memoryDeliveries().push(row(state, source));
   await deleteCommunication(PM, created.id);
   await deleteCommunication(PM, copy.id);
   assert.deepEqual(memoryCommunications(), []);
+  assert.deepEqual(memoryDeliveries(), [], "the rows of the deleted campaign went with it");
 });
 
 test("campaigns: an edit replaces template, topic, content and audience, keeps the id, creator and release link, and invalid input changes nothing", async () => {
@@ -1629,7 +1714,7 @@ test("campaigns, SQL: a duplicate commits the copy and both of its audit rows to
   });
 });
 
-test("campaigns, SQL: a delete is one guarded soft-delete with its audit row, and only a Draft or Cancelled campaign is touched", async () => {
+test("campaigns, SQL: a delete is one guarded soft-delete with its audit row, and only a Draft, or a Cancelled campaign that no mail left for, is touched", async () => {
   const softDelete: SqlAnswers = [[/^\s*UPDATE dbo\.Communications/, { rowsAffected: [1] }]];
   for (const status of ["Draft", "Cancelled"]) {
     await withFakeSql([...softDelete, ...sqlCampaign("COM-007", { status })], async (calls, events) => {
@@ -1649,6 +1734,27 @@ test("campaigns, SQL: a delete is one guarded soft-delete with its audit row, an
       assert.deepEqual([sqlWrites(calls).length, events], [0, []], `${status}: nothing is written`);
     });
   }
+  // Mail that left keeps a cancelled campaign: it is asked of the rows (real rows that are with the provider or answered for), only for a Cancelled
+  // campaign, before any unit of work is opened; a Draft is never asked.
+  const mailedRows = /SELECT TOP \(1\) 1 mailed FROM dbo\.CommunicationDeliveries d/;
+  await withFakeSql([[mailedRows, { recordset: [{ mailed: 1 }] }], ...softDelete, ...sqlCampaign("COM-007", { status: "Cancelled" })], async (calls, events) => {
+    await assert.rejects(deleteCommunication(PM, "COM-007"), /INVALID_COMMUNICATION_NOT_DELETABLE/);
+    assert.deepEqual([sqlWrites(calls).length, events], [0, []], "nothing is written and no unit of work is opened");
+    const asked = calls.filter((c) => mailedRows.test(c.text));
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].inputs.id, "COM-007");
+    assert.equal(asked[0].text.replace(/\s+/g, " ").trim(),
+      "SELECT TOP (1) 1 mailed FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.public_id=@id AND d.source<>'Test' AND d.state IN ('Processing','Accepted','Deferred','Delivered','Bounced','Dropped')",
+      "real rows only, in the states of mail that is leaving or has been answered for");
+  });
+  await withFakeSql([...softDelete, ...sqlCampaign("COM-007", { status: "Cancelled" })], async (calls) => {
+    await deleteCommunication(PM, "COM-007");
+    assert.equal(calls.filter((c) => mailedRows.test(c.text)).length, 1, "a cancelled campaign is asked once, and none of its rows is mail that left: it is deleted");
+  });
+  await withFakeSql([...softDelete, ...sqlCampaign("COM-007", { status: "Draft" })], async (calls) => {
+    await deleteCommunication(PM, "COM-007");
+    assert.equal(calls.filter((c) => mailedRows.test(c.text)).length, 0, "a draft has sent nothing, so nothing is asked");
+  });
   await withFakeSql([[/^\s*UPDATE dbo\.Communications/, { rowsAffected: [0] }], ...sqlCampaign("COM-007")], async (calls, events) => {
     await assert.rejects(deleteCommunication(PM, "COM-007"), /NOT_FOUND/, "the UPDATE matched no row");
     assert.deepEqual(events, ["begin", "rollback"]);
@@ -1683,10 +1789,10 @@ test("campaigns, demo data: with SQL configured and the demo-data switch on, cam
 });
 
 // Module scope: the worker, webhook and route tests of later tasks reuse both.
-/** Sending on: the provider key is set and the settings are enabled with safe mode off. */
+/** Sending on: the provider key is set and the settings are enabled with safe mode off, which the schema allows only with an unsubscribe group (42). */
 async function enableSending() {
   process.env.SENDGRID_API_KEY = "SG.test";
-  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] } });
 }
 /** Two organisations and four people in the audience of "all customers": bjarki, jon (ORG-001 members), anna (ORG-002 member), and cio (an Icelandic contact of ORG-001). */
 async function seedAudience() {
@@ -1846,7 +1952,7 @@ test("send: sending needs the master switch and a provider key; the estimate, ca
   await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_COMMUNICATIONS_DISABLED/, "the key alone is not enough");
   await assert.rejects(sendCommunication(PM, created.id, { scheduledAt: inAnHour() }), /INVALID_COMMUNICATIONS_DISABLED/, "scheduling is a send too");
   await assert.rejects(testSendCommunication(PM, created.id, []), /INVALID_COMMUNICATIONS_DISABLED/);
-  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] } });
   for (const key of [undefined, "", "   "]) {
     if (key === undefined) delete process.env.SENDGRID_API_KEY; else process.env.SENDGRID_API_KEY = key;
     await assert.rejects(sendCommunication(PM, created.id, {}), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, `enabled settings and key ${JSON.stringify(key)}`);
@@ -1896,7 +2002,7 @@ test("freeze: suppressed addresses are stored with their reason and not counted,
   assert.deepEqual(rows.filter((d) => d.state === "Queued").map((d) => d.email).sort(), ["anna@advania.is", "bjarki@uidata.com", "cio@origo.is"]);
   assert.ok(rows.every((d) => d.communicationId === created.id && d.attemptCount === 0 && d.createdAt), "every row belongs to the campaign and has not been tried");
   assert.deepEqual(globalThis.pulseMemoryAudit?.[0]?.after, { recipients: 3, suppressed: { Bounced: 1 } }, "the audit row carries counts, never addresses");
-  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 2 });
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 2 });
   const big = await createCommunication(PM, draftInput);
   await assert.rejects(sendCommunication(PM, big.id, {}), /INVALID_AUDIENCE_TOO_LARGE/);
   assert.deepEqual([(await getCommunication(PM, big.id)).status, memoryDeliveries().filter((d) => d.communicationId === big.id).length], ["Draft", 0], "an audience over the limit writes nothing");
@@ -2000,7 +2106,7 @@ test("promote: due scheduled campaigns freeze at that moment and start sending; 
 test("promote: a campaign that cannot be promoted stays scheduled and does not stop the others; only its id and a code are logged", async () => {
   await seedAudience();
   process.env.SENDGRID_API_KEY = "SG.test";
-  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 2 });
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] }, maxRecipientsPerCampaign: 2 });
   const big = await createCommunication(PM, draftInput); // four recipients, over the limit of two
   const small = await createCommunication(PM, { ...draftInput, audience: { ...draftInput.audience, organizations: ["ORG-002"] } }); // anna only
   for (const campaign of [big, small]) await sendCommunication(PM, campaign.id, { scheduledAt: inAnHour() });
@@ -3084,7 +3190,7 @@ test("worker: five retryable failures dead-letter; master switch off skips; dail
   await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: false });
   assert.equal((await processCommunicationBatch(500, { transport: fakeTransport().transport })).skipped, true);
   const second = await createCommunication(PM, draftInput);
-  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, dailyCap: 2 });
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] }, dailyCap: 2 });
   await sendCommunication(PM, second.id, {});
   const capped = await processCommunicationBatch(500, { transport: fakeTransport().transport });
   assert.equal(capped.capReached, true);
@@ -3378,6 +3484,173 @@ test("recoverStale: the real rows of a cancelled campaign are cancelled, not que
   const test = (await store.claimBatch(500))!;
   assert.deepEqual(test.deliveries.map((d) => d.source), ["Test"], "the Test row is claimed whatever its campaign's status is");
   assert.equal(await store.claimBatch(500), null);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The suppression list and safe mode at claim time. The freeze decides who is in the audience, but a row can wait long after it (a backoff, the
+// daily cap, a dead letter that is requeued days later), and what has happened to its address meanwhile must still hold.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The addresses a transport was handed, over all its requests. */
+const sentTo = (calls: OutboundBatch[]) => calls.flatMap((call) => call.recipients.map((r) => r.email)).sort();
+/** The real (non-test) delivery row of an address. */
+const realRow = (email: string) => memoryDeliveries().find((d) => d.email === email && d.source !== "Test")!;
+
+test("blockedReason: the suppression list's reason comes first, then safe mode, and the address is compared whatever its case — the one rule of the freeze and of the claim", () => {
+  const list = new Map<string, SuppressionReason>([["blocked@origo.is", "Bounced"]]);
+  const on = { enabled: true, allowedDomains: ["datacentral.ai"] };
+  const off = { enabled: false, allowedDomains: [] };
+  assert.equal(blockedReason("Blocked@Origo.IS", list, on), "Bounced", "on the list, in any case, and the list's reason wins over safe mode");
+  assert.equal(blockedReason("Blocked@Origo.IS", list, off), "Bounced", "with safe mode off as well");
+  assert.equal(blockedReason("someone@origo.is", list, on), "SafeMode", "not on the list, outside the allowed domains");
+  assert.equal(blockedReason("Someone@DataCentral.AI", list, on), null, "inside them, whatever the case");
+  assert.equal(blockedReason("x@datacentral.ai.attacker.com", list, on), "SafeMode", "the whole domain is compared");
+  assert.equal(blockedReason("someone@origo.is", list, off), null, "safe mode off lets an address that is not on the list through");
+  assert.equal(blockedReason("someone@origo.is", new Map(), on), "SafeMode");
+});
+
+test("claim: an address suppressed after the freeze is settled as Suppressed instead of being claimed — the transport never sees it, the others go out, the campaign completes", async () => {
+  const id = await readyCampaign(); // bjarki, jon and anna (English) and cio (Icelandic), all Queued
+  await suppressAddress("anna@advania.is", "Unsubscribed", "Webhook"); // an unsubscribe reported through another campaign, after this one was sent
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual(sentTo(calls), ["bjarki@uidata.com", "cio@origo.is", "jon@origo.is"], "anna was not handed to the transport");
+  const anna = realRow("anna@advania.is");
+  assert.deepEqual([anna.state, anna.suppressedReason, anna.attemptCount, anna.nextAttemptAt ?? null, anna.providerMessageId ?? null], ["Suppressed", "Unsubscribed", 0, null, null], "settled with the list's reason, never claimed, never sent");
+  assert.deepEqual(countByState(memoryDeliveries()), { Accepted: 3, Suppressed: 1 });
+  assert.deepEqual([result.accepted, result.completed], [3, [id]], "a Suppressed row is settled, so the campaign completes in the same run");
+  assert.equal((await getCommunication(PM, id)).status, "Sent");
+  const stats = await communicationStats(id);
+  assert.deepEqual([stats.recipients, stats.accepted, stats.suppressed], [3, 3, 1], "and the stats count it with the suppressed, not as a recipient");
+});
+
+test("claim: a campaign whose last waiting rows are all suppressed completes without a request being made", async () => {
+  const id = await readyCampaign();
+  for (const email of ["bjarki@uidata.com", "jon@origo.is", "anna@advania.is", "cio@origo.is"]) await suppressAddress(email, "SpamReport", "Webhook");
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual([calls.length, result.accepted, result.completed], [0, 0, [id]]);
+  assert.deepEqual(countByState(memoryDeliveries()), { Suppressed: 4 });
+  assert.equal((await getCommunication(PM, id)).status, "Sent");
+});
+
+test("claim: safe mode turned on after the freeze holds back the rows outside its list as Suppressed/SafeMode, and a suppression keeps its own reason", async () => {
+  const id = await readyCampaign(); // frozen with safe mode off
+  await suppressAddress("anna@advania.is", "Bounced", "Webhook"); // outside the list as well: the list's reason wins, as it does in the audience
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: true, allowedDomains: ["Origo.IS"] } });
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual(sentTo(calls), ["cio@origo.is", "jon@origo.is"], "only the allow-listed domain is mailed");
+  assert.deepEqual(["bjarki@uidata.com", "anna@advania.is"].map((email) => [realRow(email).state, realRow(email).suppressedReason]), [["Suppressed", "SafeMode"], ["Suppressed", "Bounced"]]);
+  assert.deepEqual(countByState(memoryDeliveries()), { Accepted: 2, Suppressed: 2 });
+  assert.deepEqual([result.accepted, result.completed], [2, [id]]);
+});
+
+test("claim: with safe mode off and nobody suppressed the claim settles nothing — the audience goes out whole", async () => {
+  await readyCampaign();
+  await suppressAddress("stranger@elsewhere.example", "Manual", "Admin"); // on the list, but not in this campaign
+  const { transport, calls } = fakeTransport();
+  await processCommunicationBatch(500, { transport });
+  assert.deepEqual(sentTo(calls), ["anna@advania.is", "bjarki@uidata.com", "cio@origo.is", "jon@origo.is"]);
+  assert.deepEqual(countByState(memoryDeliveries()), { Accepted: 4 });
+});
+
+test("claim: a dead letter requeued after its address was suppressed stays suppressed — a retry goes through the same claim", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const english = (await store.claimBatch(500))!; // bjarki, jon and anna are with the worker
+  await store.markFailed(english.deliveries.map((d) => d.id), "HTTP_400", null); // and come back as dead letters
+  assert.equal((await communicationStats(id)).deadLettered, 3);
+  await suppressAddress("jon@origo.is", "SpamReport", "Webhook"); // jon reports a mail from another campaign afterwards
+  assert.deepEqual(await retryDeadLetters(PM, id), { requeued: 3, reopened: false });
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual(sentTo(calls), ["anna@advania.is", "bjarki@uidata.com", "cio@origo.is"], "jon is not mailed by the retry");
+  const jon = realRow("jon@origo.is");
+  assert.deepEqual([jon.state, jon.suppressedReason, jon.attemptCount, jon.lastErrorCode ?? null], ["Suppressed", "SpamReport", 0, null], "the requeue started his attempts over, and the claim settled him before the first");
+  assert.deepEqual([result.accepted, result.completed], [3, [id]]);
+});
+
+test("claim: a Sent campaign that a retry reopens settles the dead letter whose address was suppressed meanwhile, and completes again", async () => {
+  const id = await readyCampaign();
+  await processCommunicationBatch(500, { transport: fakeTransport().transport }); // everything is accepted: the campaign is Sent
+  assert.equal((await getCommunication(PM, id)).status, "Sent");
+  Object.assign(realRow("jon@origo.is"), { state: "Dead letter", lastErrorCode: "HTTP_500", providerMessageId: null, acceptedAt: null }); // as if the provider had refused it for good
+  await suppressAddress("jon@origo.is", "Unsubscribed", "Webhook");
+  assert.deepEqual(await retryDeadLetters(PM, id), { requeued: 1, reopened: true });
+  assert.equal((await getCommunication(PM, id)).status, "Sending");
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual([calls.length, result.accepted, result.completed], [0, 0, [id]], "nothing is requested, and the reopened campaign completes again");
+  assert.deepEqual([realRow("jon@origo.is").state, realRow("jon@origo.is").suppressedReason], ["Suppressed", "Unsubscribed"]);
+  assert.equal((await getCommunication(PM, id)).status, "Sent");
+});
+
+test("claim: a row waiting for its next attempt is settled too; a Test row is not held to the list or to safe mode; a row of a campaign that is not sending is left alone", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const english = (await store.claimBatch(500))!; // bjarki, jon, anna
+  await store.markFailed([english.deliveries[0].id], "HTTP_429", new Date(Date.now() + 3_600_000)); // bjarki waits in Retry for an hour
+  await store.releaseBatch(english.deliveries.slice(1).map((d) => d.id)); // jon and anna are Queued again
+  await testSendCommunication(PM, id, []); // a test mail to pm@datacentral.ai
+  const draft = await createCommunication(PM, draftInput);
+  memoryDeliveries().push(deliveryRow(draft.id, "Queued", { email: "anna@advania.is" })); // a draft's real row: nothing claims it
+  for (const email of ["bjarki@uidata.com", "anna@advania.is", PM.email]) await suppressAddress(email, "Manual", "Admin");
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: true, allowedDomains: ["origo.is"] } });
+  const claimed: string[][] = [];
+  for (let batch = await store.claimBatch(500); batch; batch = await store.claimBatch(500)) claimed.push(batch.deliveries.map((d) => d.email));
+  assert.deepEqual(claimed, [["jon@origo.is"], ["cio@origo.is"], [PM.email]], "jon and cio are inside the list; the Test row is claimed although its address is suppressed and outside it");
+  const real = memoryDeliveries().filter((d) => d.communicationId === id && d.source !== "Test");
+  assert.deepEqual(real.map((d) => [d.email, d.state, d.suppressedReason ?? null]).sort(), [
+    ["anna@advania.is", "Suppressed", "Manual"], ["bjarki@uidata.com", "Suppressed", "Manual"], ["cio@origo.is", "Processing", null], ["jon@origo.is", "Processing", null],
+  ], "bjarki's Retry row was settled although it was not due; anna's Queued one with it");
+  assert.equal(realRow("bjarki@uidata.com").nextAttemptAt ?? null, null, "a settled row has no next attempt");
+  assert.equal(memoryDeliveries().find((d) => d.communicationId === draft.id)!.state, "Queued", "the draft's row was not touched");
+  assert.equal(memoryDeliveries().find((d) => d.source === "Test")!.state, "Processing");
+});
+
+test("worker store, SQL: a claim first settles the waiting real rows of sending campaigns — those on the suppression list in one joined statement, those outside safe mode's list by id — and then claims", async () => {
+  const stored = (safeMode: { enabled: boolean; allowedDomains: string[] }): SqlAnswers[number] => [/FROM dbo\.Settings/, { recordset: [{ value: JSON.stringify({ ...DEFAULT_COMMUNICATION_SETTINGS, safeMode }) }] }];
+  const waiting = [
+    { id: "AAAAAAAA-0000-4000-8000-000000000001", email: "inside@datacentral.ai" },
+    { id: "AAAAAAAA-0000-4000-8000-000000000002", email: "Mixed.Case@DataCentral.AI" },
+    { id: "AAAAAAAA-0000-4000-8000-000000000003", email: "out@evil-datacentral.ai" },
+    { id: "AAAAAAAA-0000-4000-8000-000000000004", email: "out@datacentral.ai.attacker.com" },
+    { id: "AAAAAAAA-0000-4000-8000-000000000005", email: "out@origo.is" },
+  ];
+  const readWaiting = /^SELECT CAST\(d\.id AS nvarchar\(36\)\) id,d\.email/;
+  const kinds = (calls: SqlCall[]) => calls.map((c) =>
+    /JOIN dbo\.CommunicationSuppressions s ON s\.email=d\.email/.test(c.text) ? "list" : /FROM dbo\.Settings/.test(c.text) ? "settings" : readWaiting.test(c.text) ? "waiting"
+      : /suppressed_reason='SafeMode'/.test(c.text) ? "safe-mode" : /WITH next_campaign AS/.test(c.text) ? "claim" : "other");
+  const text = (call: SqlCall) => call.text.replace(/\s+/g, " ").trim();
+  await withFakeSql([stored({ enabled: true, allowedDomains: ["DataCentral.AI"] }), [readWaiting, { recordset: waiting }], [/WITH next_campaign AS/, { recordset: [] }]], async (calls) => {
+    assert.equal(await getDeliveryStore().claimBatch(5), null);
+    assert.deepEqual(kinds(calls), ["list", "settings", "waiting", "safe-mode", "claim"], "the list first, then the settings, the waiting rows, the rows outside safe mode, and last the claim");
+    assert.ok(calls.every((c) => !c.inTransaction), "each statement stands on its own: the claim cannot run in a unit of work");
+    const [bySuppression, , read, bySafeMode] = calls;
+    assert.equal(text(bySuppression),
+      "UPDATE d SET state='Suppressed',suppressed_reason=s.reason,next_attempt_at=NULL FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id AND c.deleted_at IS NULL AND c.status='Sending' JOIN dbo.CommunicationSuppressions s ON s.email=d.email WHERE d.state IN ('Queued','Retry') AND d.source<>'Test'",
+      "an address on the list: its reason, no next attempt; only real rows that are waiting, of a live campaign that is sending");
+    assert.match(text(read), /c\.status='Sending' WHERE d\.state IN \('Queued','Retry'\) AND d\.source<>'Test'$/, "the waiting real rows of sending campaigns");
+    assert.deepEqual(JSON.parse(String(bySafeMode.inputs.ids)), [waiting[2].id, waiting[3].id, waiting[4].id], "the rows outside the list, by the rule the audience uses: the whole domain, whatever its case");
+    assert.equal(text(bySafeMode), "UPDATE dbo.CommunicationDeliveries SET state='Suppressed',suppressed_reason='SafeMode',next_attempt_at=NULL WHERE state IN ('Queued','Retry') AND source<>'Test' AND id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))", "and a row that was claimed or settled in between is left alone");
+  });
+  // Safe mode off: the list is all that is asked before the claim.
+  await withFakeSql([stored({ enabled: false, allowedDomains: [] }), [readWaiting, { recordset: waiting }], [/WITH next_campaign AS/, { recordset: [] }]], async (calls) => {
+    assert.equal(await getDeliveryStore().claimBatch(5), null);
+    assert.deepEqual(kinds(calls), ["list", "settings", "claim"]);
+  });
+  // Safe mode on and every waiting row inside the list: nothing is updated by id.
+  await withFakeSql([stored({ enabled: true, allowedDomains: ["datacentral.ai"] }), [readWaiting, { recordset: waiting.slice(0, 2) }], [/WITH next_campaign AS/, { recordset: [] }]], async (calls) => {
+    assert.equal(await getDeliveryStore().claimBatch(5), null);
+    assert.deepEqual(kinds(calls), ["list", "settings", "waiting", "claim"]);
+  });
+  // More rows outside the list than one statement takes are settled in pieces of 1000.
+  const many = Array.from({ length: 2500 }, (_, n) => ({ id: `AAAAAAAA-0000-4000-8000-${String(n).padStart(12, "0")}`, email: `out${n}@origo.is` }));
+  await withFakeSql([stored({ enabled: true, allowedDomains: ["datacentral.ai"] }), [readWaiting, { recordset: many }], [/WITH next_campaign AS/, { recordset: [] }]], async (calls) => {
+    assert.equal(await getDeliveryStore().claimBatch(5), null);
+    assert.deepEqual(calls.filter((c) => /suppressed_reason='SafeMode'/.test(c.text)).map((c) => (JSON.parse(String(c.inputs.ids)) as string[]).length), [1000, 1000, 500]);
+  });
 });
 
 test("worker store, SQL: a claim keeps Test and real rows apart where it picks and where it claims, and leases what it takes", async () => {
@@ -4188,6 +4461,8 @@ test("webhook, SQL: the delivery update moves the state only forward, touches on
     assert.match(text, /state=CASE WHEN @state IS NOT NULL AND @rank>=\(CASE state WHEN 'Accepted' THEN 1 .* ELSE 0 END\) THEN @state ELSE state END,/, "a state is set when the event has one that weighs at least what the row's does (a row still Processing has no rank: ELSE 0)");
     assert.match(text, /\)\s+AND \(state IN \('Accepted','Deferred','Delivered','Bounced','Dropped'\) OR \(state='Processing' AND @rank>=3\)\)\s*$/, "and only a row the provider accepted is touched, or one still Processing when the event is a verdict");
     assert.match(text, /WHERE \(\(@delivery IS NOT NULL AND id=@delivery\) OR \(@delivery IS NULL AND @message IS NOT NULL/, "the correlation is grouped, so the state condition applies to both ways of finding the row");
+    assert.match(text, /provider_message_id IS NOT NULL AND email=@email AND LEFT\(@message,LEN\(provider_message_id\)\)=provider_message_id\)\)/, "without a delivery id the row is found by the stored message id being the start of the event's, compared exactly");
+    assert.doesNotMatch(text, /LIKE/, "and not with LIKE: a base64url message id carries `_`, which LIKE reads as a wildcard");
   });
 });
 

@@ -102,8 +102,8 @@ export async function getCommunicationSettings(identity: PulseIdentity) {
 }
 
 export async function saveCommunicationSettings(identity: PulseIdentity, input: CommunicationSettings) {
-  const parsed = parseInput(communicationSettingsInputSchema, input) as CommunicationSettings;
   await requireInternalRole(identity, ["System admin"]);
+  const parsed = parseInput(communicationSettingsInputSchema, input) as CommunicationSettings;
   const saved: CommunicationSettings = {
     ...parsed,
     safeMode: { ...parsed.safeMode, allowedDomains: [...new Set(parsed.safeMode.allowedDomains)] },

@@ -176,7 +176,12 @@ export function CommunicationSettingsCard({
           </select>
         </label>
         <label className="form-field">
-          <span>{t("Unsubscribe group id (ASM)")}</span>
+          <span>
+            {t("Unsubscribe group id (ASM)")}
+            <em className="field-hint">
+              {t("Required once safe mode is off")}
+            </em>
+          </span>
           <input
             type="number"
             min="1"

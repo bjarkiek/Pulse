@@ -299,10 +299,10 @@ let keyCounter = 0;
 const freshKey = () => `route-test-key-${++keyCounter}`;
 const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
 const ADMIN: PulseIdentity = { id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com", name: "Bjarki", organizationId: "ORG-INTERNAL", role: "System admin", isInternal: true };
-/** Sending on: the provider key is set and the settings are enabled with safe mode off. A System admin saves them here through the repository; the settings route has tests of its own further down. */
+/** Sending on: the provider key is set and the settings are enabled with safe mode off, which the schema allows only with an unsubscribe group (42). A System admin saves them here through the repository; the settings route has tests of its own further down. */
 async function enableSending() {
   process.env.SENDGRID_API_KEY = "SG.test";
-  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", unsubscribeGroupId: 42, safeMode: { enabled: false, allowedDomains: [] } });
 }
 const ifMatch = (version?: string): Record<string, string> => (version === undefined ? {} : { "if-match": version });
 async function createDraft(over: Record<string, unknown> = {}): Promise<CampaignItem> {
@@ -1282,6 +1282,72 @@ test("openapi: the settings operations are documented behind the System admin ro
   assert.deepEqual(response.properties.status.properties.effectiveSendingState.enum, ["disabled", "provider-missing", "sandbox", "safe-mode", "live"]);
   const answer = configurationTest.post.responses["200"].content["application/json"].schema;
   assert.deepEqual([answer.required, answer.properties.transport.enum], [["ok", "transport", "providerMessageId"], ["sendgrid", "console"]]);
+  assert.match(settings.patch.description, /INVALID_UNSUBSCRIBE_GROUP_REQUIRED/, "the save says when it needs an unsubscribe group");
+});
+
+test("settings routes: sending cannot go live without an unsubscribe group — a 400 with its own code and nothing saved; with a group, or with safe mode on, it saves", async () => {
+  const live = settingsBody({ enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+  assert.deepEqual(await refusal(await settingsPatch(send("PATCH", SETTINGS, live))), [400, "INVALID_UNSUBSCRIBE_GROUP_REQUIRED"]);
+  assert.deepEqual((await (await settingsGet(send("GET", SETTINGS))).json()).item, DEFAULT_COMMUNICATION_SETTINGS, "nothing was saved");
+  assert.equal(auditCount("communication.settings.updated"), 0, "and nothing was audited");
+  assert.deepEqual(await refusal(await settingsPatch(send("PATCH", SETTINGS, { ...live, fromEmail: "" }))), [400, "INVALID_INPUT"], "a body with something else wrong in it keeps the usual refusal");
+  assert.equal((await settingsPatch(send("PATCH", SETTINGS, { ...live, unsubscribeGroupId: 42 }))).status, 200, "with a group");
+  assert.equal((await settingsPatch(send("PATCH", SETTINGS, { ...live, safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] } }))).status, 200, "and with safe mode on, no group is needed");
+  assert.equal(auditCount("communication.settings.updated"), 2);
+});
+
+test("settings routes: the audience estimate carries the effective sending state beside its counts — the settings' own value, for the sender who cannot read the settings", async () => {
+  const draft = await createDraft();
+  const estimate = async () => {
+    const response = await audienceGet(send("GET", `${CAMPAIGNS}/${draft.id}/audience`), forCampaign(draft.id));
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const reported = async () => (await (await settingsGet(send("GET", SETTINGS))).json()).status.effectiveSendingState;
+  const save = async (over: Record<string, unknown>) => assert.equal((await settingsPatch(send("PATCH", SETTINGS, settingsBody({ fromEmail: "updates@datacentral.ai", ...over })))).status, 200);
+  const first = await estimate();
+  assert.deepEqual(Object.keys(first).sort(), ["effectiveSendingState", "item"], "the counts, and beside them the state");
+  assert.deepEqual(first.item, { organizations: 1, members: 1, contacts: 0, internal: 0, suppressed: { SafeMode: 1 }, total: 1, sendable: 0 }, "the counts are as they were: safe mode is on in a new installation, and the demo admin's domain is not on its list");
+  assert.deepEqual([first.effectiveSendingState, await reported()], ["disabled", "disabled"], "a new installation: sending is off");
+  await save({ enabled: true });
+  assert.deepEqual([(await estimate()).effectiveSendingState, await reported()], ["provider-missing", "provider-missing"], "on, without a key");
+  process.env.SENDGRID_API_KEY = "SG.route-test-key-0123456789";
+  assert.deepEqual([(await estimate()).effectiveSendingState, await reported()], ["safe-mode", "safe-mode"], "with a key: held to the allow-list");
+  await save({ enabled: true, sandboxMode: true });
+  assert.deepEqual([(await estimate()).effectiveSendingState, await reported()], ["sandbox", "sandbox"], "nothing delivered");
+  await save({ enabled: true, unsubscribeGroupId: 7, safeMode: { enabled: false, allowedDomains: [] } });
+  assert.deepEqual([(await estimate()).effectiveSendingState, await reported()], ["live", "live"]);
+  assert.ok(!JSON.stringify(await estimate()).includes("route-test-key"), "the state says nothing of the key");
+});
+
+test("routes: a caller who may not write is told 404 whatever the body is — the settings and the suppression list are authorised before the body is validated", async () => {
+  const token = await createSessionToken({ sub: "22222222-2222-4222-8222-222222222222", email: "jon@origo.is", name: "Jón Jónsson", ext: "dev:test", amr: "dev" });
+  const as = { authorization: `Bearer ${token}` };
+  const refused = [
+    await settingsPatch(send("PATCH", SETTINGS, { enabled: "yes" }, as)),
+    await settingsPatch(send("PATCH", SETTINGS, {}, as)),
+    await suppressionsPost(send("POST", SUPPRESSIONS, { email: "not-an-address" }, as)),
+    await suppressionsPost(send("POST", SUPPRESSIONS, {}, as)),
+  ];
+  assert.deepEqual(refused.map((response) => response.status), [404, 404, 404, 404]);
+  for (const response of refused) assert.equal((await response.json()).error.code, "FORBIDDEN");
+  assert.deepEqual(await refusal(await settingsPatch(send("PATCH", SETTINGS, { enabled: "yes" }))), [400, "INVALID_INPUT"], "the System admin is told what is wrong with the same body");
+  assert.deepEqual(await refusal(await suppressionsPost(send("POST", SUPPRESSIONS, { email: "not-an-address" }))), [400, "INVALID_INPUT"]);
+  assert.equal(auditCount("communication.settings.updated"), 0);
+  assert.deepEqual((await (await suppressionsGet(send("GET", SUPPRESSIONS))).json()).items, []);
+});
+
+test("openapi: the audience estimate documents its counts and the effective sending state it carries beside them, for every internal role", () => {
+  const spec = JSON.parse(readFileSync(new URL("../public/openapi.json", import.meta.url), "utf8"));
+  const operation = spec.paths["/api/v1/internal/communications/{id}/audience"].get;
+  assert.ok(operation.summary && operation.description, "curated: it says what it does");
+  assert.match(operation.description, /Any internal role/);
+  assert.deepEqual(operation.responses["200"].content["application/json"].schema, { $ref: "#/components/schemas/CommunicationAudienceEstimateResponse" });
+  const schema = spec.components.schemas.CommunicationAudienceEstimateResponse;
+  assert.deepEqual(schema.required, ["item", "effectiveSendingState"]);
+  assert.deepEqual(schema.properties.effectiveSendingState.enum, ["disabled", "provider-missing", "sandbox", "safe-mode", "live"]);
+  assert.deepEqual(Object.keys(schema.properties.item.properties).sort(), ["contacts", "internal", "members", "organizations", "sendable", "suppressed", "total"]);
+  assert.deepEqual(schema.properties.item.required.slice().sort(), Object.keys(schema.properties.item.properties).sort());
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1462,7 +1528,8 @@ const REFUSAL_SENTENCES: Array<[string, string]> = [
   ["INVALID_CONTACT_EXISTS", "That address is already on this company's list."],
   ["INVALID_INPUT", "Some fields are missing or invalid."],
   ["INVALID_COMMUNICATION_NOT_EDITABLE", "This communication is no longer a draft and cannot be edited."],
-  ["INVALID_COMMUNICATION_NOT_DELETABLE", "Only drafts and cancelled communications can be deleted."],
+  ["INVALID_COMMUNICATION_NOT_DELETABLE", "Only drafts, and cancelled communications that sent nothing, can be deleted."],
+  ["INVALID_UNSUBSCRIBE_GROUP_REQUIRED", "Set the SendGrid unsubscribe group before leaving safe mode."],
   ["INVALID_TEMPLATE", "Unknown template."],
 ];
 

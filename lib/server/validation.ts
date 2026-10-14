@@ -70,9 +70,18 @@ function validateStructure(value: unknown, depth = 0) {
     }
   }
 }
+/** A check of a schema can say why it refused by making its message a code like this one; `apiError` echoes it as the 400's code. */
+const REFUSAL_CODE = /^INVALID_[A-Z0-9]+(?:_[A-Z0-9]+)*$/;
+/**
+ * The parsed value, or INVALID_INPUT. When every issue of the refusal is a check that named itself with a code (see `REFUSAL_CODE`), the first of
+ * those codes is thrown instead, so a caller can tell the person what to do; a refusal with any other issue in it stays the generic INVALID_INPUT.
+ */
 export function parseInput<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
-  if (!result.success) throw new Error("INVALID_INPUT");
+  if (!result.success) {
+    const { issues } = result.error;
+    throw new Error(issues.length > 0 && issues.every((issue) => REFUSAL_CODE.test(issue.message)) ? issues[0].message : "INVALID_INPUT");
+  }
   return result.data;
 }
 export const emailSchema = z.string().trim().toLowerCase().max(320).email();

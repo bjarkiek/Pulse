@@ -77,7 +77,7 @@
       "patch": {
         "operationId": "saveCommunicationSettings",
         "summary": "Save the customer communications settings",
-        "description": "System admin only. Replaces the settings with the whole object in the body, validated and normalised (addresses and domains in lower case, repeated domains dropped). fromEmail is required while sending is enabled. Writes the audit event communication.settings.updated with the settings before and after. Answers like the GET.",
+        "description": "System admin only. Replaces the settings with the whole object in the body, validated and normalised (addresses and domains in lower case, repeated domains dropped). fromEmail is required while sending is enabled, and so is unsubscribeGroupId unless safe mode is on (400 INVALID_UNSUBSCRIBE_GROUP_REQUIRED). Writes the audit event communication.settings.updated with the settings before and after. Answers like the GET.",
         "responses": {
           "200": {
             "description": "The settings as saved, and their status.",
@@ -1689,9 +1689,26 @@
     "/api/v1/internal/communications/{id}/audience": {
       "get": {
         "operationId": "communicationAudienceEstimate",
+        "summary": "Estimate who a send would reach",
+        "description": "Any internal role. Resolves the audience the campaign would be frozen with now and answers with its counts, never an address; nothing is written. Beside the counts it carries effectiveSendingState, what the worker would do with the send now (the state the Settings card shows, which only a System admin can read there), so the person who sends sees that sending is off, in sandbox or held to safe mode before pressing Send. 400 INVALID_AUDIENCE_TOO_LARGE when the audience is over the recipient limit; an audience nobody belongs to is reported with a total of 0.",
         "responses": {
           "200": {
-            "$ref": "#/components/responses/Ok"
+            "description": "The counts of the audience and the effective sending state.",
+            "headers": {
+              "x-correlation-id": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunicationAudienceEstimateResponse"
+                }
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -5772,6 +5789,71 @@
                 "description": "What the worker would do now: disabled (the switch is off), provider-missing (on, but no API key), sandbox (SendGrid validates and delivers nothing), safe-mode (only allow-listed domains), live."
               }
             }
+          }
+        }
+      },
+      "CommunicationAudienceEstimateResponse": {
+        "type": "object",
+        "required": [
+          "item",
+          "effectiveSendingState"
+        ],
+        "properties": {
+          "item": {
+            "type": "object",
+            "required": [
+              "organizations",
+              "members",
+              "contacts",
+              "internal",
+              "suppressed",
+              "total",
+              "sendable"
+            ],
+            "properties": {
+              "organizations": {
+                "type": "integer",
+                "description": "Companies the audience covers."
+              },
+              "members": {
+                "type": "integer",
+                "description": "Rows that come from Pulse users."
+              },
+              "contacts": {
+                "type": "integer",
+                "description": "Rows that come from a company's contact list."
+              },
+              "internal": {
+                "type": "integer",
+                "description": "Rows that come from the internal staff copy."
+              },
+              "suppressed": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "description": "Rows that will not be mailed, counted by reason (PreferenceOff, SafeMode, Unsubscribed, Bounced, SpamReport, Manual)."
+              },
+              "total": {
+                "type": "integer",
+                "description": "Every row, the suppressed ones included."
+              },
+              "sendable": {
+                "type": "integer",
+                "description": "Rows that would be mailed."
+              }
+            }
+          },
+          "effectiveSendingState": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "provider-missing",
+              "sandbox",
+              "safe-mode",
+              "live"
+            ],
+            "description": "What the worker would do now: disabled (the switch is off), provider-missing (on, but no API key), sandbox (SendGrid validates and delivers nothing), safe-mode (only allow-listed domains), live."
           }
         }
       },

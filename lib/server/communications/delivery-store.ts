@@ -1,7 +1,8 @@
 import { atomicSql, getSqlPool, isContentSqlActive, sql } from "../database";
-import { loadAudienceInput, resolveAudience, type AudienceBreakdown } from "./audience";
+import { blockedReason, domainAllowed, loadAudienceInput, resolveAudience, type AudienceBreakdown } from "./audience";
 import { memoryCommunications, memoryDeliveries } from "./memory";
 import { getRuntimeCommunicationSettings } from "./settings";
+import { loadSuppressionMap } from "./suppression-repository";
 import type { CommunicationContent, CommunicationStats, CommunicationTopic, DeliveryRecord, DeliverySource, EmailLocale, TemplateKey } from "./types";
 
 // Deliveries follow the content switch (`isContentSqlActive`) like the campaigns they belong to: with "Show demo data" on, a campaign, its
@@ -23,7 +24,7 @@ export type ClaimedBatch = { communicationId: string; templateKey: TemplateKey; 
 export type DeliveryStore = {
   promoteScheduled(now: Date): Promise<string[]>;          // Scheduled & due → freezeAudience → ids now Sending/Sent
   recoverStale(now: Date): Promise<number>;                // Processing whose lease ran out (next_attempt_at < now; SQL: by its own clock) → Retry, attempts kept (used up → Dead letter LEASE_EXPIRED); a Cancelled campaign's real rows → Cancelled; how many
-  claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale, Test rows or real rows (never both); Test rows claimable regardless of campaign status; leases what it takes
+  claimBatch(size: number): Promise<ClaimedBatch | null>;  // first settles the waiting real rows of Sending campaigns whose address was suppressed since the freeze, or that safe mode now excludes, as Suppressed (never claimed); then one campaign, one locale, Test rows or real rows (never both); Test rows claimable regardless of campaign status; leases what it takes
   markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>; // the provider took the request: a row still Processing → Accepted, a row that moved on meanwhile (the webhook, a lapsed lease) keeps its state; every row named gets the message id and the time
   markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // a row still Processing: null → Dead letter, else Retry, a row of a Cancelled campaign → Cancelled; a row that moved on meanwhile (the webhook, a lapsed lease) keeps its state; every row named gets the code
   releaseBatch(ids: string[]): Promise<void>;              // claimed rows given back unused: Processing → Queued, one attempt less, no lease (a Cancelled campaign's real rows → Cancelled)
@@ -31,6 +32,55 @@ export type DeliveryStore = {
   completeCampaigns(now: Date): Promise<string[]>;         // Sending with no Queued/Retry/Processing non-test rows → Sent
 };
 const OPEN = new Set(["Queued", "Retry", "Processing"]);
+
+/**
+ * The check the freeze made, made again when the worker is about to claim. A row that has been waiting since the freeze (Queued, or Retry after a
+ * failure, a backoff or a requeued dead letter) is not sent if its address has been suppressed meanwhile (an unsubscribe reported through another
+ * campaign, a bounce, an admin's block) or if safe mode now leaves its domain out: it is settled as Suppressed, with the reason the audience resolver
+ * gives for the same case (`blockedReason`), and no claim can take it. `completeCampaigns` counts a Suppressed row as settled, so a campaign whose
+ * last waiting rows end here completes in the same run.
+ * Real rows of a campaign that is Sending only. A test mail goes to the staff the sender named and was never held to the list or to safe mode; it is
+ * claimed whatever the campaign is, so it is not settled here either.
+ */
+async function settleBlockedInMemory() {
+  const sending = new Set(memoryCommunications().filter((c) => c.status === "Sending").map((c) => c.id));
+  const waiting = memoryDeliveries().filter((d) => d.source !== "Test" && ["Queued", "Retry"].includes(d.state) && sending.has(d.communicationId));
+  if (!waiting.length) return;
+  const suppressions = await loadSuppressionMap();
+  const { safeMode } = await getRuntimeCommunicationSettings();
+  for (const d of waiting) {
+    const reason = blockedReason(d.email, suppressions, safeMode);
+    if (reason) Object.assign(d, { state: "Suppressed", suppressedReason: reason, nextAttemptAt: null });
+  }
+}
+
+/**
+ * SQL twin of `settleBlockedInMemory`, in statements of their own (the claim itself cannot run in a unit of work: READPAST), each one atomic. The
+ * suppression list is joined in the statement, so no address leaves the database for it; the campaign is read with locks (READCOMMITTEDLOCK), so a
+ * cancel that is committing is waited for and its rows are not settled twice. Safe mode is asked of `domainAllowed`, the rule the audience uses, and
+ * only when it is on: the waiting rows are read, those outside the list are settled by id, and a row that was claimed or settled in between is left
+ * alone (the second statement checks the state again).
+ */
+async function settleBlockedInSql() {
+  const pool = await getSqlPool();
+  await pool.request().query(`UPDATE d SET state='Suppressed',suppressed_reason=s.reason,next_attempt_at=NULL
+    FROM dbo.CommunicationDeliveries d
+    JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id AND c.deleted_at IS NULL AND c.status='Sending'
+    JOIN dbo.CommunicationSuppressions s ON s.email=d.email
+    WHERE d.state IN ('Queued','Retry') AND d.source<>'Test'`);
+  const { safeMode } = await getRuntimeCommunicationSettings();
+  if (!safeMode.enabled) return;
+  const waiting = await pool.request().query(`SELECT CAST(d.id AS nvarchar(36)) id,d.email
+    FROM dbo.CommunicationDeliveries d
+    JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id AND c.deleted_at IS NULL AND c.status='Sending'
+    WHERE d.state IN ('Queued','Retry') AND d.source<>'Test'`);
+  const outside = waiting.recordset.filter((row) => !domainAllowed(String(row.email), safeMode.allowedDomains)).map((row) => String(row.id));
+  if (!outside.length) return;
+  for (let i = 0; i < outside.length; i += 1000)
+    await pool.request().input("ids", sql.NVarChar(sql.MAX), JSON.stringify(outside.slice(i, i + 1000)))
+      .query(`UPDATE dbo.CommunicationDeliveries SET state='Suppressed',suppressed_reason='SafeMode',next_attempt_at=NULL
+        WHERE state IN ('Queued','Retry') AND source<>'Test' AND id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))`);
+}
 
 /**
  * Resolves the audience of a Draft or Scheduled campaign and writes it: one delivery row per recipient (suppressed ones too, so the review can
@@ -130,6 +180,7 @@ const memoryStore: DeliveryStore = {
   async claimBatch(size) {
     const take = Math.floor(size);
     if (!(take >= 1)) return null;
+    await settleBlockedInMemory();
     const now = Date.now();
     const campaigns = new Map(memoryCommunications().map((c) => [c.id, c]));
     const candidates = memoryDeliveries().filter((d) => {
@@ -219,6 +270,7 @@ const sqlStore: DeliveryStore = {
   async claimBatch(size) {
     const take = Math.floor(size);
     if (!(take >= 1)) return null;
+    await settleBlockedInSql();
     // Which rows may be claimed is decided in three places, all the same: a row of a live campaign that is Sending, or a Test row of any live
     // campaign (a deleted draft's test mail is never sent). `next_campaign` picks the campaign and locale; `next_items` fills the TOP from rows that
     // can be claimed, so rows that cannot (whatever left them waiting) never crowd out those that can; the closing WHERE is what claims a row.
@@ -324,6 +376,22 @@ export async function communicationStats(publicId: string): Promise<Communicatio
   // In a fixed order, so the table does not reshuffle between two reads (SQL gives no order to rows it was not asked to order).
   stats.byOrganization = [...byOrg.values()].sort((a, b) => (a.organizationId < b.organizationId ? -1 : a.organizationId > b.organizationId ? 1 : 0));
   return stats;
+}
+
+/** The states of a real row once mail is with the provider or has been answered for: Processing is on its way, the others are what the provider (and its events) made of it. */
+const MAIL_OUT_STATES = ["Processing", "Accepted", "Deferred", "Delivered", "Bounced", "Dropped"];
+
+/**
+ * Whether mail has left for the campaign, or may be leaving: a real row (a test mail is for staff and does not count) that is with the provider or has
+ * been answered for. The rows are the record of who was mailed (spec §11), so a campaign that has any is kept, not deleted. A cancelled campaign has
+ * no row left for the worker to claim, so a row that is not Processing now cannot become one later.
+ */
+export async function hasMailedRows(publicId: string): Promise<boolean> {
+  if (!isContentSqlActive()) return memoryDeliveries().some((d) => d.communicationId === publicId && d.source !== "Test" && MAIL_OUT_STATES.includes(d.state));
+  const result = await (await getSqlPool()).request().input("id", sql.NVarChar(32), publicId).query(
+    `SELECT TOP (1) 1 mailed FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id
+     WHERE c.public_id=@id AND d.source<>'Test' AND d.state IN (${MAIL_OUT_STATES.map((state) => `'${state}'`).join(",")})`);
+  return result.recordset.length > 0;
 }
 
 export async function insertTestDeliveries(publicId: string, recipients: Array<{ email: string; displayName: string; locale: EmailLocale }>): Promise<number> {

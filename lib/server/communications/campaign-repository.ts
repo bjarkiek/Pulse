@@ -9,9 +9,9 @@ import { listInternalIdeas } from "../product-repository";
 import { parseInput } from "../validation";
 import { addVersions } from "../versions";
 import { loadAudienceInput, resolveAudience, type AudienceBreakdown } from "./audience";
-import { cancelOpenDeliveries, communicationStats, freezeAudience, insertTestDeliveries, listDeliveryRows, requeueDeadLetters } from "./delivery-store";
+import { cancelOpenDeliveries, communicationStats, freezeAudience, hasMailedRows, insertTestDeliveries, listDeliveryRows, requeueDeadLetters } from "./delivery-store";
 import { memoryAuditEvent, memoryCommunications, memoryDeliveries, nextMemoryPublicId } from "./memory";
-import { communicationProviderStatus, getRuntimeCommunicationSettings } from "./settings";
+import { communicationProviderStatus, getRuntimeCommunicationSettings, type SendingState } from "./settings";
 import { renderCommunication, type RenderedEmail } from "./templates/index";
 import type { CommunicationRecord, CommunicationStats, EmailLocale } from "./types";
 
@@ -227,10 +227,15 @@ export async function duplicateCommunication(identity: PulseIdentity, id: string
   });
 }
 
+/**
+ * A Draft, or a Cancelled campaign that no mail left for. The soft delete hides a campaign from the list and the detail, and the delivery rows of
+ * a campaign that mailed anyone are the answer to "who received COM-012", so such a campaign stays (INVALID_COMMUNICATION_NOT_DELETABLE).
+ */
 export async function deleteCommunication(identity: PulseIdentity, id: string) {
   await requirePublishRole(identity);
   const current = await loadOne(id);
   if (!["Draft", "Cancelled"].includes(current.status)) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
+  if (current.status === "Cancelled" && (await hasMailedRows(id))) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
   if (!isContentSqlActive()) {
     const store = memoryCommunications();
     store.splice(store.findIndex((c) => c.id === id), 1);
@@ -282,6 +287,16 @@ export async function audienceEstimate(identity: PulseIdentity, id: string): Pro
   const item = await loadOne(id);
   const settings = await getRuntimeCommunicationSettings();
   return resolveAudience(item.audience, item.topic, await loadAudienceInput(item.topic), settings).breakdown;
+}
+
+/**
+ * What the worker would do with a send now: disabled, provider-missing, sandbox, safe-mode or live. It says nothing of the key or of the sender, so every
+ * internal role may read it (the settings themselves are for System admins): the person who presses Send sees, before they do, that the mail would go
+ * nowhere, or only to the allow-listed domains.
+ */
+export async function currentSendingState(identity: PulseIdentity): Promise<SendingState> {
+  await requireInternalRole(identity);
+  return communicationProviderStatus(await getRuntimeCommunicationSettings()).effectiveSendingState;
 }
 
 /**
