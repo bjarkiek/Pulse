@@ -48,3 +48,6 @@ infra/azure-env.*.json
 
 # Git worktrees that Claude Code creates for isolated branches; never commit them
 /.claude/worktrees/
+
+# Office lock files
+~$*
