@@ -38,27 +38,42 @@ import * as preferences from "../app/api/v1/notifications/preferences/route";
 // worker and the retention batch work on the whole database, though: the suite refuses to start when the database already has a communication in
 // flight, and skips the retention case when it holds attachments, but it belongs on a database nobody else uses.
 const enabled = process.env.PULSE_SQL_TEST === "1";
-const tag = randomUUID().slice(0, 8);
-const domain = `${tag}.example`;
-const otherDomain = `${tag}-other.example`;
-const ORG = { internal: `t18i-${tag}`, a: `t18a-${tag}`, b: `t18b-${tag}`, test: `t18t-${tag}` };
 
 type Person = { id: string; email: string; name: string; org: string; locale: "en" | "is" };
-const person = (name: string, org: string, locale: "en" | "is" = "en"): Person => ({ id: randomUUID(), email: `${name}@${domain}`, name, org, locale });
-// admin is a System admin of the internal company and also a Company admin of company A (like the seeded admin of the development seed).
-const people = {
-  admin: person("admin", ORG.internal),
-  adminOfA: undefined as unknown as Person, // the same user, signed in to company A
-  ben: person("ben", ORG.b, "is"), // Company admin of B, prefers Icelandic
-  ann: person("ann", ORG.b), // Requester of B
-  carl: person("carl", ORG.b), // Requester of B
-  tess: person("tess", ORG.test), // Requester of the test company
-};
-people.adminOfA = { ...people.admin, org: ORG.a };
-const userIds = [people.admin.id, people.ben.id, people.ann.id, people.carl.id, people.tess.id];
+type SettingsRow = { value_json: string; version: number; updated_by_user_id: string | null; updated_at: Date };
+
+/**
+ * What one run of the suite is made of: a random tag, its companies and its people, and what `cleanup` needs to put the database right. The suite has one
+ * (`main`, made ready by `before` and cleared away by `after`); the last case makes a second one, to see what a refusal leaves behind.
+ */
+function makeScope() {
+  const tag = randomUUID().slice(0, 8);
+  const domain = `${tag}.example`;
+  const ORG = { internal: `t18i-${tag}`, a: `t18a-${tag}`, b: `t18b-${tag}`, test: `t18t-${tag}` };
+  const person = (name: string, org: string, locale: "en" | "is" = "en"): Person => ({ id: randomUUID(), email: `${name}@${domain}`, name, org, locale });
+  // admin is a System admin of the internal company and also a Company admin of company A (like the seeded admin of the development seed).
+  const people = {
+    admin: person("admin", ORG.internal),
+    adminOfA: undefined as unknown as Person, // the same user, signed in to company A
+    ben: person("ben", ORG.b, "is"), // Company admin of B, prefers Icelandic
+    ann: person("ann", ORG.b), // Requester of B
+    carl: person("carl", ORG.b), // Requester of B
+    tess: person("tess", ORG.test), // Requester of the test company
+  };
+  people.adminOfA = { ...people.admin, org: ORG.a };
+  return {
+    tag, domain, otherDomain: `${tag}-other.example`, ORG, people,
+    userIds: [people.admin.id, people.ben.id, people.ann.id, people.carl.id, people.tess.id],
+    // Set as soon as the live settings row has been read, and not before: until then the suite has touched nothing, and `cleanup` must touch nothing either.
+    prepared: false,
+    settingsBefore: null as SettingsRow | null,
+  };
+}
+type Scope = ReturnType<typeof makeScope>;
+const main = makeScope();
+const { tag, domain, otherDomain, ORG, people, userIds } = main;
 
 let pool: import("mssql").ConnectionPool;
-let settingsBefore: { value_json: string; version: number; updated_by_user_id: string | null; updated_at: Date } | null = null;
 const envBefore = { AZURE_SQL_SERVER: process.env.AZURE_SQL_SERVER, AZURE_STORAGE_ACCOUNT_NAME: process.env.AZURE_STORAGE_ACCOUNT_NAME, SENDGRID_API_KEY: process.env.SENDGRID_API_KEY };
 
 before(async () => {
@@ -85,7 +100,23 @@ before(async () => {
   process.env.AZURE_STORAGE_ACCOUNT_NAME = "fakestorageaccount"; // the retention batch asks for it; it touches no blob while there is no attachment
   process.env.SENDGRID_API_KEY = "SG.fake-key-for-the-sql-suite-never-sent-anywhere";
   globalThis.pulseSqlPool = Promise.resolve(pool);
+  await prepare(main);
+});
 
+after(async () => {
+  if (!pool) return;
+  try {
+    // Nothing at all when `before` refused, or failed before it had read the settings row: then the suite has made nothing and must not touch what is there.
+    await cleanup(main);
+  } finally {
+    await pool.close();
+    globalThis.pulseSqlPool = undefined;
+    for (const [name, value] of Object.entries(envBefore)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+});
+
+/** The worker takes every claimable row of the database, and the retention batch purges what is due in all of it: refuse a database that has communications in flight. */
+async function assertIdle() {
   const busy = (
     await pool.request().query(`SELECT
       (SELECT COUNT(*) FROM dbo.CommunicationDeliveries WHERE state IN ('Queued','Retry','Processing')) deliveries,
@@ -93,78 +124,80 @@ before(async () => {
   ).recordset[0];
   if (busy.deliveries || busy.campaigns)
     throw new Error("This database has communications in flight, and the worker of this suite would take them: use a disposable database.");
+}
 
-  // The settings row is the one global thing the suite writes: keep what was there, start from nothing, put it back in `after`.
-  settingsBefore = (await pool.request().query("SELECT value_json,version,updated_by_user_id,updated_at FROM dbo.Settings WHERE setting_key='communications'")).recordset[0] ?? null;
+/** Makes the scope's companies and people. The refusal of a busy database comes first and writes nothing. */
+async function prepare(scope: Scope) {
+  await assertIdle();
+  // The settings row is the one global thing the suite writes: keep what was there, start from nothing, put it back in `cleanup`.
+  scope.settingsBefore = (await pool.request().query("SELECT value_json,version,updated_by_user_id,updated_at FROM dbo.Settings WHERE setting_key='communications'")).recordset[0] ?? null;
+  scope.prepared = true;
   await pool.request().query("DELETE dbo.Settings WHERE setting_key='communications'");
 
+  const { ORG: orgs, people: who, domain: scopeDomain } = scope;
   await pool
     .request()
-    .input("internal", ORG.internal).input("a", ORG.a).input("b", ORG.b).input("test", ORG.test)
-    .input("domain", domain)
+    .input("internal", orgs.internal).input("a", orgs.a).input("b", orgs.b).input("test", orgs.test)
+    .input("domain", scopeDomain)
     .query(`
       INSERT dbo.Organizations(id,name,type,verified_domain) VALUES(@internal,'SQL suite staff','Internal',@domain),(@a,'SQL suite company A','Customer',@domain),(@b,'SQL suite company B','Customer',@domain);
       INSERT dbo.Organizations(id,name,type,verified_domain,is_test) VALUES(@test,'SQL suite test company','Customer',@domain,1);`);
-  for (const p of [people.admin, people.ben, people.ann, people.carl, people.tess])
+  for (const p of [who.admin, who.ben, who.ann, who.carl, who.tess])
     await pool.request().input("id", sql.UniqueIdentifier, p.id).input("email", p.email).input("name", p.name).input("locale", p.locale)
       .query("INSERT dbo.Users(id,email,display_name,status,auth_method,locale) VALUES(@id,@email,@name,'Active','Entra ID',@locale)");
   const memberships: Array<[Person, string, string]> = [
-    [people.admin, ORG.internal, "System admin"], [people.admin, ORG.a, "Company admin"], [people.ben, ORG.b, "Company admin"],
-    [people.ann, ORG.b, "Requester"], [people.carl, ORG.b, "Requester"], [people.tess, ORG.test, "Requester"],
+    [who.admin, orgs.internal, "System admin"], [who.admin, orgs.a, "Company admin"], [who.ben, orgs.b, "Company admin"],
+    [who.ann, orgs.b, "Requester"], [who.carl, orgs.b, "Requester"], [who.tess, orgs.test, "Requester"],
   ];
   for (const [p, org, role] of memberships)
     await pool.request().input("user", sql.UniqueIdentifier, p.id).input("org", org).input("role", role)
       .query("INSERT dbo.Memberships(id,user_id,organization_id,role,status) VALUES(NEWID(),@user,@org,@role,'Active')");
-});
+}
 
-after(async () => {
-  if (!pool) return;
-  try {
-    const cleanup = pool
+/** Deletes everything the scope made, puts the settings row back, and checks that nothing of it is left. Does nothing for a scope that was never prepared. */
+async function cleanup(scope: Scope) {
+  if (!scope.prepared) return;
+  const inputs = () =>
+    pool
       .request()
-      .input("orgs", sql.NVarChar(sql.MAX), JSON.stringify(Object.values(ORG)))
-      .input("users", sql.NVarChar(sql.MAX), JSON.stringify(userIds))
-      .input("admin", sql.UniqueIdentifier, people.admin.id)
-      .input("pattern", `%${tag}%`);
-    await cleanup.query(`
-      DELETE dbo.Settings WHERE setting_key='communications';
-      DELETE dbo.CommunicationEvents WHERE sg_event_id LIKE @pattern;
-      DELETE d FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.created_by_user_id=@admin;
-      DELETE dbo.Communications WHERE created_by_user_id=@admin;
-      DELETE dbo.CommunicationContacts WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs));
-      DELETE dbo.CommunicationSuppressions WHERE email LIKE @pattern;
-      DELETE dbo.NotificationPreferences WHERE user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users));
-      DELETE dbo.AuditEvents WHERE actor_user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users)) OR organization_id IN (SELECT value FROM OPENJSON(@orgs));
-      DELETE dbo.IdempotencyKeys WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs));
-      DELETE dbo.Memberships WHERE user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users));
-      DELETE dbo.Users WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users));
-      DELETE dbo.Organizations WHERE id IN (SELECT value FROM OPENJSON(@orgs));`);
-    if (settingsBefore)
-      await pool.request().input("value", settingsBefore.value_json).input("version", sql.Int, settingsBefore.version)
-        .input("by", sql.UniqueIdentifier, settingsBefore.updated_by_user_id).input("at", sql.DateTime2, settingsBefore.updated_at)
-        .query("INSERT dbo.Settings(setting_key,value_json,version,updated_by_user_id,updated_at) VALUES('communications',@value,@version,@by,@at)");
-    // Nothing of the suite is left: no row of any table it wrote to names one of its companies or people, or carries its tag.
-    const left = (
-      await pool.request().input("orgs", sql.NVarChar(sql.MAX), JSON.stringify(Object.values(ORG))).input("users", sql.NVarChar(sql.MAX), JSON.stringify(userIds)).input("pattern", `%${tag}%`)
-        .query(`SELECT
-          (SELECT COUNT(*) FROM dbo.Organizations WHERE id IN (SELECT value FROM OPENJSON(@orgs))) organizations,
-          (SELECT COUNT(*) FROM dbo.Users WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users))) users,
-          (SELECT COUNT(*) FROM dbo.CommunicationContacts WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs))) contacts,
-          (SELECT COUNT(*) FROM dbo.CommunicationSuppressions WHERE email LIKE @pattern) suppressions,
-          (SELECT COUNT(*) FROM dbo.CommunicationEvents WHERE sg_event_id LIKE @pattern) events,
-          (SELECT COUNT(*) FROM dbo.CommunicationDeliveries WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs)) OR email LIKE @pattern) deliveries,
-          (SELECT COUNT(*) FROM dbo.Communications WHERE title LIKE @pattern) communications,
-          (SELECT COUNT(*) FROM dbo.NotificationPreferences WHERE user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users))) preferences,
-          (SELECT COUNT(*) FROM dbo.AuditEvents WHERE actor_user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users)) OR organization_id IN (SELECT value FROM OPENJSON(@orgs))) audit,
-          (SELECT COUNT(*) FROM dbo.IdempotencyKeys WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs))) idempotency`)
-    ).recordset[0];
-    assert.deepEqual(Object.values(left).filter(Boolean), [], `rows the suite left behind: ${JSON.stringify(left)}`);
-  } finally {
-    await pool.close();
-    globalThis.pulseSqlPool = undefined;
-    for (const [name, value] of Object.entries(envBefore)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
-  }
-});
+      .input("orgs", sql.NVarChar(sql.MAX), JSON.stringify(Object.values(scope.ORG)))
+      .input("users", sql.NVarChar(sql.MAX), JSON.stringify(scope.userIds))
+      .input("admin", sql.UniqueIdentifier, scope.people.admin.id)
+      .input("pattern", `%${scope.tag}%`);
+  await inputs().query(`
+    DELETE dbo.Settings WHERE setting_key='communications';
+    DELETE dbo.CommunicationEvents WHERE sg_event_id LIKE @pattern;
+    DELETE d FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.created_by_user_id=@admin;
+    DELETE dbo.Communications WHERE created_by_user_id=@admin;
+    DELETE dbo.CommunicationContacts WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs));
+    DELETE dbo.CommunicationSuppressions WHERE email LIKE @pattern;
+    DELETE dbo.NotificationPreferences WHERE user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users));
+    DELETE dbo.AuditEvents WHERE actor_user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users)) OR organization_id IN (SELECT value FROM OPENJSON(@orgs));
+    DELETE dbo.IdempotencyKeys WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs));
+    DELETE dbo.Memberships WHERE user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users));
+    DELETE dbo.Users WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users));
+    DELETE dbo.Organizations WHERE id IN (SELECT value FROM OPENJSON(@orgs));`);
+  const snapshot = scope.settingsBefore;
+  if (snapshot)
+    await pool.request().input("value", snapshot.value_json).input("version", sql.Int, snapshot.version)
+      .input("by", sql.UniqueIdentifier, snapshot.updated_by_user_id).input("at", sql.DateTime2, snapshot.updated_at)
+      .query("INSERT dbo.Settings(setting_key,value_json,version,updated_by_user_id,updated_at) VALUES('communications',@value,@version,@by,@at)");
+  // Nothing of the scope is left: no row of any table it wrote to names one of its companies or people, or carries its tag.
+  const left = (
+    await inputs().query(`SELECT
+      (SELECT COUNT(*) FROM dbo.Organizations WHERE id IN (SELECT value FROM OPENJSON(@orgs))) organizations,
+      (SELECT COUNT(*) FROM dbo.Users WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users))) users,
+      (SELECT COUNT(*) FROM dbo.CommunicationContacts WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs))) contacts,
+      (SELECT COUNT(*) FROM dbo.CommunicationSuppressions WHERE email LIKE @pattern) suppressions,
+      (SELECT COUNT(*) FROM dbo.CommunicationEvents WHERE sg_event_id LIKE @pattern) events,
+      (SELECT COUNT(*) FROM dbo.CommunicationDeliveries WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs)) OR email LIKE @pattern) deliveries,
+      (SELECT COUNT(*) FROM dbo.Communications WHERE title LIKE @pattern) communications,
+      (SELECT COUNT(*) FROM dbo.NotificationPreferences WHERE user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users))) preferences,
+      (SELECT COUNT(*) FROM dbo.AuditEvents WHERE actor_user_id IN (SELECT TRY_CONVERT(uniqueidentifier,value) FROM OPENJSON(@users)) OR organization_id IN (SELECT value FROM OPENJSON(@orgs))) audit,
+      (SELECT COUNT(*) FROM dbo.IdempotencyKeys WHERE organization_id IN (SELECT value FROM OPENJSON(@orgs))) idempotency`)
+  ).recordset[0];
+  assert.deepEqual(Object.values(left).filter(Boolean), [], `rows the suite left behind: ${JSON.stringify(left)}`);
+}
 
 const sqlTest = (name: string, fn: (t: TestContext) => Promise<void>) => test(name, { skip: !enabled }, fn);
 
@@ -481,14 +514,18 @@ sqlTest("SQL events: delivered, open, click, bounce (suppresses and flags the co
 });
 
 sqlTest("SQL retention: a ledger row older than 90 days is purged by the retention batch and a recent one stays", async (t) => {
-  // The batch purges everything that is due in the whole database, and deletes the blobs of attachments: only run it where there is no attachment to touch.
+  // The real batch runs: it hard-deletes everything that is due in the whole database (and deletes the blobs of attachments), which is why this suite
+  // belongs on a disposable database, and why this case is not run where there is an attachment to touch.
   if ((await q("SELECT COUNT(*) n FROM dbo.Attachments"))[0].n > 0) return t.skip("the database holds attachments, and the retention batch would delete their blobs");
   await q("UPDATE dbo.CommunicationEvents SET received_at=DATEADD(day,-100,SYSUTCDATETIME()) WHERE sg_event_id IN (@a,@b)", { a: `${tag}-evt-1`, b: `${tag}-evt-2` });
-  const result = await processRetentionBatch(50);
-  assert.equal(result.skipped, false);
-  assert.ok(result.recordsDeleted >= 2, JSON.stringify(result));
-  const left = await q("SELECT sg_event_id id FROM dbo.CommunicationEvents WHERE sg_event_id LIKE @pattern ORDER BY sg_event_id", { pattern: `${tag}-evt-%` });
-  assert.deepEqual(left.map((r) => r.id), [3, 4, 5, 6, 7, 8, 9].map((n) => `${tag}-evt-${n}`));
+  const present = async (ids: string[]) =>
+    (await q("SELECT sg_event_id id FROM dbo.CommunicationEvents WHERE sg_event_id IN (SELECT value FROM OPENJSON(@ids))", { ids: JSON.stringify(ids) })).map((r) => r.id as string);
+  const old = [1, 2].map((n) => `${tag}-evt-${n}`);
+  const recent = [3, 4, 5, 6, 7, 8, 9].map((n) => `${tag}-evt-${n}`);
+  // A batch takes at most 250 rows, and other rows that are due may come first: go on until the suite's own two are gone (a bounded number of rounds).
+  for (let round = 0; round < 50 && (await present(old)).length > 0; round++) assert.equal((await processRetentionBatch(250)).skipped, false);
+  assert.deepEqual(await present(old), [], "the two ledger rows older than 90 days are gone");
+  assert.deepEqual((await present(recent)).sort(), recent, "the recent ones stay");
 });
 
 sqlTest("SQL campaign: a copy of a Sent campaign is a new Draft; only a Draft or a Cancelled campaign can be deleted (soft), and then it is gone from the list", async () => {
@@ -641,4 +678,31 @@ sqlTest("SQL audit: the writes of the feature have their audit rows, and none of
   // The settings audit names the sender, which is configuration and not a customer's address.
   const withAddress = rows.filter((r) => /@/.test(r.after_json) || /@/.test(r.before_json)).map((r) => r.action as string);
   assert.deepEqual([...new Set(withAddress)].filter((action) => !action.startsWith("communication.settings")), []);
+});
+
+// ---- what a refusal leaves behind ------------------------------------------------------------------------------------------------------
+sqlTest("SQL suite: on a database with a communication in flight the setup refuses, and the cleanup after the refusal leaves the live settings and every other row alone", async () => {
+  // A second scope, which `before` never saw. The main one has made the database ready, so the live settings row exists (the cases above saved it) and nothing is in flight.
+  const probe = makeScope();
+  const live = () => q("SELECT value_json,version,updated_by_user_id,updated_at FROM dbo.Settings WHERE setting_key='communications'");
+  const shelf = await live();
+  assert.equal(shelf.length, 1, "the live settings row, which the refusal must not touch");
+  await assertIdle(); // idle, so what refuses below is the campaign added here and nothing else
+  const inFlight = randomUUID();
+  await q(
+    `INSERT dbo.Communications(id,public_id,template_key,topic,title,content_json,audience_json,status,created_by_user_id,updated_by_user_id)
+     VALUES(@id,@publicId,'plain','general',@title,'{}','{}','Sending',@admin,@admin)`,
+    { id: inFlight, publicId: `COM-9${Date.now()}`, title: `${tag} in flight`, admin: people.admin.id },
+  );
+  try {
+    await assert.rejects(prepare(probe), /in flight/);
+    assert.equal(probe.prepared, false, "the refusal came before anything was touched");
+    await cleanup(probe); // what `after` does with a scope that was refused
+    assert.deepEqual(await live(), shelf, "the live settings row is untouched, with its version and time");
+    assert.equal((await q("SELECT COUNT(*) n FROM dbo.Communications WHERE id=@id", { id: inFlight }))[0].n, 1, "so is the campaign that caused the refusal");
+    assert.equal((await q("SELECT COUNT(*) n FROM dbo.Organizations WHERE id IN (@a,@b)", { a: probe.ORG.a, b: probe.ORG.b }))[0].n, 0, "and no company was made");
+  } finally {
+    await q("DELETE dbo.Communications WHERE id=@id", { id: inFlight });
+    await cleanup(probe); // a no-op unless the refusal failed, and then it puts right what the setup did
+  }
 });
