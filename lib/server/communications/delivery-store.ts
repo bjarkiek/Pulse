@@ -287,16 +287,36 @@ export async function listDeliveryRows(publicId: string, filter: { state?: strin
   };
 }
 
-/** Queues the campaign's Dead letter rows again, attempts started over, and returns how many. */
-export async function requeueDeadLetters(publicId: string): Promise<number> {
+/**
+ * Queues the campaign's Dead letter rows again, attempts started over, and says how many it queued and whether it reopened the campaign.
+ * The worker claims the rows of a Sending campaign only, and `completeCampaigns` finishes a campaign whose rows are all settled, dead letters
+ * included. So a campaign that has completed (Sent) and gets a real row waiting again is Sending again, in the same unit of work as the
+ * requeue: `completed_at` goes, `started_at` and the recipient count stay, and `completeCampaigns` completes it once the retried rows settle.
+ * Nothing else is reopened: a Test row alone is claimed whatever its campaign is, and a Cancelled campaign stays cancelled.
+ */
+export async function requeueDeadLetters(publicId: string): Promise<{ requeued: number; reopened: boolean }> {
   if (!isContentSqlActive()) {
-    let count = 0;
-    for (const d of memoryDeliveries()) if (d.communicationId === publicId && d.state === "Dead letter") { Object.assign(d, { state: "Queued", attemptCount: 0, nextAttemptAt: null, lastErrorCode: null }); count++; }
-    return count;
+    let requeued = 0;
+    for (const d of memoryDeliveries()) if (d.communicationId === publicId && d.state === "Dead letter") { Object.assign(d, { state: "Queued", attemptCount: 0, nextAttemptAt: null, lastErrorCode: null }); requeued++; }
+    const campaign = memoryCommunications().find((c) => c.id === publicId);
+    const reopened = requeued > 0 && campaign?.status === "Sent" && memoryDeliveries().some((d) => d.communicationId === publicId && d.source !== "Test" && OPEN.has(d.state));
+    if (campaign && reopened) Object.assign(campaign, { status: "Sending", completedAt: undefined, updatedAt: new Date().toISOString() });
+    return { requeued, reopened };
   }
-  const result = await (await getSqlPool()).request().input("id", sql.NVarChar(32), publicId)
-    .query("UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.public_id=@id AND d.state='Dead letter'");
-  return result.rowsAffected[0];
+  return atomicSql(async () => {
+    const pool = await getSqlPool();
+    const requeue = await pool.request().input("id", sql.NVarChar(32), publicId)
+      .query("UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.public_id=@id AND d.state='Dead letter'");
+    const requeued: number = requeue.rowsAffected[0];
+    if (!requeued) return { requeued, reopened: false };
+    // The invariant, stated once: a Sent campaign with a real row waiting is Sending. The requeue above is visible here, inside the same unit of work.
+    const reopen = await pool.request().input("id", sql.NVarChar(32), publicId)
+      .query(`UPDATE c SET status='Sending',completed_at=NULL,updated_at=SYSUTCDATETIME()
+        FROM dbo.Communications c
+        WHERE c.public_id=@id AND c.status='Sent' AND c.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM dbo.CommunicationDeliveries d WHERE d.communication_id=c.id AND d.source<>'Test' AND d.state IN ('Queued','Retry','Processing'))`);
+    return { requeued, reopened: reopen.rowsAffected[0] > 0 };
+  });
 }
 
 /** Cancels the deliveries of a campaign that are still waiting (Queued or Retry) and returns how many. Deliveries carry no cancel time of their own. */

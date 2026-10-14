@@ -412,18 +412,26 @@ export async function listDeliveries(identity: PulseIdentity, id: string, filter
   return listDeliveryRows(id, { state: filter.state, organizationId: filter.organizationId, page: Math.max(1, whole(filter.page, 1)), pageSize: Math.min(Math.max(whole(filter.pageSize, 100) || 100, 1), 250) });
 }
 
-/** Queues every Dead letter row of the campaign again, with its attempts started over. */
+/**
+ * Queues every Dead letter row of the campaign again, with its attempts started over. A campaign that had completed (Sent) is Sending
+ * again so that the worker claims the rows; the audit row then records that status change next to the count.
+ */
 export async function retryDeadLetters(identity: PulseIdentity, id: string): Promise<{ requeued: number }> {
   await requirePublishRole(identity);
   await loadOne(id);
+  /** What the audit row says: the count, and the move from Sent to Sending when the campaign was reopened. */
+  const audited = ({ requeued, reopened }: { requeued: number; reopened: boolean }) =>
+    [reopened ? { requeued, status: "Sending" } : { requeued }, reopened ? { status: "Sent" } : undefined] as const;
   if (!isContentSqlActive()) {
-    const requeued = await requeueDeadLetters(id);
-    memoryAuditEvent(identity, "communication.deliveries.retried", "Communication", id, { requeued });
-    return { requeued };
+    const result = await requeueDeadLetters(id);
+    const [after, before] = audited(result);
+    memoryAuditEvent(identity, "communication.deliveries.retried", "Communication", id, after, before);
+    return { requeued: result.requeued };
   }
   return atomicSql(async () => {
-    const requeued = await requeueDeadLetters(id);
-    await insertAudit(identity, "communication.deliveries.retried", await findCommunicationUuid(id), { requeued });
-    return { requeued };
+    const result = await requeueDeadLetters(id);
+    const [after, before] = audited(result);
+    await insertAudit(identity, "communication.deliveries.retried", await findCommunicationUuid(id), after, before);
+    return { requeued: result.requeued };
   });
 }

@@ -36,7 +36,7 @@ import {
   audienceEstimate, cancelCommunication, createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication,
   listCommunications, listDeliveries, prefillFromRelease, previewCommunication, retryDeadLetters, sendCommunication, testSendCommunication, updateCommunication,
 } from "../lib/server/communications/campaign-repository";
-import { communicationStats, freezeAudience, getDeliveryStore } from "../lib/server/communications/delivery-store";
+import { communicationStats, freezeAudience, getDeliveryStore, requeueDeadLetters } from "../lib/server/communications/delivery-store";
 import { sql } from "../lib/server/database";
 import { createRelease, publishRelease } from "../lib/server/operations-repository";
 import { createIdea, listInternalIdeas } from "../lib/server/product-repository";
@@ -2137,7 +2137,78 @@ test("deliveries: retrying requeues the dead letters of that campaign only, star
   ]);
   assert.deepEqual(countByState((await listDeliveries(PM, second.id, {})).items), { "Dead letter": 4 }, "the other campaign's dead letters are left alone");
   assert.deepEqual(await retryDeadLetters(PM, first.id), { requeued: 0 }, "nothing is left to requeue");
-  assert.deepEqual((globalThis.pulseMemoryAudit ?? []).filter((a) => a.action === "communication.deliveries.retried").map((a) => [a.entityId, a.after]).reverse(), [[first.id, { requeued: 3 }], [first.id, { requeued: 0 }]]);
+  const retried = (globalThis.pulseMemoryAudit ?? []).filter((a) => a.action === "communication.deliveries.retried").reverse();
+  assert.deepEqual(retried.map((a) => [a.entityId, a.after, a.before]), [[first.id, { requeued: 3 }, undefined], [first.id, { requeued: 0 }, undefined]], "the campaign was Sending and stays so: only the count is recorded");
+  assert.equal((await getCommunication(PM, first.id)).status, "Sending");
+});
+
+test("deliveries: retrying the dead letters of a campaign that has completed reopens it, the worker claims the rows again and completes it once they settle", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  const store = getDeliveryStore();
+  const ids = [(await store.claimBatch(10))!, (await store.claimBatch(10))!].flatMap((batch) => batch.deliveries.map((d) => d.id)); // the English batch, then the Icelandic one
+  assert.equal(ids.length, 4);
+  await store.markFailed(ids, "HTTP_400", null); // every row is a dead letter
+  const doneAt = new Date("2026-10-14T13:00:00Z");
+  assert.deepEqual(await store.completeCampaigns(doneAt), [created.id]);
+  const completed = await getCommunication(PM, created.id);
+  assert.deepEqual([completed.status, completed.completedAt, completed.stats.deadLettered, completed.stats.queued], ["Sent", doneAt.toISOString(), 4, 0]);
+  assert.equal(await store.claimBatch(10), null, "nothing of a completed campaign is claimed");
+
+  assert.deepEqual(await retryDeadLetters(PM, created.id), { requeued: 4 });
+  const reopened = await getCommunication(PM, created.id);
+  assert.deepEqual([reopened.status, reopened.completedAt, reopened.startedAt, reopened.recipientCount], ["Sending", undefined, completed.startedAt, 4], "reopened: the completion is undone, the start and the recipient count are kept");
+  assert.deepEqual([reopened.stats.queued, reopened.stats.deadLettered], [4, 0]);
+  const english = (await store.claimBatch(10))!;
+  assert.deepEqual([english.communicationId, english.locale, english.deliveries.map((d) => d.attemptCount)], [created.id, "en", [1, 1, 1]], "the worker claims the retried rows, their attempts started over");
+  const icelandic = (await store.claimBatch(10))!;
+  assert.deepEqual([icelandic.locale, icelandic.deliveries.map((d) => d.email)], ["is", ["cio@origo.is"]]);
+  assert.deepEqual(await store.completeCampaigns(new Date()), [], "not while rows are with the provider");
+  assert.equal((await getCommunication(PM, created.id)).status, "Sending");
+  await store.markAccepted([...english.deliveries, ...icelandic.deliveries].map((d) => d.id), "msg-2", new Date());
+  const finishedAt = new Date("2026-10-14T14:00:00Z");
+  assert.deepEqual(await store.completeCampaigns(finishedAt), [created.id], "and completed again once the retried rows have settled");
+  const finished = await getCommunication(PM, created.id);
+  assert.deepEqual([finished.status, finished.completedAt, finished.startedAt, finished.stats.accepted, finished.stats.deadLettered], ["Sent", finishedAt.toISOString(), completed.startedAt, 4, 0]);
+  const audit = (globalThis.pulseMemoryAudit ?? []).filter((a) => a.action === "communication.deliveries.retried");
+  assert.deepEqual(audit.map((a) => [a.entityId, a.before, a.after]), [[created.id, { status: "Sent" }, { requeued: 4, status: "Sending" }]], "the audit row records the status change next to the count");
+});
+
+test("deliveries: a Test row alone does not reopen a completed campaign, and a cancelled campaign is never reopened", async () => {
+  await seedAudience();
+  await enableSending();
+  const store = getDeliveryStore();
+  const sent = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, sent.id, {});
+  const real = [(await store.claimBatch(10))!, (await store.claimBatch(10))!].flatMap((batch) => batch.deliveries.map((d) => d.id));
+  await store.markAccepted(real, "msg-1", new Date());
+  await testSendCommunication(PM, sent.id, []);
+  const testRow = (await store.claimBatch(10))!; // a Test row is claimed whatever its campaign is
+  assert.deepEqual(testRow.deliveries.map((d) => d.source), ["Test"]);
+  await store.markFailed(testRow.deliveries.map((d) => d.id), "HTTP_400", null); // the test mail dead-letters
+  assert.deepEqual(await store.completeCampaigns(new Date()), [sent.id]);
+  assert.deepEqual(await retryDeadLetters(PM, sent.id), { requeued: 1 });
+  assert.equal((await getCommunication(PM, sent.id)).status, "Sent", "a test mail alone does not reopen the campaign");
+  const again = (await store.claimBatch(10))!;
+  assert.deepEqual([again.communicationId, again.deliveries.map((d) => d.source)], [sent.id, ["Test"]], "but the worker still sends it, as it sends any Test row");
+  await store.markAccepted(again.deliveries.map((d) => d.id), "msg-2", new Date());
+  assert.deepEqual((globalThis.pulseMemoryAudit ?? []).filter((a) => a.action === "communication.deliveries.retried").map((a) => [a.before, a.after]), [[undefined, { requeued: 1 }]]);
+  const leftover = memoryDeliveries().find((d) => d.communicationId === sent.id && d.source !== "Test")!;
+  leftover.state = "Queued"; // a real row waiting in a Sent campaign, however it got there: only a requeue reopens a campaign
+  assert.deepEqual(await retryDeadLetters(PM, sent.id), { requeued: 0 });
+  assert.equal((await getCommunication(PM, sent.id)).status, "Sent");
+  leftover.state = "Accepted";
+
+  const cancelled = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, cancelled.id, {});
+  const inFlight = (await store.claimBatch(10))!;
+  await cancelCommunication(PM, cancelled.id, "cancel");
+  await store.markFailed(inFlight.deliveries.map((d) => d.id), "HTTP_400", null); // the batch that was with the provider dead-letters after the cancel
+  await retryDeadLetters(PM, cancelled.id);
+  assert.equal((await getCommunication(PM, cancelled.id)).status, "Cancelled", "a cancelled campaign stays cancelled");
+  assert.equal(await store.claimBatch(10), null, "and none of its rows is sent");
 });
 
 test("send side: the audit trail records ids and counts only, never an address, a subject or a link", async () => {
@@ -2501,11 +2572,44 @@ test("deliveries, SQL: stats are counted from the rows, the list pages and maps 
     assert.deepEqual([retryAudit.inputs.action, retryAudit.inputs.entity, JSON.parse(String(retryAudit.inputs.after))], ["communication.deliveries.retried", SQL_UUID, { requeued: 3 }]);
     assert.ok(requeue.inTransaction && retryAudit.inTransaction);
     assert.deepEqual(events.slice(beforeRetry), ["begin", "commit"]);
+    const reopenTry = calls.find((c) => /^\s*UPDATE c SET status='Sending'/.test(c.text))!;
+    assert.deepEqual([reopenTry.inTransaction, calls.indexOf(reopenTry) > calls.indexOf(requeue), retryAudit.inputs.before], [true, true, null], "the campaign was not Sent, so nothing was reopened and no status change is recorded");
 
     const beforeEstimate = calls.length;
     const sqlEstimate = await audienceEstimate(CONTRIBUTOR, "COM-007");
     assert.equal(sqlEstimate.total, 0, "no organisation or member answers: an empty audience is reported, not refused");
     assert.deepEqual(sqlWrites(calls.slice(beforeEstimate)), [], "an estimate writes nothing");
+  });
+});
+
+test("deliveries, SQL: a retry that requeues rows of a completed campaign reopens it in the same unit of work and audits the status change", async () => {
+  const requeueRows: SqlAnswers = [[/^\s*UPDATE d SET state='Queued'/, { rowsAffected: [3] }]];
+  const reopen = (rows: number): SqlAnswers => [[/^\s*UPDATE c SET status='Sending'/, { rowsAffected: [rows] }]];
+  await withFakeSql([...requeueRows, ...reopen(1), ...sqlCampaign("COM-007", { status: "Sent" })], async (calls, events) => {
+    assert.deepEqual(await retryDeadLetters(PM, "COM-007"), { requeued: 3 });
+    const [requeue, campaign, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.match(requeue.text, /^UPDATE d SET state='Queued'/);
+    assert.match(campaign.text, /^UPDATE c SET status='Sending',completed_at=NULL,updated_at=SYSUTCDATETIME\(\)\s+FROM dbo\.Communications c\s+WHERE c\.public_id=@id AND c\.status='Sent' AND c\.deleted_at IS NULL\s+AND EXISTS \(SELECT 1 FROM dbo\.CommunicationDeliveries d WHERE d\.communication_id=c\.id AND d\.source<>'Test' AND d\.state IN \('Queued','Retry','Processing'\)\)$/, "a Sent campaign with a real row waiting is Sending; started_at is not touched");
+    assert.equal(campaign.inputs.id, "COM-007");
+    assert.deepEqual([audit.inputs.action, audit.inputs.entity, JSON.parse(String(audit.inputs.before)), JSON.parse(String(audit.inputs.after))], ["communication.deliveries.retried", SQL_UUID, { status: "Sent" }, { requeued: 3, status: "Sending" }]);
+    assert.ok(sqlWrites(calls).every((c) => c.inTransaction), "the requeue, the reopening and the audit row ran inside the transaction");
+    assert.deepEqual(events, ["begin", "commit"], "one unit of work");
+    const direct = calls.length;
+    assert.deepEqual(await requeueDeadLetters("COM-007"), { requeued: 3, reopened: true });
+    assert.deepEqual(sqlWrites(calls.slice(direct)).map((c) => c.inTransaction), [true, true], "called on its own, the requeue and the reopening still share a unit of work");
+    assert.deepEqual(events.slice(2), ["begin", "commit"]);
+  });
+  await withFakeSql([[/^\s*UPDATE d SET state='Queued'/, { rowsAffected: [0] }], ...reopen(1), ...sqlCampaign("COM-007", { status: "Sent" })], async (calls) => {
+    assert.deepEqual(await retryDeadLetters(PM, "COM-007"), { requeued: 0 });
+    assert.equal(calls.some((c) => /^\s*UPDATE c SET status='Sending'/.test(c.text)), false, "nothing was requeued, so nothing is reopened");
+    const audit = sqlWrites(calls).find((c) => /AuditEvents/.test(c.text))!;
+    assert.deepEqual([JSON.parse(String(audit.inputs.after)), audit.inputs.before], [{ requeued: 0 }, null]);
+  });
+  await withFakeSql([...requeueRows, ...reopen(0), ...sqlCampaign("COM-007", { status: "Cancelled" })], async (calls) => {
+    assert.deepEqual(await retryDeadLetters(PM, "COM-007"), { requeued: 3 });
+    const audit = sqlWrites(calls).find((c) => /AuditEvents/.test(c.text))!;
+    assert.deepEqual([JSON.parse(String(audit.inputs.after)), audit.inputs.before], [{ requeued: 3 }, null], "the campaign was not reopened (not Sent, or only a Test row waits), so only the count is recorded");
   });
 });
 
