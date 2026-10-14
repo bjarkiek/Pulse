@@ -25,6 +25,8 @@ import { PATCH as internalContactPatch, DELETE as internalContactDelete } from "
 import { GET as suppressionsGet, POST as suppressionsPost, DELETE as suppressionsDelete } from "../app/api/v1/internal/communications/suppressions/route";
 import { GET as companyContactsGet, POST as companyContactsPost } from "../app/api/v1/communications/contacts/route";
 import { PATCH as companyContactPatch, DELETE as companyContactDelete } from "../app/api/v1/communications/contacts/[contactId]/route";
+import { POST as communicationsJobPost } from "../app/api/v1/internal/jobs/communications/route";
+import { GET as deliveryStatusGet, POST as deliveryStatusPost } from "../app/api/v1/admin/delivery/route";
 
 // Memory mode (no AZURE_SQL_*, NODE_ENV !== production): an anonymous request resolves to the
 // demo fallback identity in lib/server/auth.ts — the seeded System admin (ORG-001, isInternal).
@@ -864,4 +866,117 @@ test("openapi: the campaign operations are curated — ids, success codes, preco
   );
   assert.equal(spec.paths[`${root}/{id}/duplicate`].post.requestBody, undefined, "a duplicate takes no body");
   assert.equal(spec.paths[`${root}/{id}/deliveries/retry`].post.requestBody, undefined, "and neither does a retry");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The worker's job route and the Settings card's retry
+// ---------------------------------------------------------------------------------------------------------------------
+
+const JOB = "/api/v1/internal/jobs/communications";
+const JOB_SECRET = "job-secret-0123456789abcdef0123456789abcdef";
+const job = (body?: unknown, headers: Record<string, string> = { "x-pulse-job-secret": JOB_SECRET }) => communicationsJobPost(send("POST", JOB, body, headers));
+/** Runs `work` with the shared job secret configured, as it is in production, and takes it away again. */
+async function withJobSecret<T>(work: () => Promise<T>): Promise<T> {
+  process.env.NOTIFICATION_JOB_SECRET = JOB_SECRET;
+  try {
+    return await work();
+  } finally {
+    delete process.env.NOTIFICATION_JOB_SECRET;
+  }
+}
+
+test("job route: it is closed without the shared secret, whoever asks", async () => {
+  await withJobSecret(async () => {
+    assert.deepEqual(await refusal(await job(undefined, {})), [401, "UNAUTHORIZED"], "no header: not even the demo System admin can open it");
+    assert.deepEqual(await refusal(await job(undefined, { "x-pulse-job-secret": "wrong" })), [401, "UNAUTHORIZED"]);
+    assert.deepEqual(await refusal(await job(undefined, { "x-pulse-job-secret": `${JOB_SECRET}x` })), [401, "UNAUTHORIZED"], "a longer value");
+    assert.deepEqual(await refusal(await job(undefined, { "x-pulse-job-secret": JOB_SECRET.slice(0, -1) })), [401, "UNAUTHORIZED"], "a shorter one");
+  });
+  assert.deepEqual(await refusal(await job()), [401, "UNAUTHORIZED"], "a header cannot match a secret that is not configured");
+});
+
+test("job route: it runs the worker behind the secret — skipped while sending is off, then bounded by the limit — and the console transport mails nobody", async () => {
+  await withJobSecret(async () => {
+    const idle = await job();
+    assert.equal(idle.status, 200);
+    assert.equal(idle.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await idle.json(), { skipped: true, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0 }, "sending is off until the settings say so");
+
+    await enableSending();
+    organizations().push({ id: "ORG-002", name: "Advania", type: "Customer", status: "Active", domain: "advania.is", users: 0, requests: 0, authentication: ["OTP"] });
+    await createContact({ email: "cio@origo.is", displayName: "CIO", locale: "is", topics: ["general"] });
+    await createContact({ organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+    const draft = await createDraft();
+    assert.equal((await sendCampaign(draft.id, {}, draft.version)).status, 200); // three recipients: two English, one Icelandic
+    delete process.env.SENDGRID_API_KEY; // no key: the worker's transport is the console one, which sends nothing and logs a count — the SDK is never reached
+    const logged: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+    try {
+      const first = await (await job({ limit: 1 })).json();
+      assert.deepEqual([first.skipped, first.accepted, first.completed], [false, 1, []], "the limit bounds the run");
+      const rest = await (await job({})).json();
+      assert.deepEqual([rest.accepted, rest.completed], [2, [draft.id]], "the default limit takes what is left, and the campaign completes");
+      const nothing = await (await job()).json();
+      assert.deepEqual([nothing.skipped, nothing.accepted, nothing.completed], [false, 0, []]);
+    } finally {
+      console.log = original;
+    }
+    assert.equal((await getCampaign(draft.id)).status, "Sent");
+    assert.deepEqual((await deliveriesOf(draft.id)).items.map((r) => r.state), ["Accepted", "Accepted", "Accepted"]);
+    assert.deepEqual(logged.map((line) => JSON.parse(line).recipients), [1, 1, 1], "a count per request and nothing else");
+    assert.ok(logged.every((line) => !line.includes("@")), "no address");
+  });
+});
+
+test("job route: the limit is a whole number from 1 to 5000, and the body must be JSON", async () => {
+  await withJobSecret(async () => {
+    for (const limit of [0, -1, 1.5, 5001, "10", null]) assert.deepEqual(await refusal(await job({ limit })), [400, "INVALID_INPUT"], `limit ${JSON.stringify(limit)}`);
+    assert.deepEqual(await refusal(await communicationsJobPost(req(JOB, { method: "POST", headers: { "x-pulse-job-secret": JOB_SECRET }, body: "{not json" }))), [400, "INVALID_JSON"]);
+    assert.equal((await job({ limit: 1 })).status, 200);
+    assert.equal((await job({ limit: 5000 })).status, 200);
+  });
+});
+
+test("job route: without a limit a run takes up to 500 rows — the 13 recipients of this campaign go out in one run and one request", async () => {
+  await withJobSecret(async () => {
+    await enableSending();
+    for (let i = 0; i < 12; i++) await createContact({ email: `person${i}@origo.is`, displayName: `Person ${i}`, locale: "en", topics: ["general"] });
+    const draft = await createDraft();
+    assert.equal((await sendCampaign(draft.id, {}, draft.version)).status, 200); // the 12 contacts and the demo admin, all English
+    delete process.env.SENDGRID_API_KEY; // the console transport again: the SDK is never reached
+    const logged: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+    try {
+      const run = await (await job()).json();
+      assert.deepEqual([run.accepted, run.completed], [13, [draft.id]]);
+    } finally {
+      console.log = original;
+    }
+    assert.deepEqual(logged.map((line) => JSON.parse(line).recipients), [13], "one request");
+  });
+});
+
+test("routes: the Settings card's retry takes the Communications channel next to Email and Webhook, and nothing else", async () => {
+  const retry = (body: unknown) => deliveryStatusPost(send("POST", "/api/v1/admin/delivery", body));
+  const ok = await retry({ channel: "Communications" });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { requeued: 0 }, "memory mode has no outbox in SQL: nothing to requeue");
+  for (const channel of ["Email", "Webhook"]) assert.equal((await retry({ channel })).status, 200, channel);
+  for (const body of [{ channel: "communications" }, { channel: "Fax" }, {}, { channel: "Communications", extra: true }]) assert.deepEqual(await refusal(await retry(body)), [400, "INVALID_INPUT"], JSON.stringify(body));
+  const list = await deliveryStatusGet(send("GET", "/api/v1/admin/delivery"));
+  assert.deepEqual([list.status, await list.json()], [200, { items: [] }]);
+});
+
+test("openapi: the worker's job route is documented behind the job secret", () => {
+  const spec = JSON.parse(readFileSync(new URL("../public/openapi.json", import.meta.url), "utf8"));
+  const operation = spec.paths[JOB]?.post;
+  assert.equal(operation?.operationId, "processCommunicationOutbox");
+  assert.deepEqual(operation.security, [{ notificationJobSecret: [] }]);
+  assert.equal(operation["x-authorization"], "Job secret");
+  assert.equal(operation["x-source-file"], "app/api/v1/internal/jobs/communications/route.ts");
+  assert.ok(spec.components.securitySchemes.notificationJobSecret, "the scheme it names exists");
+  assert.deepEqual(Object.keys(operation.responses).sort(), ["200", "400", "401", "404", "413", "429", "500"]);
+  assert.ok(operation.requestBody, "it takes an optional JSON body with a limit");
 });

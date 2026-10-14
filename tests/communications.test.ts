@@ -36,7 +36,12 @@ import {
   audienceEstimate, cancelCommunication, createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication,
   listCommunications, listDeliveries, prefillFromRelease, previewCommunication, retryDeadLetters, sendCommunication, testSendCommunication, updateCommunication,
 } from "../lib/server/communications/campaign-repository";
-import { communicationStats, freezeAudience, getDeliveryStore, requeueDeadLetters } from "../lib/server/communications/delivery-store";
+import { BACKOFF_BASE_MS, communicationStats, freezeAudience, getDeliveryStore, LEASE_MS, MAX_ATTEMPTS, requeueDeadLetters, type DeliveryStore } from "../lib/server/communications/delivery-store";
+import { buildSendGridMessage, classifySendError, createMailTransport, SendError, type MailTransport, type OutboundBatch } from "../lib/server/communications/sendgrid";
+import { processCommunicationBatch } from "../lib/server/communications/delivery-worker";
+import { deliveryStatus, retryDeliveries } from "../lib/server/delivery-status";
+import { makeT } from "../lib/i18n";
+import sgMail from "@sendgrid/mail";
 import { sql } from "../lib/server/database";
 import { createRelease, publishRelease } from "../lib/server/operations-repository";
 import { createIdea, listInternalIdeas } from "../lib/server/product-repository";
@@ -2541,7 +2546,7 @@ test("worker store, SQL: claim maps the batch of one campaign and locale; accept
     assert.match(claim.text, /OUTPUT CAST\(INSERTED\.id AS nvarchar\(36\)\) id,INSERTED\.email,INSERTED\.display_name displayName,INSERTED\.source,INSERTED\.attempt_count attemptCount,INSERTED\.locale,/);
     assert.equal(claim.text.match(/\(c\.status='Sending' OR d\.source='Test'\)/g)?.length, 3, "the gate applies where the campaign is chosen, where the rows are picked and where they are claimed");
     assert.equal(claim.text.match(/JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.deleted_at IS NULL/g)?.length, 3, "and in all three places a deleted campaign has no rows to claim, test rows included");
-    assert.match(claim.text, /JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.deleted_at IS NULL\s+WHERE d\.state IN \('Queued','Retry'\) AND \(c\.status='Sending' OR d\.source='Test'\);\s*$/, "the UPDATE itself claims only rows that are still waiting, of a campaign that is sending (or test rows)");
+    assert.match(claim.text, /JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.deleted_at IS NULL\s+WHERE d\.state IN \('Queued','Retry'\) AND \(c\.status='Sending' OR d\.source='Test'\) AND \(CASE WHEN d\.source='Test' THEN 1 ELSE 0 END\)=\(CASE WHEN q\.source='Test' THEN 1 ELSE 0 END\);\s*$/, "the UPDATE itself claims only rows that are still waiting, of a campaign that is sending (or test rows), and of the kind (Test or real) that was picked");
     assert.equal(claim.inTransaction, false, "READPAST cannot run in a unit of work, which is SERIALIZABLE");
     const seen = calls.length;
     for (const size of [0, -1, Number.NaN, 0.5]) assert.equal(await store.claimBatch(size), null, `size ${size}`);
@@ -2733,4 +2738,646 @@ test("send side, demo data: with SQL configured and the demo-data switch on, cam
       globalThis.pulseShowDemoData = undefined;
     }
   });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// SendGrid transport and delivery worker
+// ---------------------------------------------------------------------------------------------------------------------
+
+type FakeStep = "ok" | { status: number; retryAfter?: number };
+// Module scope: the webhook and acceptance tests of later tasks reuse these two.
+/**
+ * Stands in for SendGrid: answers from `script` (past its end, "ok") and keeps every batch it was handed. A failure looks like the SDK's
+ * ResponseError: the HTTP status in `code`, the headers and the parsed body in `response`.
+ */
+function fakeTransport(script: FakeStep[] = []) {
+  const calls: OutboundBatch[] = [];
+  const transport: MailTransport = {
+    kind: "sendgrid",
+    async sendBatch(batch) {
+      calls.push(batch);
+      const step = script.shift() ?? "ok";
+      if (step === "ok") return { providerMessageId: `msg-${calls.length}` };
+      throw Object.assign(new Error("sendgrid failure"), { code: step.status, response: { headers: step.retryAfter ? { "retry-after": String(step.retryAfter) } : {}, body: { errors: [{ message: "nope" }] } } });
+    },
+  };
+  return { transport, calls };
+}
+/** A campaign that has been sent to the four people `seedAudience` makes: Sending, with four Queued rows (three English, one Icelandic). */
+async function readyCampaign() {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  return created.id;
+}
+/** Runs `work` with console.<method> recording instead of printing; gives back what `work` returned and the lines it was handed. */
+async function captured<T>(method: "log" | "warn" | "error", work: () => Promise<T>): Promise<{ value: T; lines: string[] }> {
+  const lines: string[] = [];
+  const original = console[method];
+  console[method] = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  try {
+    return { value: await work(), lines };
+  } finally {
+    console[method] = original;
+  }
+}
+const outbound = (over: Partial<OutboundBatch> = {}): OutboundBatch => ({
+  subject: "S", html: "<p>h</p>", text: "t", from: { email: "updates@datacentral.ai", name: "DataCentral" }, replyTo: null,
+  recipients: [{ email: "a@origo.is", name: "A", customArgs: { deliveryId: "d1", communicationId: "COM-001" } }],
+  categories: ["pulse", "pulse-product-updates", "COM-001"], unsubscribeGroupId: null, tracking: { opens: true, clicks: true }, sandbox: false, ...over,
+});
+
+test("sendgrid: message builder maps recipients, custom args, categories, asm and tracking", () => {
+  const message = buildSendGridMessage({
+    subject: "S", html: "<p>h</p>", text: "t", from: { email: "updates@datacentral.ai", name: "DataCentral" }, replyTo: null,
+    recipients: [{ email: "a@origo.is", name: "A", customArgs: { deliveryId: "d1", communicationId: "COM-001" } }],
+    categories: ["pulse", "pulse-product-updates", "COM-001"], unsubscribeGroupId: 42, tracking: { opens: false, clicks: true }, sandbox: true,
+  }) as { personalizations: Array<{ to: Array<{ email: string }>; customArgs: Record<string, string> }>; asm: { groupId: number }; trackingSettings: { openTracking: { enable: boolean } }; mailSettings: { sandboxMode: { enable: boolean } } };
+  assert.equal(message.personalizations[0].to[0].email, "a@origo.is");
+  assert.equal(message.personalizations[0].customArgs.deliveryId, "d1");
+  assert.equal(message.asm.groupId, 42);
+  assert.equal(message.trackingSettings.openTracking.enable, false);
+  assert.equal(message.mailSettings.sandboxMode.enable, true);
+});
+
+test("sendgrid: the message leaves out what is not set — reply-to, unsubscribe group, a name — keeps a personalization per recipient and sends at most ten categories", () => {
+  const batch = outbound({
+    recipients: [{ email: "a@origo.is", name: null, customArgs: { deliveryId: "d1" } }, { email: "b@origo.is", name: "B", customArgs: { deliveryId: "d2" } }],
+    categories: Array.from({ length: 12 }, (_, i) => `c${i}`), tracking: { opens: true, clicks: false },
+  });
+  const bare = buildSendGridMessage(batch);
+  assert.equal("replyTo" in bare, false);
+  assert.equal("asm" in bare, false);
+  assert.deepEqual(bare.personalizations, [
+    { to: [{ email: "a@origo.is" }], customArgs: { deliveryId: "d1" } },
+    { to: [{ email: "b@origo.is", name: "B" }], customArgs: { deliveryId: "d2" } },
+  ], "one personalization, with one address, each: nobody sees another recipient");
+  assert.deepEqual(bare.categories, batch.categories.slice(0, 10));
+  assert.equal(batch.categories.length, 12, "the batch itself is not cut");
+  assert.deepEqual(bare.trackingSettings, { clickTracking: { enable: false, enableText: false }, openTracking: { enable: true } });
+  assert.deepEqual(bare.mailSettings, { sandboxMode: { enable: false } });
+  assert.deepEqual([bare.subject, bare.html, bare.text, bare.from], ["S", "<p>h</p>", "t", { email: "updates@datacentral.ai", name: "DataCentral" }]);
+  const set = buildSendGridMessage({ ...batch, replyTo: "support@datacentral.ai", unsubscribeGroupId: 7 });
+  assert.deepEqual([set.replyTo, set.asm], [{ email: "support@datacentral.ai" }, { groupId: 7 }]);
+});
+
+test("sendgrid: error classification", () => {
+  assert.deepEqual([classifySendError({ code: 429, response: { headers: { "retry-after": "900" } } })].map((e) => [e.code, e.retryable, e.retryAfterSeconds]), [["HTTP_429", true, 900]]);
+  assert.equal(classifySendError({ code: 400, response: { body: { errors: [{ message: "bad" }] } } }).retryable, false);
+  assert.equal(classifySendError({ code: 503 }).retryable, true);
+  assert.equal(classifySendError(new Error("ECONNRESET")).retryable, true);
+});
+
+test("sendgrid: classification — statuses, a missing or odd Retry-After, network errors, anything that is not an error, and a code that is short and made of word characters", () => {
+  const summary = (error: unknown) => { const c = classifySendError(error); return [c.code, c.retryable, c.retryAfterSeconds]; };
+  assert.deepEqual(summary({ code: 500 }), ["HTTP_500", true, null]);
+  assert.deepEqual(summary({ code: 401 }), ["HTTP_401", false, null], "a rejected key is not worth retrying");
+  assert.deepEqual(summary({ code: 413 }), ["HTTP_413", false, null]);
+  assert.deepEqual(summary({ code: "429", response: { headers: { "retry-after": "30" } } }), ["HTTP_429", true, 30], "a status can arrive as text");
+  for (const odd of ["soon", "0", "-5", ""]) assert.equal(classifySendError({ code: 429, response: { headers: { "retry-after": odd } } }).retryAfterSeconds, null, `Retry-After ${JSON.stringify(odd)} asks for no wait`);
+  assert.equal(classifySendError({ code: 429, response: {} }).retryAfterSeconds, null);
+  assert.deepEqual(summary(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), ["read_ECONNRESET", true, null], "a network error has no status: its message becomes the code");
+  assert.deepEqual(summary(new Error("timeout of 30000ms exceeded")), ["timeout_of_30000ms_exceeded", true, null]);
+  for (const notAnError of [null, undefined, "boom", 42, {}]) assert.deepEqual(summary(notAnError), ["SEND_FAILED", true, null]);
+  for (const notAStatus of [0, 99, "", null, "ECONNRESET"]) assert.deepEqual(summary(Object.assign(new Error("odd code"), { code: notAStatus })), ["odd_code", true, null], `a code of ${JSON.stringify(notAStatus)} is no HTTP status`);
+  assert.equal(classifySendError(new Error("x".repeat(100))).code.length, 40, "a code fits the log line and the column");
+  assert.match(classifySendError(new Error("a b-c.d/e")).code, /^[A-Za-z0-9_]+$/);
+  const mine = new SendError("MINE", false, 5);
+  assert.equal(classifySendError(mine), mine, "a SendError is already classified");
+});
+
+test("sendgrid: the transport sends the built message, returns the provider's message id and turns every failure into a classified SendError", async () => {
+  const handed: Array<Record<string, unknown>> = [];
+  const answering = (statusCode: number, headers: Record<string, string> = {}) =>
+    createMailTransport(DEFAULT_COMMUNICATION_SETTINGS, { send: async (message) => { handed.push(message); return { statusCode, headers }; } });
+  const failing = (error: unknown) => createMailTransport(DEFAULT_COMMUNICATION_SETTINGS, { send: async () => { throw error; } });
+  const isSendError = (code: string, retryable: boolean, retryAfterSeconds: number | null = null) => (e: unknown) =>
+    e instanceof SendError && e.code === code && e.retryable === retryable && e.retryAfterSeconds === retryAfterSeconds;
+  const batch = outbound();
+  assert.equal(answering(202).kind, "sendgrid", "an injected sender makes the SendGrid transport, key or no key");
+  assert.deepEqual(await answering(202, { "x-message-id": "sg-123" }).sendBatch(batch), { providerMessageId: "sg-123" });
+  assert.deepEqual(handed, [buildSendGridMessage(batch)], "the sender is handed exactly the built message");
+  assert.deepEqual(await answering(200).sendBatch(batch), { providerMessageId: null }, "sandbox mode answers 200 with no message id");
+  await assert.rejects(answering(302).sendBatch(batch), isSendError("HTTP_302", false));
+  await assert.rejects(answering(503).sendBatch(batch), isSendError("HTTP_503", true));
+  await assert.rejects(failing({ code: 429, response: { headers: { "retry-after": "120" } } }).sendBatch(batch), isSendError("HTTP_429", true, 120));
+  await assert.rejects(failing({ code: 400, response: { body: { errors: [{ message: "recipient@origo.is is not valid" }] } } }).sendBatch(batch), isSendError("HTTP_400", false));
+  await assert.rejects(failing(new Error("socket hang up")).sendBatch(batch), isSendError("socket_hang_up", true));
+});
+
+test("sendgrid: without an API key the transport is the console one: it sends nothing and logs a count, never an address", async () => {
+  const transport = createMailTransport(DEFAULT_COMMUNICATION_SETTINGS);
+  assert.equal(transport.kind, "console");
+  const { value, lines } = await captured("log", () => transport.sendBatch(outbound({ sandbox: true })));
+  assert.match(value.providerMessageId ?? "", /^console-[0-9a-f-]{36}$/);
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ level: "info", event: "communications.console-send", recipients: 1, sandbox: true }]);
+  process.env.SENDGRID_API_KEY = "   ";
+  assert.equal(createMailTransport(DEFAULT_COMMUNICATION_SETTINGS).kind, "console", "a blank key is no key");
+  process.env.SENDGRID_API_KEY = "SG.test";
+  assert.equal(createMailTransport(DEFAULT_COMMUNICATION_SETTINGS).kind, "sendgrid");
+});
+
+/** The HTTP client inside the SDK's `sgMail` singleton, where the key, the region and the request settle. It is not in the typings, hence the cast. */
+type SdkClient = {
+  request?: (data: unknown) => Promise<unknown>;
+  createRequest(data: unknown): { baseURL: string; headers: Record<string, string>; data: Record<string, unknown>; timeout?: number };
+  setDataResidency(region: string): unknown;
+};
+const sdkClient = () => (sgMail as unknown as { client: SdkClient }).client;
+
+test("sendgrid, SDK: the batch reaches SendGrid as the v3 request body, with the key, in the region the settings name, and the response is read from the SDK's answer", async () => {
+  process.env.SENDGRID_API_KEY = "  SG.test-key ";
+  const client = sdkClient();
+  const requests: Array<ReturnType<SdkClient["createRequest"]>> = [];
+  // Nothing goes out: the SDK builds the request as it would, and this answers it instead of the network.
+  client.request = async (data) => { requests.push(client.createRequest(data)); return [{ statusCode: 202, body: "", headers: { "x-message-id": "sg-sdk-1" } }, ""]; };
+  try {
+    const batch = outbound({ replyTo: "support@datacentral.ai", unsubscribeGroupId: 42, sandbox: true, tracking: { opens: false, clicks: true } });
+    assert.deepEqual(await createMailTransport({ ...DEFAULT_COMMUNICATION_SETTINGS, dataResidency: "eu" }).sendBatch(batch), { providerMessageId: "sg-sdk-1" });
+    await createMailTransport({ ...DEFAULT_COMMUNICATION_SETTINGS, dataResidency: "global" }).sendBatch(batch);
+    assert.deepEqual(requests.map((r) => r.baseURL), ["https://api.eu.sendgrid.com/", "https://api.sendgrid.com/"], "MailService has no setDataResidency; the region is set on the client it sends through");
+    assert.ok(requests.every((r) => r.headers.Authorization === "Bearer SG.test-key"), "the key, without its blanks");
+    assert.ok(requests.every((r) => r.timeout === 30_000), "a request that hangs is given up after 30 seconds");
+    assert.deepEqual(JSON.parse(JSON.stringify(requests[0].data)), { // what goes over the wire: the SDK's address objects serialize themselves
+      from: { email: "updates@datacentral.ai", name: "DataCentral" },
+      reply_to: { email: "support@datacentral.ai" },
+      subject: "S",
+      personalizations: [{ to: [{ email: "a@origo.is", name: "A" }], custom_args: { deliveryId: "d1", communicationId: "COM-001" } }],
+      content: [{ type: "text/plain", value: "t" }, { type: "text/html", value: "<p>h</p>" }],
+      categories: ["pulse", "pulse-product-updates", "COM-001"],
+      asm: { group_id: 42 },
+      tracking_settings: { click_tracking: { enable: true, enable_text: false }, open_tracking: { enable: false } },
+      mail_settings: { sandbox_mode: { enable: true } },
+    });
+  } finally {
+    delete client.request;
+    client.setDataResidency("global");
+  }
+});
+
+test("worker: sends one request per locale with ≤500 recipients, marks Accepted and completes the campaign", async () => {
+  const id = await readyCampaign();
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.equal(calls.length, 2, "en and is batches");
+  assert.ok(calls.every((c) => c.recipients.every((r) => r.customArgs.communicationId === id && r.customArgs.deliveryId)));
+  assert.deepEqual(calls[0].categories, ["pulse", "pulse-product-updates", id]);
+  assert.equal(result.accepted, 4);
+  assert.deepEqual(result.completed, [id]);
+  assert.equal((await getCommunication(PM, id)).status, "Sent");
+  assert.ok((await listDeliveries(PM, id, {})).items.every((d) => d.state === "Accepted" && d.providerMessageId));
+});
+
+test("worker: the request carries the campaign's settings, the rendered mail for the batch's locale and the people of that batch only", async () => {
+  await seedAudience();
+  await saveCommunicationSettings(ADMIN, {
+    ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", fromName: "DC Updates", replyTo: "support@datacentral.ai", unsubscribeGroupId: 42,
+    sandboxMode: true, tracking: { opens: false, clicks: true }, safeMode: { enabled: false, allowedDomains: [] }, categoriesPrefix: "pulse-test",
+  });
+  process.env.SENDGRID_API_KEY = "SG.test";
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, {});
+  process.env.PULSE_PUBLIC_URL = "https://pulse.test///";
+  const { transport, calls } = fakeTransport();
+  try {
+    await processCommunicationBatch(500, { transport });
+  } finally {
+    delete process.env.PULSE_PUBLIC_URL;
+  }
+  const [english, icelandic] = calls;
+  assert.deepEqual(english.recipients.map((r) => [r.email, r.name]), [["bjarki@uidata.com", "Bjarki Kristjánsson"], ["jon@origo.is", "Jón"], ["anna@advania.is", "Anna"]]);
+  assert.deepEqual(icelandic.recipients.map((r) => [r.email, r.name]), [["cio@origo.is", "CIO"]]);
+  for (const call of calls) {
+    assert.deepEqual([call.from, call.replyTo, call.unsubscribeGroupId, call.tracking, call.sandbox], [{ email: "updates@datacentral.ai", name: "DC Updates" }, "support@datacentral.ai", 42, { opens: false, clicks: true }, true]);
+    assert.deepEqual(call.categories, ["pulse-test", "pulse-test-product-updates", created.id]);
+    assert.match(call.html, /https:\/\/pulse\.test\/email\/datacentral-logo\.png/, "the logo comes from the public URL, without its trailing slashes");
+    assert.match(call.html, /<%asm_group_unsubscribe_raw_url%>/, "an unsubscribe group puts the unsubscribe tag in the footer");
+  }
+  assert.equal(english.subject, "DataCentral 3.0.0");
+  assert.equal(icelandic.subject, "DataCentral 3.0.0 (is)", "the Icelandic batch carries the Icelandic subject");
+  assert.match(english.html, /<html lang="en">/);
+  assert.match(icelandic.html, /<html lang="is">/);
+  assert.ok(english.text.length > 0 && icelandic.text.length > 0);
+});
+
+test("worker: honours Retry-After when it exceeds the backoff; non-retryable errors dead-letter at once", async () => {
+  const id = await readyCampaign();
+  const start = Date.now();
+  const throttled = await processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter: 900 }]).transport, now: () => new Date(start) });
+  assert.equal(throttled.retried, 3, "the English batch of three was throttled");
+  assert.equal((await listDeliveries(PM, id, { state: "Queued" })).total, 1, "the Icelandic row is never claimed after the 429 stop");
+  const retry = (await listDeliveries(PM, id, { state: "Retry" })).items[0];
+  assert.ok(new Date(retry.nextAttemptAt!).getTime() >= start + 900_000);
+  for (const d of globalThis.pulseMemoryCommunicationDeliveries!) d.nextAttemptAt = new Date(0).toISOString();
+  const rejected = await processCommunicationBatch(500, { transport: fakeTransport([{ status: 400 }, { status: 400 }]).transport });
+  assert.ok(rejected.deadLettered >= 1);
+  assert.ok((await listDeliveries(PM, id, { state: "Dead letter" })).total >= 1);
+});
+
+test("worker: a Retry-After shorter than the backoff changes nothing, and one past a day waits a day, so a wild value cannot park a row for years", async () => {
+  await readyCampaign();
+  const start = Date.now();
+  const waitAfter = async (retryAfter: number) => {
+    for (const d of memoryDeliveries()) Object.assign(d, { state: "Queued", attemptCount: 0, nextAttemptAt: null });
+    await processCommunicationBatch(500, { transport: fakeTransport([{ status: 429, retryAfter }]).transport, now: () => new Date(start) });
+    return new Date(memoryDeliveries().find((d) => d.state === "Retry")!.nextAttemptAt!).getTime() - start;
+  };
+  assert.equal(await waitAfter(30), 2 * BACKOFF_BASE_MS, "the first failure backs off two minutes; 30 seconds is less");
+  assert.equal(await waitAfter(900), 900_000);
+  assert.equal(await waitAfter(1e15), 24 * 3_600_000);
+});
+
+test("worker: five retryable failures dead-letter; master switch off skips; daily cap stops claiming", async () => {
+  const id = await readyCampaign();
+  const script = Array.from({ length: 10 }, () => ({ status: 500 }));
+  for (let i = 0; i < 5; i++) {
+    await processCommunicationBatch(500, { transport: fakeTransport(script).transport });
+    for (const d of globalThis.pulseMemoryCommunicationDeliveries!) d.nextAttemptAt = new Date(0).toISOString();
+  }
+  assert.equal((await communicationStats(id)).deadLettered, 4);
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: false });
+  assert.equal((await processCommunicationBatch(500, { transport: fakeTransport().transport })).skipped, true);
+  const second = await createCommunication(PM, draftInput);
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] }, dailyCap: 2 });
+  await sendCommunication(PM, second.id, {});
+  const capped = await processCommunicationBatch(500, { transport: fakeTransport().transport });
+  assert.equal(capped.capReached, true);
+  assert.equal((await communicationStats(second.id)).queued, 2, "cap of 2 leaves two of four recipients queued");
+});
+
+test("worker: promotes due scheduled campaigns and prefixes test sends", async () => {
+  await seedAudience();
+  await enableSending();
+  const created = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, created.id, { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() });
+  globalThis.pulseMemoryCommunications![0].scheduledAt = new Date(Date.now() - 1000).toISOString();
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.deepEqual(result.promoted, [created.id]);
+  assert.equal(result.accepted, 4);
+  const draft = await createCommunication(PM, draftInput);
+  await testSendCommunication(PM, draft.id, []);
+  await processCommunicationBatch(500, { transport });
+  assert.ok(calls.at(-1)!.subject.startsWith("[TEST] "));
+  assert.equal(calls.at(-1)!.recipients[0].email, PM.email);
+});
+
+test("worker: a test mail goes out alone with its own category, and a real batch never carries the test prefix", async () => {
+  const id = await readyCampaign();
+  await testSendCommunication(PM, id, []);
+  const { transport, calls } = fakeTransport();
+  const result = await processCommunicationBatch(500, { transport });
+  assert.equal(result.accepted, 5);
+  const testMails = calls.filter((c) => c.subject.startsWith("[TEST] "));
+  const realMails = calls.filter((c) => !c.subject.startsWith("[TEST] "));
+  assert.deepEqual([testMails.length, realMails.length], [1, 2], "the Test row is a batch of its own");
+  assert.deepEqual(testMails[0].recipients.map((r) => r.email), [PM.email]);
+  assert.deepEqual(testMails[0].categories, ["pulse", "pulse-test", id], "a test mail is counted apart from the campaign's topic");
+  assert.deepEqual(realMails.map((c) => c.recipients.length), [3, 1]);
+  assert.ok(realMails.every((c) => c.categories[1] === "pulse-product-updates"));
+});
+
+test("worker: a lease that has run out is recovered first, the rows go out again in the same run and the count is reported", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const crashed = (await store.claimBatch(500))!; // the English batch: with the provider when the run that claimed it died
+  assert.equal(crashed.deliveries.length, 3);
+  const row = (email: string) => memoryDeliveries().find((d) => d.email === email)!;
+  for (const email of ["bjarki@uidata.com", "jon@origo.is"]) row(email).nextAttemptAt = new Date(Date.now() - 1000).toISOString(); // their leases ran out; anna's has not
+  const { transport, calls } = fakeTransport();
+  const { value: first, lines } = await captured("warn", () => processCommunicationBatch(500, { transport }));
+  assert.equal(first.recovered, 2);
+  assert.deepEqual(calls.map((c) => c.recipients.map((r) => r.email)), [["bjarki@uidata.com", "jon@origo.is"], ["cio@origo.is"]], "the recovered rows go out with the Icelandic one; anna's lease is still live");
+  assert.deepEqual([first.accepted, first.completed], [3, []], "and the campaign waits for the row that is still with the worker");
+  assert.deepEqual([row("bjarki@uidata.com").state, row("bjarki@uidata.com").attemptCount, row("anna@advania.is").state], ["Accepted", 2, "Processing"], "recovery keeps the attempts: the new claim counted the second");
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ level: "warn", event: "communications.recovered-stale", count: 2 }], "an abnormal event is logged, with a count");
+  row("anna@advania.is").nextAttemptAt = new Date(Date.now() - 1000).toISOString();
+  const second = await processCommunicationBatch(500, { transport });
+  assert.deepEqual([second.recovered, second.accepted, second.completed], [1, 1, [id]]);
+  assert.deepEqual((await processCommunicationBatch(500, { transport })).recovered, 0, "nothing is recovered twice");
+});
+
+test("worker: with 'Show demo data' on nothing is mailed — a demo campaign's deliveries come from the real audience — and the switch off again lets the same rows go", async () => {
+  await readyCampaign();
+  const { transport, calls } = fakeTransport();
+  globalThis.pulseShowDemoData = true;
+  try {
+    assert.deepEqual(await processCommunicationBatch(500, { transport }), { skipped: true, promoted: [], accepted: 0, retried: 0, deadLettered: 0, completed: [], capReached: false, recovered: 0 });
+  } finally {
+    globalThis.pulseShowDemoData = undefined;
+  }
+  assert.equal(calls.length, 0);
+  assert.deepEqual(countByState(memoryDeliveries()), { Queued: 4 }, "not even claimed");
+  assert.equal((await processCommunicationBatch(500, { transport })).accepted, 4);
+});
+
+test("worker: in production the console transport is refused before anything is claimed, whether it was chosen for lack of a key or handed in; a real transport is not refused", async () => {
+  await readyCampaign();
+  const store = getDeliveryStore(); // the memory store, picked while NODE_ENV is not production (a production process without SQL does not start)
+  const env = process.env as Record<string, string | undefined>;
+  const before = env.NODE_ENV;
+  env.NODE_ENV = "production";
+  try {
+    delete env.SENDGRID_API_KEY; // no key: createMailTransport falls back to the console transport ...
+    await assert.rejects(processCommunicationBatch(500, { store }), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, "... which a production worker must never use in silence");
+    const consoleLike: MailTransport = { kind: "console", async sendBatch() { throw new Error("must not be called"); } };
+    await assert.rejects(processCommunicationBatch(500, { store, transport: consoleLike }), /INVALID_EMAIL_PROVIDER_CONFIGURATION/, "nor one handed to it");
+    assert.deepEqual(countByState(memoryDeliveries()), { Queued: 4 }, "nothing was claimed");
+    const { transport, calls } = fakeTransport();
+    assert.deepEqual([(await processCommunicationBatch(500, { store, transport })).accepted, calls.length], [4, 2]);
+  } finally {
+    if (before === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = before;
+  }
+});
+
+test("worker: a batch that cannot be rendered fails like any other — retried, then a dead letter — and does not leave its rows with the worker or stop the run", async () => {
+  const id = await readyCampaign();
+  memoryCommunications().find((c) => c.id === id)!.templateKey = "no-such-template" as never;
+  const { transport, calls } = fakeTransport();
+  const { value: first, lines } = await captured("error", () => processCommunicationBatch(500, { transport }));
+  assert.deepEqual([first.accepted, first.retried, first.deadLettered, calls.length], [0, 4, 0, 0], "both batches failed; the second was still tried");
+  assert.deepEqual(countByState(memoryDeliveries()), { Retry: 4 });
+  assert.ok(memoryDeliveries().every((d) => d.lastErrorCode === "INVALID_TEMPLATE" && d.attemptCount === 1));
+  assert.deepEqual(lines.map((line) => JSON.parse(line).code), ["INVALID_TEMPLATE", "INVALID_TEMPLATE"]);
+  for (const d of memoryDeliveries()) Object.assign(d, { attemptCount: 4, nextAttemptAt: new Date(0).toISOString() });
+  const last = await processCommunicationBatch(500, { transport });
+  assert.deepEqual([last.retried, last.deadLettered], [0, 4], "the fifth attempt is the last");
+});
+
+test("worker: a failed batch is logged with its campaign, a code and a count — never an address, a subject or a body", async () => {
+  const id = await readyCampaign();
+  const { lines } = await captured("error", () => processCommunicationBatch(500, { transport: fakeTransport([{ status: 500 }, { status: 400 }]).transport }));
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [
+    { level: "error", event: "communications.send.failed", communicationId: id, code: "HTTP_500", recipients: 3, terminal: false },
+    { level: "error", event: "communications.send.failed", communicationId: id, code: "HTTP_400", recipients: 1, terminal: true },
+  ]);
+  for (const forbidden of ["@", "origo", "DataCentral 3.0.0", "Admin Report", "nope"]) assert.ok(lines.every((line) => !line.includes(forbidden)), `a log line must not carry: ${forbidden}`);
+});
+
+test("worker: an error from the store while it settles an accepted batch is not turned into a send failure — the rows keep their lease and go out again when it runs out", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const settled: string[] = [];
+  const breaking: DeliveryStore = { ...store, markAccepted: async () => { settled.push("accepted"); throw new Error("SQL went away"); } };
+  const { transport, calls } = fakeTransport();
+  await assert.rejects(processCommunicationBatch(500, { store: breaking, transport }), /SQL went away/);
+  assert.deepEqual([calls.length, settled], [1, ["accepted"]], "the run stops where the database failed");
+  assert.deepEqual(countByState(memoryDeliveries()), { Processing: 3, Queued: 1 }, "the rows stay with the worker: their lease, not a bogus failure, decides when they go out again");
+  assert.ok(memoryDeliveries().every((d) => d.lastErrorCode === undefined), "and no failure was recorded against them");
+  for (const d of memoryDeliveries().filter((x) => x.state === "Processing")) d.nextAttemptAt = new Date(Date.now() - 1000).toISOString();
+  const again = await processCommunicationBatch(500, { transport });
+  assert.deepEqual([again.recovered, again.accepted, again.completed], [3, 4, [id]]);
+});
+
+test("worker: the limit bounds the run — that many rows, never more than 500 in a request or 5000 in a run, and at least one", async () => {
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", dailyCap: 1_000_000 });
+  const sizes: number[] = [];
+  let sequence = 0;
+  const endless: DeliveryStore = {
+    async promoteScheduled() { return []; },
+    async recoverStale() { return 0; },
+    async claimBatch(size) {
+      sizes.push(size);
+      return {
+        communicationId: "COM-001", templateKey: "product-update", topic: "product-updates", content: productUpdate, locale: "en",
+        deliveries: Array.from({ length: size }, () => ({ id: `d${++sequence}`, email: `u${sequence}@origo.is`, displayName: null, source: "Member" as const, attemptCount: 1 })),
+      };
+    },
+    async markAccepted() {},
+    async markFailed() {},
+    async acceptedToday() { return 0; },
+    async completeCampaigns() { return []; },
+  };
+  const run = async (limit: number) => {
+    sizes.length = 0;
+    const result = await processCommunicationBatch(limit, { store: endless, transport: fakeTransport().transport });
+    return { accepted: result.accepted, sizes: [...sizes] };
+  };
+  assert.deepEqual(await run(1_000_000), { accepted: 5000, sizes: Array(10).fill(500) }, "a run is at most 5000 rows, in requests of 500, with no overshoot");
+  assert.deepEqual(await run(1200), { accepted: 1200, sizes: [500, 500, 200] });
+  assert.deepEqual(await run(2.7), { accepted: 2, sizes: [2] }, "a fraction is a whole number of rows");
+  assert.deepEqual(await run(0), { accepted: 1, sizes: [1] }, "a run takes at least one row");
+  assert.deepEqual(await run(-3), { accepted: 1, sizes: [1] });
+  assert.deepEqual(await run(Number.NaN), { accepted: 1, sizes: [1] });
+});
+
+test("claim: Test rows and real rows never share a batch, whichever is older", async () => {
+  await seedAudience();
+  await enableSending();
+  const store = getDeliveryStore();
+  const drain = async () => {
+    const batches: string[][] = [];
+    for (let batch = await store.claimBatch(500); batch; batch = await store.claimBatch(500)) batches.push([batch.locale, ...batch.deliveries.map((d) => d.source)]);
+    return batches;
+  };
+  const testFirst = await createCommunication(PM, draftInput);
+  await testSendCommunication(PM, testFirst.id, []);
+  await sendCommunication(PM, testFirst.id, {});
+  assert.deepEqual(await drain(), [["en", "Test"], ["en", "Member", "Member", "Member"], ["is", "Contact"]], "an older Test row goes alone, and the real rows of its locale after it");
+  const realFirst = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, realFirst.id, {});
+  await testSendCommunication(PM, realFirst.id, []);
+  assert.deepEqual(await drain(), [["en", "Member", "Member", "Member"], ["is", "Contact"], ["en", "Test"]], "an older real row goes without the Test row of its locale, which follows alone");
+});
+
+test("claim: a batch never mixes campaigns, even when two are sending to the same locale; the older campaign goes first", async () => {
+  await seedAudience();
+  await enableSending();
+  const first = await createCommunication(PM, draftInput);
+  const second = await createCommunication(PM, draftInput);
+  await sendCommunication(PM, first.id, {});
+  await sendCommunication(PM, second.id, {});
+  const store = getDeliveryStore();
+  const batches: Array<[string, string, number]> = [];
+  for (let batch = await store.claimBatch(500); batch; batch = await store.claimBatch(500)) batches.push([batch.communicationId, batch.locale, batch.deliveries.length]);
+  assert.deepEqual(batches, [[first.id, "en", 3], [first.id, "is", 1], [second.id, "en", 3], [second.id, "is", 1]]);
+});
+
+test("claim: a claimed row is leased for fifteen minutes, and accepting or failing it ends the lease", async () => {
+  await readyCampaign();
+  const store = getDeliveryStore();
+  assert.equal(LEASE_MS, 15 * 60_000);
+  const before = Date.now();
+  const batch = (await store.claimBatch(2))!;
+  const after = Date.now();
+  const claimed = batch.deliveries.map((d) => memoryDeliveries().find((r) => r.id === d.id)!);
+  assert.equal(claimed.length, 2);
+  for (const d of claimed) {
+    const lease = new Date(d.nextAttemptAt!).getTime();
+    assert.ok(d.state === "Processing" && lease >= before + LEASE_MS && lease <= after + LEASE_MS, "the lease runs LEASE_MS from the claim");
+  }
+  assert.ok(memoryDeliveries().filter((d) => d.state === "Queued").every((d) => !d.nextAttemptAt), "a row nobody claimed has none");
+  const [accepted, failed] = claimed;
+  await store.markAccepted([accepted.id], "msg-1", new Date());
+  assert.equal(accepted.nextAttemptAt, null, "accepting clears the lease");
+  const retryAt = new Date(Date.now() + 120_000);
+  await store.markFailed([failed.id], "HTTP_500", retryAt);
+  assert.equal(failed.nextAttemptAt, retryAt.toISOString(), "a failure replaces the lease with the retry time");
+});
+
+test("recoverStale: a row whose lease has run out goes back to Retry with its attempts kept; a live lease, one that ends exactly now, no lease and rows in other states are left alone", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const english = (await store.claimBatch(500))!; // three rows with the worker
+  const icelandic = (await store.claimBatch(500))!; // and one more
+  const [a, b, c, d] = [...english.deliveries, ...icelandic.deliveries].map((x) => memoryDeliveries().find((r) => r.id === x.id)!);
+  const unleased = deliveryRow(id, "Processing"); // however it got there: with no lease it never runs out
+  memoryDeliveries().push(unleased);
+  const now = new Date();
+  assert.equal(await store.recoverStale(now), 0, "a lease just taken is live");
+  a.nextAttemptAt = new Date(now.getTime() - 1).toISOString(); // ran out a millisecond ago
+  b.nextAttemptAt = now.toISOString(); // runs out exactly now: not yet
+  c.nextAttemptAt = new Date(now.getTime() + 1).toISOString();
+  await store.markFailed([d.id], "HTTP_500", new Date(now.getTime() - 5000)); // an ordinary retry whose time has passed is not a stale lease
+  assert.equal(await store.recoverStale(now), 1);
+  assert.deepEqual([a.state, a.nextAttemptAt, a.attemptCount, a.lastErrorCode], ["Retry", null, 1, undefined], "due at once, attempts kept");
+  assert.deepEqual([b.state, c.state, d.state, unleased.state], ["Processing", "Processing", "Retry", "Processing"]);
+  assert.equal(await store.recoverStale(new Date(now.getTime() + 2)), 2, "b and c have run out by then; d is not Processing");
+  assert.deepEqual([b.state, c.state, unleased.state], ["Retry", "Retry", "Processing"]);
+  assert.equal(await store.recoverStale(new Date(now.getTime() + LEASE_MS * 10)), 0, "nothing is recovered twice");
+  const again = (await store.claimBatch(500))!;
+  assert.deepEqual(again.deliveries.map((x) => [x.email, x.attemptCount]), [["bjarki@uidata.com", 2], ["jon@origo.is", 2], ["anna@advania.is", 2]], "the recovered rows are claimed again and the attempt is counted");
+});
+
+test("recoverStale: a claim that ran out on the last attempt makes a dead letter, and a claim on the one before it a retry", async () => {
+  const id = await readyCampaign();
+  const store = getDeliveryStore();
+  const lapsed = new Date(Date.now() - 1000).toISOString();
+  const spent = deliveryRow(id, "Processing", { attemptCount: MAX_ATTEMPTS, nextAttemptAt: lapsed });
+  const almost = deliveryRow(id, "Processing", { attemptCount: MAX_ATTEMPTS - 1, nextAttemptAt: lapsed });
+  const spentTest = deliveryRow(id, "Processing", { attemptCount: MAX_ATTEMPTS, source: "Test", nextAttemptAt: lapsed });
+  memoryDeliveries().push(spent, almost, spentTest);
+  assert.equal(await store.recoverStale(new Date()), 3);
+  assert.deepEqual([spent.state, spent.lastErrorCode, spent.nextAttemptAt, spent.attemptCount], ["Dead letter", "LEASE_EXPIRED", null, MAX_ATTEMPTS], "the fifth claim was the last: a row is not sent for ever when nothing it does settles it");
+  assert.deepEqual([almost.state, almost.lastErrorCode, almost.attemptCount], ["Retry", undefined, MAX_ATTEMPTS - 1]);
+  assert.deepEqual([spentTest.state, spentTest.lastErrorCode], ["Dead letter", "LEASE_EXPIRED"], "a Test row has the same five attempts");
+  assert.equal((await communicationStats(id)).deadLettered, 1, "and it is counted with the dead letters, which a retry can queue again");
+});
+
+test("worker: a settle that always fails does not mail a row for ever — five sends, then the lease that runs out makes it a dead letter", async () => {
+  await readyCampaign();
+  const store = getDeliveryStore();
+  const breaking: DeliveryStore = { ...store, markAccepted: async () => { throw new Error("SQL went away"); } };
+  const { transport, calls } = fakeTransport();
+  const run = () => processCommunicationBatch(500, { store: breaking, transport });
+  await assert.rejects(run(), /SQL went away/, "the database is down every time");
+  for (let again = 0; again < 11; again++) {
+    for (const d of memoryDeliveries().filter((x) => x.state === "Processing")) d.nextAttemptAt = new Date(Date.now() - 1000).toISOString(); // the lease of the run before runs out
+    await run().catch(() => undefined);
+  }
+  const mailsTo = (email: string) => calls.filter((c) => c.recipients.some((r) => r.email === email)).length;
+  assert.deepEqual([mailsTo("bjarki@uidata.com"), mailsTo("cio@origo.is")], [MAX_ATTEMPTS, MAX_ATTEMPTS], "each row went out five times and no more");
+  assert.deepEqual(countByState(memoryDeliveries()), { "Dead letter": 4 });
+  assert.ok(memoryDeliveries().every((d) => d.lastErrorCode === "LEASE_EXPIRED" && d.attemptCount === MAX_ATTEMPTS));
+});
+
+test("recoverStale: the real rows of a cancelled campaign are cancelled, not queued for a claim that never comes; a Test row is still retried", async () => {
+  const id = await readyCampaign();
+  await testSendCommunication(PM, id, []);
+  const store = getDeliveryStore();
+  while (await store.claimBatch(500)); // every row is with the worker: the four real ones and the Test row
+  assert.deepEqual(countByState(memoryDeliveries()), { Processing: 5 });
+  await cancelCommunication(PM, id, "cancel"); // rows with the provider are left alone by a cancel
+  assert.deepEqual(countByState(memoryDeliveries()), { Processing: 5 });
+  const lastAttempt = memoryDeliveries().find((d) => d.source !== "Test")!;
+  lastAttempt.attemptCount = MAX_ATTEMPTS; // even a row on its last attempt is cancelled, not a dead letter
+  assert.equal(await store.recoverStale(new Date(Date.now() + LEASE_MS + 1000)), 5);
+  assert.deepEqual(memoryDeliveries().map((d) => [d.source === "Test" ? "Test" : "real", d.state, d.nextAttemptAt]).sort(), [
+    ["Test", "Retry", null], ["real", "Cancelled", null], ["real", "Cancelled", null], ["real", "Cancelled", null], ["real", "Cancelled", null],
+  ]);
+  const stats = await communicationStats(id);
+  assert.deepEqual([stats.queued, stats.cancelled, stats.recipients], [0, 4, 4], "the campaign holds no row that nothing will claim");
+  const test = (await store.claimBatch(500))!;
+  assert.deepEqual(test.deliveries.map((d) => d.source), ["Test"], "the Test row is claimed whatever its campaign's status is");
+  assert.equal(await store.claimBatch(500), null);
+});
+
+test("worker store, SQL: a claim keeps Test and real rows apart where it picks and where it claims, and leases what it takes", async () => {
+  await withFakeSql([[/WITH next_campaign AS/, { recordset: [] }]], async (calls) => {
+    assert.equal(await getDeliveryStore().claimBatch(5), null);
+    const claim = calls.find((c) => /WITH next_campaign AS/.test(c.text))!;
+    assert.match(claim.text, /SELECT TOP \(1\) d\.communication_id,d\.locale,d\.source FROM dbo\.CommunicationDeliveries d WITH \(UPDLOCK,READPAST,ROWLOCK\)/, "the first row's source is carried along");
+    assert.match(claim.text, /SELECT TOP \(@size\) d\.id,n\.source FROM dbo\.CommunicationDeliveries d\s+JOIN next_campaign n ON n\.communication_id=d\.communication_id AND n\.locale=d\.locale AND \(CASE WHEN d\.source='Test' THEN 1 ELSE 0 END\)=\(CASE WHEN n\.source='Test' THEN 1 ELSE 0 END\)/, "the pick is of the first row's campaign, locale and kind");
+    assert.match(claim.text, /WHERE d\.state IN \('Queued','Retry'\) AND \(c\.status='Sending' OR d\.source='Test'\) AND \(CASE WHEN d\.source='Test' THEN 1 ELSE 0 END\)=\(CASE WHEN q\.source='Test' THEN 1 ELSE 0 END\);\s*$/, "and the UPDATE claims only rows of that kind");
+    assert.equal(claim.text.match(/CASE WHEN d\.source='Test' THEN 1 ELSE 0 END/g)?.length, 2, "the kind is compared in the pick and in the claim, nowhere else");
+    assert.match(claim.text, /UPDATE d SET state='Processing',attempt_count=attempt_count\+1,next_attempt_at=DATEADD\(second,@lease,SYSUTCDATETIME\(\)\)\s+OUTPUT/, "a claimed row is leased");
+    assert.equal(claim.inputs.lease, LEASE_MS / 1000);
+    assert.equal(claim.inputs.size, 5);
+  });
+});
+
+test("worker store, SQL: recoverStale returns lapsed leases to Retry — a cancelled campaign's real rows to Cancelled, a last attempt to Dead letter — and says how many", async () => {
+  const at = new Date("2026-10-14T09:00:00Z");
+  await withFakeSql([[/WHERE d\.state='Processing'/, { rowsAffected: [3] }]], async (calls, events) => {
+    assert.equal(await getDeliveryStore().recoverStale(at), 3);
+    const recover = calls.find((c) => /WHERE d\.state='Processing'/.test(c.text))!;
+    assert.deepEqual([recover.inputs.now, recover.inputs.maxAttempts], [at, MAX_ATTEMPTS]);
+    assert.match(recover.text, /^UPDATE d SET state=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' WHEN d\.attempt_count>=@maxAttempts THEN 'Dead letter' ELSE 'Retry' END,next_attempt_at=NULL,\s+last_error_code=CASE WHEN d\.attempt_count>=@maxAttempts THEN 'LEASE_EXPIRED' ELSE d\.last_error_code END\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.state='Processing' AND d\.next_attempt_at<@now$/,
+      "only a lease that has run out; the real rows of a cancelled campaign are cancelled (a cancel that is committing is waited for); a last attempt is a dead letter, with its reason; the attempts are not touched");
+    assert.deepEqual(events, [], "one atomic statement, no unit of work");
+  });
+  await withFakeSql([], async () => assert.equal(await getDeliveryStore().recoverStale(at), 0, "nothing lapsed"));
+});
+
+/** The membership answer of a System admin: the delivery status and its retry are for them only (the harness answers as a Product manager unless an earlier entry says otherwise). */
+const asSystemAdmin: SqlAnswers = [[/FROM dbo\.Memberships m JOIN dbo\.Organizations o/, { recordset: [{ role: "System admin", allowedAuth: '["OTP","Entra ID"]' }] }]];
+
+test("delivery status, SQL: the Communications channel is counted next to Email and Webhook, for a System admin only", async () => {
+  const rows = [{ channel: "Communications", state: "Dead letter", count: 3, oldest: "2026-10-14T08:00:00.000Z" }];
+  await withFakeSql([...asSystemAdmin, [/UNION ALL SELECT 'Communications'/, { recordset: rows }]], async (calls) => {
+    assert.deepEqual(await deliveryStatus(ADMIN), rows);
+    const arms = calls.find((c) => /UNION ALL SELECT 'Communications'/.test(c.text))!.text.split("UNION ALL").map((arm) => arm.replace(/\s+/g, " ").trim());
+    assert.equal(arms.length, 3);
+    assert.match(arms[0], /^SELECT 'Email' channel,state,COUNT\(\*\) count,MIN\(created_at\) oldest FROM dbo\.Notifications WHERE channel='Email' AND state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY state$/);
+    assert.match(arms[1], /^SELECT 'Webhook' channel,state,COUNT\(\*\) count,MIN\(created_at\) oldest FROM dbo\.WebhookDeliveries WHERE state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY state$/);
+    assert.match(arms[2], /^SELECT 'Communications' channel,state,COUNT\(\*\) count,MIN\(created_at\) oldest FROM dbo\.CommunicationDeliveries WHERE state IN \('Queued','Retry','Processing','Dead letter'\) GROUP BY state$/);
+  });
+  await withFakeSql([], async () => { await assert.rejects(deliveryStatus(PM), /FORBIDDEN/); });
+});
+
+test("delivery retry, SQL: the Communications channel requeues the dead letters of live campaigns that are not cancelled, reopens completed campaigns with rows waiting again and audits counts, in one unit of work", async () => {
+  const correlation = crypto.randomUUID();
+  const answers: SqlAnswers = [...asSystemAdmin, [/^UPDATE TOP\(100\) d SET state='Queued'/, { recordset: [{ id: "1" }, { id: "2" }, { id: "3" }] }], [/^UPDATE c SET status='Sending'/, { rowsAffected: [2] }]];
+  await withFakeSql(answers, async (calls, events) => {
+    assert.deepEqual(await retryDeliveries(ADMIN, "Communications", correlation), { requeued: 3 });
+    const [requeue, reopen, audit, ...more] = sqlWrites(calls);
+    assert.equal(more.length, 0);
+    assert.match(requeue.text, /^UPDATE TOP\(100\) d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL OUTPUT INSERTED\.id\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.status<>'Cancelled' AND c\.deleted_at IS NULL\s+WHERE d\.state='Dead letter'$/,
+      "a cancelled or deleted campaign's rows would never be claimed, so they are not requeued; the rows start their attempts over");
+    assert.match(reopen.text, /^UPDATE c SET status='Sending',completed_at=NULL,updated_at=SYSUTCDATETIME\(\)\s+FROM dbo\.Communications c\s+WHERE c\.status='Sent' AND c\.deleted_at IS NULL\s+AND EXISTS \(SELECT 1 FROM dbo\.CommunicationDeliveries d WHERE d\.communication_id=c\.id AND d\.source<>'Test' AND d\.state IN \('Queued','Retry','Processing'\)\)$/,
+      "a completed campaign with a real row waiting is Sending again; a Test row alone does not reopen it");
+    assert.match(audit.text, /INSERT dbo\.AuditEvents\(id,actor_user_id,action,entity_type,after_json,correlation_id\) VALUES\(NEWID\(\),@actor,'delivery\.retry\.requested','Delivery',@after,@correlation\)/);
+    assert.deepEqual([audit.inputs.actor, audit.inputs.correlation, JSON.parse(String(audit.inputs.after))], [ADMIN.id, correlation, { channel: "Communications", count: 3, reopened: 2 }], "the audit row holds counts only");
+    assert.deepEqual([requeue, reopen, audit].map((c) => c.inTransaction), [true, true, true]);
+    assert.deepEqual(events, ["begin", "commit"]);
+  });
+  await withFakeSql([...asSystemAdmin, [/^UPDATE TOP\(100\) d SET state='Queued'/, { recordset: [] }]], async (calls) => {
+    assert.deepEqual(await retryDeliveries(ADMIN, "Communications", correlation), { requeued: 0 });
+    assert.equal(sqlWrites(calls).filter((c) => /^UPDATE c SET status='Sending'/.test(c.text)).length, 0, "nothing requeued, nothing to reopen");
+    assert.deepEqual(JSON.parse(String(sqlWrites(calls).at(-1)!.inputs.after)), { channel: "Communications", count: 0, reopened: 0 });
+  });
+});
+
+test("delivery retry: Email and Webhook still run their own statements, an unknown channel is refused, and only a System admin may retry", async () => {
+  const correlation = crypto.randomUUID();
+  await withFakeSql([...asSystemAdmin, [/^UPDATE TOP\(100\) dbo\./, { recordset: [{ id: "1" }] }]], async (calls) => {
+    assert.deepEqual(await retryDeliveries(ADMIN, "Email", correlation), { requeued: 1 });
+    assert.deepEqual(await retryDeliveries(ADMIN, "Webhook", correlation), { requeued: 1 });
+    const [email, webhook] = sqlWrites(calls).filter((c) => /^UPDATE TOP\(100\) dbo\./.test(c.text));
+    assert.match(email.text, /^UPDATE TOP\(100\) dbo\.Notifications SET state='Retry',attempt_count=0,next_attempt_at=SYSUTCDATETIME\(\),last_error_code=NULL OUTPUT INSERTED\.id WHERE state='Dead letter' AND channel='Email'\s*$/);
+    assert.match(webhook.text, /^UPDATE TOP\(100\) dbo\.WebhookDeliveries SET state='Retry',attempt_count=0,next_attempt_at=SYSUTCDATETIME\(\),last_error_code=NULL OUTPUT INSERTED\.id WHERE state='Dead letter'\s*$/);
+    assert.deepEqual(sqlWrites(calls).filter((c) => /dbo\.AuditEvents/.test(c.text)).map((c) => JSON.parse(String(c.inputs.after))), [{ channel: "Email", count: 1 }, { channel: "Webhook", count: 1 }]);
+    assert.equal(sqlWrites(calls).some((c) => /dbo\.Communications/.test(c.text)), false, "they never touch a campaign");
+    await assert.rejects(retryDeliveries(ADMIN, "Fax" as never, correlation), /INVALID_CHANNEL/);
+  });
+  await withFakeSql([], async () => { await assert.rejects(retryDeliveries(PM, "Communications", correlation), /FORBIDDEN/); });
+  assert.deepEqual(await retryDeliveries(ADMIN, "Communications", correlation), { requeued: 0 }, "without SQL there is nothing to requeue");
+  assert.deepEqual(await deliveryStatus(ADMIN), []);
+});
+
+test("i18n: the Settings delivery card names the Communications channel", () => {
+  assert.equal(makeT("is")("Communications"), "Samskipti");
+  assert.equal(makeT("en")("Communications"), "Communications");
 });

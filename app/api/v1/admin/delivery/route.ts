@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const identity = await getIdentity(request);
     const body = await readInput(
       request,
-      z.object({ channel: z.enum(["Email", "Webhook"]) }).strict(),
+      z.object({ channel: z.enum(["Email", "Webhook", "Communications"]) }).strict(),
     );
     return json(await retryDeliveries(identity, body.channel, id), {}, id);
   } catch (error) {

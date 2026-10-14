@@ -7,14 +7,14 @@ export function DeliveryStatus() {
   const t = useT();
   const resource = useResource<{
     items: Array<{
-      channel: "Email" | "Webhook";
+      channel: "Email" | "Webhook" | "Communications";
       state: string;
       count: number;
     }>;
   }>("/api/v1/admin/delivery", 30000);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  async function retry(channel: "Email" | "Webhook") {
+  async function retry(channel: "Email" | "Webhook" | "Communications") {
     setBusy(true);
     try {
       await apiFetch("/api/v1/admin/delivery", {

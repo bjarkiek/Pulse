@@ -9,11 +9,21 @@ import type { CommunicationContent, CommunicationStats, CommunicationTopic, Deli
 
 export const BACKOFF_BASE_MS = 60_000;
 export const MAX_ATTEMPTS = 5;
+/**
+ * How long a claim holds its rows. A row the worker has claimed is Processing; if the run dies before it settles the row (crash, deploy,
+ * a database that went away), nothing else would ever move it, and its campaign would stay Sending for ever. So a claim is a lease: it stamps
+ * `next_attempt_at` with the time it runs out, `recoverStale` puts rows whose lease has run out back to Retry, and accepting or failing a row
+ * replaces the stamp. Far longer than a send (the transport gives a request up after 30 seconds), so a live run never loses its rows.
+ * A lease that runs out is an attempt that never settled, and it counts like a failed one: after MAX_ATTEMPTS the row is a dead letter
+ * (LEASE_EXPIRED) instead of going out once more, so a batch that kills the run, or whose settling always fails, is not mailed for ever.
+ */
+export const LEASE_MS = 15 * 60_000;
 export type ClaimedDelivery = { id: string; email: string; displayName: string | null; source: DeliverySource; attemptCount: number };
 export type ClaimedBatch = { communicationId: string; templateKey: TemplateKey; topic: CommunicationTopic; content: CommunicationContent; locale: EmailLocale; deliveries: ClaimedDelivery[] };
 export type DeliveryStore = {
   promoteScheduled(now: Date): Promise<string[]>;          // Scheduled & due → freezeAudience → ids now Sending/Sent
-  claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale; Test rows claimable regardless of campaign status
+  recoverStale(now: Date): Promise<number>;                // Processing whose lease ran out (next_attempt_at < now) → Retry, attempts kept (used up → Dead letter LEASE_EXPIRED); a Cancelled campaign's real rows → Cancelled; how many
+  claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale, Test rows or real rows (never both); Test rows claimable regardless of campaign status; leases what it takes
   markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>;
   markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // null → Dead letter; a row of a Cancelled campaign → Cancelled
   acceptedToday(now: Date): Promise<number>;
@@ -98,6 +108,24 @@ const memoryStore: DeliveryStore = {
   async promoteScheduled(now) {
     return promoteDue(memoryCommunications().filter((c) => c.status === "Scheduled" && c.scheduledAt && new Date(c.scheduledAt) <= now).map((c) => c.id), now);
   },
+  async recoverStale(now) {
+    // As markFailed: a real row of a campaign that was cancelled while the row was with the worker has nothing left to try again, so it is
+    // cancelled rather than queued for a claim that will never come. A Test row is claimed whatever its campaign is, so it is retried. The
+    // attempts are kept and the row is due at once, unless that claim was its last attempt: then it is a dead letter.
+    const cancelled = new Set(memoryCommunications().filter((c) => c.status === "Cancelled").map((c) => c.id));
+    let recovered = 0;
+    for (const d of memoryDeliveries()) {
+      if (d.state !== "Processing" || !d.nextAttemptAt || new Date(d.nextAttemptAt) >= now) continue;
+      const exhausted = d.attemptCount >= MAX_ATTEMPTS;
+      Object.assign(d, {
+        state: d.source !== "Test" && cancelled.has(d.communicationId) ? "Cancelled" : exhausted ? "Dead letter" : "Retry",
+        nextAttemptAt: null,
+        ...(exhausted ? { lastErrorCode: "LEASE_EXPIRED" } : {}),
+      });
+      recovered++;
+    }
+    return recovered;
+  },
   async claimBatch(size) {
     const take = Math.floor(size);
     if (!(take >= 1)) return null;
@@ -110,8 +138,9 @@ const memoryStore: DeliveryStore = {
     const first = candidates[0];
     if (!first) return null;
     const campaign = campaigns.get(first.communicationId)!;
-    const batch = candidates.filter((d) => d.communicationId === first.communicationId && d.locale === first.locale).slice(0, take);
-    for (const d of batch) { d.state = "Processing"; d.attemptCount += 1; }
+    // One campaign, one locale and one kind: a test mail has its own subject prefix and category, so it never rides along with real recipients.
+    const batch = candidates.filter((d) => d.communicationId === first.communicationId && d.locale === first.locale && (d.source === "Test") === (first.source === "Test")).slice(0, take);
+    for (const d of batch) { d.state = "Processing"; d.attemptCount += 1; d.nextAttemptAt = new Date(now + LEASE_MS).toISOString(); }
     return {
       communicationId: campaign.id, templateKey: campaign.templateKey, topic: campaign.topic, content: structuredClone(campaign.content), locale: first.locale,
       deliveries: batch.map((d) => ({ id: d.id, email: d.email, displayName: d.displayName, source: d.source, attemptCount: d.attemptCount })),
@@ -152,6 +181,18 @@ const sqlStore: DeliveryStore = {
       .query("SELECT public_id id FROM dbo.Communications WHERE status='Scheduled' AND scheduled_at<=@now AND deleted_at IS NULL ORDER BY scheduled_at");
     return promoteDue(due.recordset.map((row) => row.id as string), now);
   },
+  async recoverStale(now) {
+    // As markFailed: a real row of a campaign that was cancelled meanwhile is cancelled, not queued for a claim that will never come, and a cancel
+    // that is committing is waited for (READCOMMITTEDLOCK); a Test row is claimed whatever its campaign is, so it is retried. The attempts are kept,
+    // and the row is due at once (no next attempt), unless that claim was its last attempt: then it is a dead letter, with the reason recorded.
+    // One statement, so it is atomic on its own.
+    const result = await (await getSqlPool()).request().input("now", sql.DateTime2, now).input("maxAttempts", sql.Int, MAX_ATTEMPTS)
+      .query(`UPDATE d SET state=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN 'Cancelled' WHEN d.attempt_count>=@maxAttempts THEN 'Dead letter' ELSE 'Retry' END,next_attempt_at=NULL,
+          last_error_code=CASE WHEN d.attempt_count>=@maxAttempts THEN 'LEASE_EXPIRED' ELSE d.last_error_code END
+        FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id
+        WHERE d.state='Processing' AND d.next_attempt_at<@now`);
+    return result.rowsAffected[0];
+  },
   async claimBatch(size) {
     const take = Math.floor(size);
     if (!(take >= 1)) return null;
@@ -160,22 +201,26 @@ const sqlStore: DeliveryStore = {
     // can be claimed, so rows that cannot (whatever left them waiting) never crowd out those that can; the closing WHERE is what claims a row.
     // Two workers can pick the same rows in `next_items`, but the UPDATE checks each row again under its own lock, so a row the other worker has
     // just set to Processing is skipped instead of being claimed, and mailed, a second time.
-    const result = await (await getSqlPool()).request().input("size", sql.Int, take).query(`
+    // A batch is one campaign, one locale and one kind: Test rows (their own subject prefix and category) or real rows, whichever the oldest row is.
+    // `next_campaign` carries that row's source, `next_items` takes only rows of the same kind, and the UPDATE checks it once more.
+    // What the UPDATE claims it leases: `next_attempt_at` becomes the time the claim runs out (see LEASE_MS), which `recoverStale` looks for.
+    const result = await (await getSqlPool()).request().input("size", sql.Int, take).input("lease", sql.Int, LEASE_MS / 1000).query(`
       ;WITH next_campaign AS (
-        SELECT TOP (1) d.communication_id,d.locale FROM dbo.CommunicationDeliveries d WITH (UPDLOCK,READPAST,ROWLOCK)
+        SELECT TOP (1) d.communication_id,d.locale,d.source FROM dbo.CommunicationDeliveries d WITH (UPDLOCK,READPAST,ROWLOCK)
         JOIN dbo.Communications c ON c.id=d.communication_id AND c.deleted_at IS NULL
         WHERE d.state IN ('Queued','Retry') AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=SYSUTCDATETIME()) AND (c.status='Sending' OR d.source='Test')
         ORDER BY d.created_at
       ), next_items AS (
-        SELECT TOP (@size) d.id FROM dbo.CommunicationDeliveries d JOIN next_campaign n ON n.communication_id=d.communication_id AND n.locale=d.locale
+        SELECT TOP (@size) d.id,n.source FROM dbo.CommunicationDeliveries d
+        JOIN next_campaign n ON n.communication_id=d.communication_id AND n.locale=d.locale AND (CASE WHEN d.source='Test' THEN 1 ELSE 0 END)=(CASE WHEN n.source='Test' THEN 1 ELSE 0 END)
         JOIN dbo.Communications c ON c.id=d.communication_id AND c.deleted_at IS NULL
         WHERE d.state IN ('Queued','Retry') AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=SYSUTCDATETIME()) AND (c.status='Sending' OR d.source='Test') ORDER BY d.created_at
       )
-      UPDATE d SET state='Processing',attempt_count=attempt_count+1
+      UPDATE d SET state='Processing',attempt_count=attempt_count+1,next_attempt_at=DATEADD(second,@lease,SYSUTCDATETIME())
       OUTPUT CAST(INSERTED.id AS nvarchar(36)) id,INSERTED.email,INSERTED.display_name displayName,INSERTED.source,INSERTED.attempt_count attemptCount,INSERTED.locale,
         c.public_id communicationId,c.template_key templateKey,c.topic,c.content_json contentJson
       FROM dbo.CommunicationDeliveries d JOIN next_items q ON q.id=d.id JOIN dbo.Communications c ON c.id=d.communication_id AND c.deleted_at IS NULL
-      WHERE d.state IN ('Queued','Retry') AND (c.status='Sending' OR d.source='Test');`);
+      WHERE d.state IN ('Queued','Retry') AND (c.status='Sending' OR d.source='Test') AND (CASE WHEN d.source='Test' THEN 1 ELSE 0 END)=(CASE WHEN q.source='Test' THEN 1 ELSE 0 END);`);
     if (!result.recordset.length) return null;
     const first = result.recordset[0];
     return {

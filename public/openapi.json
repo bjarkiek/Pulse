@@ -3289,6 +3289,53 @@
         }
       }
     },
+    "/api/v1/internal/jobs/communications": {
+      "post": {
+        "operationId": "processCommunicationOutbox",
+        "security": [
+          {
+            "notificationJobSecret": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-source-file": "app/api/v1/internal/jobs/communications/route.ts",
+        "x-authorization": "Job secret",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "maxProperties": 250
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/internal/jobs/notifications": {
       "post": {
         "operationId": "processNotificationOutbox",

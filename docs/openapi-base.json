@@ -388,6 +388,13 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
     },
+    "/api/v1/internal/jobs/communications": {
+      "post": {
+        "operationId": "processCommunicationOutbox",
+        "security": [{ "notificationJobSecret": [] }],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
     "/api/v1/admin/organizations": {
       "get": {
         "operationId": "listOrganizations",

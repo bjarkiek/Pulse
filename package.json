@@ -28,6 +28,7 @@
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@sendgrid/mail": "8.1.6",
     "@slack/bolt": "^4.7.3",
     "drizzle-orm": "0.45.2",
     "jose": "^6.2.3",

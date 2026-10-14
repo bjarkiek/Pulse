@@ -396,6 +396,7 @@ Object.assign(internalTranslations, {
   "Retry failed deliveries": "Reyna sendingar aftur",
   Email: "Tölvupóstur",
   Webhook: "Webhook",
+  Communications: "Samskipti",
   Queued: "Í biðröð",
   Processing: "Í vinnslu",
   "Dead letter": "Endurtilraunir tæmdar",
