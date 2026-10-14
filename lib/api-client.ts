@@ -42,6 +42,11 @@ const REFUSALS: Record<string, string> = {
     "This communication is no longer in a state that allows that action.",
   INVALID_CONTACT_EXISTS: "That address is already on this company's list.",
   INVALID_INPUT: "Some fields are missing or invalid.",
+  INVALID_COMMUNICATION_NOT_EDITABLE:
+    "This communication is no longer a draft and cannot be edited.",
+  INVALID_COMMUNICATION_NOT_DELETABLE:
+    "Only drafts and cancelled communications can be deleted.",
+  INVALID_TEMPLATE: "Unknown template.",
 };
 
 /**

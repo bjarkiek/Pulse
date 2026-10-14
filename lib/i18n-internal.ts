@@ -468,4 +468,170 @@ Object.assign(internalTranslations, {
     "Þetta netfang er þegar á lista þessa fyrirtækis.",
   "Some fields are missing or invalid.":
     "Suma reiti vantar eða þeir eru ógildir.",
+  "This communication is no longer a draft and cannot be edited.":
+    "Þessi sending er ekki lengur í drögum og ekki er hægt að breyta henni.",
+  "Only drafts and cancelled communications can be deleted.":
+    "Aðeins er hægt að eyða drögum og sendingum sem hætt var við.",
+  "Unknown template.": "Óþekkt sniðmát.",
+});
+
+// The Communications page: the campaign list and the editor.
+Object.assign(internalTranslations, {
+  "Customer communication": "Samskipti við viðskiptavini",
+  "Compose branded product updates and notices, choose the companies that receive them, and track delivery.":
+    "Semdu vöruuppfærslur og tilkynningar í útliti DataCentral, veldu fyrirtækin sem fá þær og fylgstu með afhendingu.",
+  "New product update": "Ný vöruuppfærsla",
+  "Service notice": "Þjónustutilkynning",
+  "Product update": "Vöruuppfærsla",
+  Announcement: "Tilkynning",
+  "Product updates": "Vöruuppfærslur",
+  "Service notices": "Þjónustutilkynningar",
+  "Security advisories": "Öryggistilkynningar",
+  "General announcements": "Almennar tilkynningar",
+  Campaigns: "Herferðir",
+  Contacts: "Tengiliðir",
+  Suppressions: "Útilokanir",
+  "No communications yet": "Engar sendingar enn",
+  "Start with a product update, a service notice or a plain announcement.":
+    "Byrjaðu á vöruuppfærslu, þjónustutilkynningu eða almennri tilkynningu.",
+  Communication: "Sending",
+  Template: "Sniðmát",
+  Recipients: "Viðtakendur",
+  Sent: "Sent",
+  Scheduled: "Tímasett",
+  Open: "Opna",
+  Duplicate: "Afrita",
+  Draft: "Drög",
+  Sending: "Í sendingu",
+  Cancelled: "Hætt við",
+  "Untitled communication": "Ónefnd sending",
+  "Write your announcement here.": "Skrifaðu tilkynninguna þína hér.",
+  "Describe the notice here.": "Lýstu tilkynningunni hér.",
+  "Write the introduction here.": "Skrifaðu inngang hér.",
+  "First highlight": "Fyrsta atriði",
+  "Describe the change here.": "Lýstu breytingunni hér.",
+  "Tip: published releases offer “Draft customer email” on the Releases page.":
+    "Ábending: á útgáfusíðunni er hægt að velja „Semja tölvupóst til viðskiptavina“ fyrir útgefnar útgáfur.",
+  "That communication could not be found.": "Þessi sending fannst ekki.",
+  "Your latest changes were not saved yet. Save the draft again.":
+    "Nýjustu breytingarnar voru ekki vistaðar enn. Vistaðu drögin aftur.",
+  "Back to communications": "Til baka í samskipti",
+  "Working title": "Vinnuheiti",
+  "Content language": "Tungumál efnis",
+  "Copy from English": "Afrita úr ensku",
+  "Save draft": "Vista drög",
+  Saved: "Vistað",
+  "Editor steps": "Skref í ritlinum",
+  Content: "Efni",
+  Audience: "Viðtakendur",
+  "Review & send": "Yfirfara og senda",
+  Subject: "Efnislína",
+  Topic: "Efnisflokkur",
+  "There is no Icelandic version yet: recipients who prefer Icelandic get the English one. Copy it from English to start translating.":
+    "Engin íslensk útgáfa er til enn: viðtakendur sem kjósa íslensku fá þá ensku. Afritaðu úr ensku til að byrja að þýða.",
+  "This communication was changed by someone else. The latest version is loaded: review it and make your changes again.":
+    "Einhver annar breytti þessari sendingu. Nýjasta útgáfan er komin inn: farðu yfir hana og gerðu breytingarnar þínar aftur.",
+  "Test email queued to your address.":
+    "Prófun sett í biðröð á netfangið þitt.",
+  "Communication scheduled.": "Sending tímasett.",
+  "Sending started. Recipients:": "Sending hafin. Viðtakendur:",
+  "Save the draft to refresh the preview.":
+    "Vistaðu drögin til að endurnýja forskoðunina.",
+  "Save the draft to update these numbers.":
+    "Vistaðu drögin til að uppfæra þessar tölur.",
+  Preview: "Forskoðun",
+  "Email preview": "Forskoðun tölvupósts",
+});
+
+// The editor's audience and review steps.
+Object.assign(internalTranslations, {
+  "All customer and partner companies":
+    "Öll fyrirtæki viðskiptavina og samstarfsaðila",
+  "Active Pulse members of those companies (respecting their preferences)":
+    "Virkir meðlimir þessara fyrirtækja í Pulse (með tilliti til stillinga þeirra)",
+  "Communication contacts subscribed to this topic":
+    "Tengiliðir sem eru áskrifendur að þessum efnisflokki",
+  "Include companies still onboarding":
+    "Hafa með fyrirtæki sem eru enn í kynningu",
+  "Include test companies": "Hafa með prófunarfyrirtæki",
+  "Send a copy to the DataCentral team":
+    "Senda afrit til DataCentral teymisins",
+  "Member roles": "Hlutverk meðlima",
+  "All roles": "Öll hlutverk",
+  "Company admins only": "Aðeins fyrirtækisstjórar",
+  "Company admins and requesters": "Fyrirtækisstjórar og beiðendur",
+  Members: "Meðlimir",
+  "Will receive": "Fá sendingu",
+  "nothing suppressed": "enginn útilokaður",
+  "Safe mode": "Öruggur hamur",
+  "Opted out of this topic": "Afþökkuðu þennan efnisflokk",
+  Unsubscribed: "Afskráðir",
+  Bounced: "Skiluðu sér ekki",
+  "Spam report": "Tilkynnt sem ruslpóstur",
+  "Blocked manually": "Útilokaðir handvirkt",
+  "Subject (English)": "Efnislína (enska)",
+  "Subject (Icelandic)": "Efnislína (íslenska)",
+  "falls back to English": "enska er notuð",
+  "Template · topic": "Sniðmát · efnisflokkur",
+  "Schedule (optional, your local time)":
+    "Tímasetning (valfrjálst, að staðartíma)",
+  "Send test to me": "Senda prófun á mig",
+  Schedule: "Tímasetja",
+  "Send now": "Senda núna",
+  Send: "Senda",
+  Confirm: "Staðfesta",
+  "Schedule this communication?": "Tímasetja þessa sendingu?",
+  "Send this communication now?": "Senda þessa sendingu núna?",
+  "Scheduled for": "Tímasett á",
+  "Content and audience are frozen once sent.":
+    "Efni og viðtakendur eru læst eftir sendingu.",
+  "Discard unsaved changes?": "Henda óvistuðum breytingum?",
+  "Your changes to this draft have not been saved.":
+    "Breytingar þínar á þessum drögum hafa ekki verið vistaðar.",
+  "Keep editing": "Halda áfram að breyta",
+  "Discard changes": "Henda breytingum",
+  "No SendGrid API key is configured.":
+    "Enginn SendGrid API-lykill er stilltur.",
+  "Sandbox mode: SendGrid will validate but not deliver.":
+    "Prófunarhamur: SendGrid staðfestir en afhendir ekki.",
+  "Safe mode: only allow-listed domains receive this communication.":
+    "Öruggur hamur: aðeins leyfð lén fá þessa sendingu.",
+});
+
+// The editor's content fields.
+Object.assign(internalTranslations, {
+  Eyebrow: "Yfirtitill",
+  Subtitle: "Undirtitill",
+  Introduction: "Inngangur",
+  Highlights: "Helstu atriði",
+  Heading: "Fyrirsögn",
+  Text: "Texti",
+  "**bold** and [label](https://…) are supported":
+    "**feitletrað** og [heiti](https://…) eru studd",
+  Callout: "Áherslureitur",
+  "Callout label": "Heiti áherslureits",
+  "Callout text": "Texti áherslureits",
+  None: "Ekkert",
+  "Action required (amber)": "Aðgerðar þörf (gulbrúnt)",
+  "Note (violet)": "Athugasemd (fjólublátt)",
+  "Link label": "Heiti hlekks",
+  "Link URL (https)": "Slóð hlekks (https)",
+  "Remove highlight": "Fjarlægja atriði",
+  "Add highlight": "Bæta við atriði",
+  "Note (violet box)": "Athugasemd (fjólublár reitur)",
+  "Button label": "Texti hnapps",
+  "Button URL (https)": "Slóð hnapps (https)",
+  "Sign-off (leave empty for the default)":
+    "Kveðja (skildu eftir tómt fyrir sjálfgefna kveðju)",
+  Summary: "Samantekt",
+  "Time window (all three fields, or none)":
+    "Tímabil (allir þrír reitirnir eða enginn)",
+  Starts: "Hefst",
+  Ends: "Lýkur",
+  "Time zone": "Tímabelti",
+  "What customers should do (one step per line)":
+    "Hvað viðskiptavinir þurfa að gera (eitt skref í hverri línu)",
+  Contact: "Tengiliður",
+  "Paragraphs (separate with a blank line)":
+    "Málsgreinar (aðskildar með auðri línu)",
 });
