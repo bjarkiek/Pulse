@@ -73,20 +73,24 @@ for (const file of walk("app/api/v1").sort()) {
     operation.operationId ||=
       method.toLowerCase() + route.replace(/[^a-zA-Z0-9]+/g, "_");
     operation["x-source-file"] = file.replaceAll("\\", "/");
-    operation["x-authorization"] = route.includes("/jobs/")
-      ? "Job secret"
-      : route.includes("scan-")
-        ? "Scanner secret"
-        : route.includes("/admin/")
-          ? "System admin"
-          : route.includes("/internal/")
-            ? "Active internal role; writes enforce repository-specific permissions"
-            : "Active account and authorized organization/resource";
-    operation.security = route.includes("/jobs/")
-      ? [{ notificationJobSecret: [] }]
-      : route.includes("scan-")
-        ? [{ scanWebhookSecret: [] }]
-        : [{ sessionCookie: [] }, { sessionBearer: [] }];
+    operation["x-authorization"] = route.endsWith("/communications/events")
+      ? "SendGrid Event Webhook signature"
+      : route.includes("/jobs/")
+        ? "Job secret"
+        : route.includes("scan-")
+          ? "Scanner secret"
+          : route.includes("/admin/")
+            ? "System admin"
+            : route.includes("/internal/")
+              ? "Active internal role; writes enforce repository-specific permissions"
+              : "Active account and authorized organization/resource";
+    operation.security = route.endsWith("/communications/events")
+      ? [{ sendgridEventSignature: [] }]
+      : route.includes("/jobs/")
+        ? [{ notificationJobSecret: [] }]
+        : route.includes("scan-")
+          ? [{ scanWebhookSecret: [] }]
+          : [{ sessionCookie: [] }, { sessionBearer: [] }];
     operation.parameters = (old.parameters || []).filter(
       (p: { in?: string; $ref?: string }) =>
         p.in !== "path" &&
@@ -170,6 +174,11 @@ specification.components.securitySchemes.sessionBearer = {
   type: "http",
   scheme: "bearer",
   bearerFormat: "Pulse session JWT",
+};
+specification.components.securitySchemes.sendgridEventSignature = {
+  type: "apiKey",
+  in: "header",
+  name: "X-Twilio-Email-Event-Webhook-Signature",
 };
 specification.security = [{ sessionCookie: [] }, { sessionBearer: [] }];
 specification.info.version = "1.1.0";

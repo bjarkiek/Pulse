@@ -17,19 +17,23 @@ function setMemoryContactStatus(email: string, status: ContactStatus) {
   const now = new Date().toISOString();
   for (const contact of memoryContacts()) if (contact.email === email) { contact.status = status; contact.updatedAt = now; }
 }
-/** Both modes store a note the same way: its first 500 characters, or nothing when it is empty. */
-const noteOf = (note?: string) => note?.slice(0, NOTE_MAX) || undefined;
+/** Both modes store a note the same way: trimmed, its first 500 characters, or nothing when that leaves nothing. */
+const noteOf = (note?: string) => note?.trim().slice(0, NOTE_MAX) || undefined;
 
 /**
  * Webhook and worker path (no identity). The newest event wins: reason, source and note always describe the latest one,
  * while the row keeps its place and creation time. Contacts with this address, in every organisation, are flagged.
+ * One exception: a Manual suppression is an admin's decision, and an event from the webhook never replaces it. The row stays as it is,
+ * and so do the contacts (they already carry the status the Manual row gave them). An address that is empty once trimmed is nobody's: ignored.
  */
 export async function suppressAddress(email: string, reason: SuppressionReason, source: "Webhook" | "Admin", note?: string, actorId?: string) {
   const normalized = email.trim().toLowerCase();
+  if (!normalized) return;
   const text = noteOf(note);
   if (!isAzureSqlConfigured()) {
     const store = memorySuppressions();
     const existing = store.find((s) => s.email === normalized);
+    if (existing?.reason === "Manual" && source === "Webhook") return;
     const record: SuppressionRecord = { email: normalized, reason, source, note: text, createdAt: existing?.createdAt || new Date().toISOString() };
     if (existing) Object.assign(existing, record); else store.push(record);
     setMemoryContactStatus(normalized, contactStatusFor(reason));
@@ -40,13 +44,14 @@ export async function suppressAddress(email: string, reason: SuppressionReason, 
     .input("source", sql.NVarChar(32), source).input("note", sql.NVarChar(NOTE_MAX), text || null)
     .input("actor", sql.UniqueIdentifier, actorId || null).input("status", sql.NVarChar(32), contactStatusFor(reason))
     // HOLDLOCK keeps the upsert atomic: SendGrid can post two events for one new address at once (a bounce and a spam report) and only one may insert.
+    // A matched Manual row is left alone when the source is the webhook (the MERGE then writes nothing, @@ROWCOUNT is 0, and the contacts are not touched either).
     .query(`MERGE dbo.CommunicationSuppressions WITH (HOLDLOCK) target USING(SELECT @email email) incoming ON target.email=incoming.email
-      WHEN MATCHED THEN UPDATE SET reason=@reason,source=@source,note=@note
+      WHEN MATCHED AND NOT (target.reason='Manual' AND @source='Webhook') THEN UPDATE SET reason=@reason,source=@source,note=@note
       WHEN NOT MATCHED THEN INSERT(email,reason,source,note,created_by_user_id) VALUES(@email,@reason,@source,@note,@actor);
-      UPDATE dbo.CommunicationContacts SET status=@status,updated_at=SYSUTCDATETIME() WHERE email=@email AND deleted_at IS NULL;`);
+      IF @@ROWCOUNT>0 UPDATE dbo.CommunicationContacts SET status=@status,updated_at=SYSUTCDATETIME() WHERE email=@email AND deleted_at IS NULL;`);
 }
 
-/** Webhook and worker path (no identity). Lifts the suppression only while it still carries `reason`, so a resubscribe never lifts a bounce. */
+/** Webhook and worker path (no identity). Lifts the suppression only while it still carries `reason`, so a resubscribe never lifts a bounce, a spam report or an admin's Manual suppression. */
 export async function releaseAddress(email: string, reason: SuppressionReason) {
   const normalized = email.trim().toLowerCase();
   if (!isAzureSqlConfigured()) {

@@ -395,6 +395,51 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
     },
+    "/api/v1/internal/communications/events": {
+      "post": {
+        "operationId": "receiveSendGridEvents",
+        "summary": "SendGrid Event Webhook",
+        "description": "Receives SendGrid's signed event batches (delivered, bounce, open, click, unsubscribe and so on). Anonymous: it is authenticated by the ECDSA signature in X-Twilio-Email-Event-Webhook-Signature, made over the value of the timestamp header followed by the raw body, and checked against SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY; a timestamp more than ten minutes from now is refused. The body is at most 1 MiB, and this route is exempt from the 64 KiB / 250-item JSON limit of the other routes. Each event is applied once (idempotent on sg_event_id). It answers 503 until the key is configured, so that SendGrid keeps retrying.",
+        "security": [{ "sendgridEventSignature": [] }],
+        "parameters": [
+          {
+            "name": "X-Twilio-Email-Event-Webhook-Timestamp",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[0-9]{1,12}$" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "array", "maxItems": 1000, "items": { "type": "object" } }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The batch was read. applied counts the events that changed a delivery or the suppression list; ignored counts repeated events and events that match nothing.",
+            "headers": {
+              "x-correlation-id": { "schema": { "type": "string", "format": "uuid" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["applied", "ignored"],
+                  "properties": {
+                    "applied": { "type": "integer" },
+                    "ignored": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/api/v1/admin/organizations": {
       "get": {
         "operationId": "listOrganizations",

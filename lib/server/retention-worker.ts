@@ -62,6 +62,8 @@ export async function processRetentionBatch(limit = 50) {
       SET @deleted+=@@ROWCOUNT;
       DELETE TOP (@limit) FROM dbo.SavedViews WHERE deleted_at IS NOT NULL AND deleted_at<@cutoff;
       SET @deleted+=@@ROWCOUNT;
+      DELETE TOP (@limit) FROM dbo.CommunicationEvents WHERE received_at < DATEADD(day,-90,SYSUTCDATETIME());
+      SET @deleted+=@@ROWCOUNT;
 
       DECLARE @requests TABLE(id uniqueidentifier PRIMARY KEY,organization_id nvarchar(32));
       INSERT @requests SELECT TOP (@limit) id,organization_id FROM dbo.Requests r

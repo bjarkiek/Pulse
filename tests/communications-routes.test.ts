@@ -1,13 +1,16 @@
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { getPathMatch } from "next/dist/shared/lib/router/utils/path-match";
 import { compileNonPath } from "next/dist/shared/lib/router/utils/prepare-destination";
+import { NextRequest } from "next/server";
 import nextConfig from "../next.config";
+import { proxy } from "../proxy";
 import type { PulseIdentity } from "../lib/domain";
 import { createSessionToken } from "../lib/server/session";
 import { organizations, users } from "../lib/server/admin-repository";
-import { resetCommunicationMemory } from "../lib/server/communications/memory";
+import { memoryDeliveries, resetCommunicationMemory } from "../lib/server/communications/memory";
 import { getDeliveryStore } from "../lib/server/communications/delivery-store";
 import { DEFAULT_COMMUNICATION_SETTINGS, saveCommunicationSettings } from "../lib/server/communications/settings";
 import { GET as communicationsGet, POST as communicationsPost } from "../app/api/v1/internal/communications/route";
@@ -25,6 +28,7 @@ import { PATCH as internalContactPatch, DELETE as internalContactDelete } from "
 import { GET as suppressionsGet, POST as suppressionsPost, DELETE as suppressionsDelete } from "../app/api/v1/internal/communications/suppressions/route";
 import { GET as companyContactsGet, POST as companyContactsPost } from "../app/api/v1/communications/contacts/route";
 import { PATCH as companyContactPatch, DELETE as companyContactDelete } from "../app/api/v1/communications/contacts/[contactId]/route";
+import { POST as eventsPost } from "../app/api/v1/internal/communications/events/route";
 import { POST as communicationsJobPost } from "../app/api/v1/internal/jobs/communications/route";
 import { GET as deliveryStatusGet, POST as deliveryStatusPost } from "../app/api/v1/admin/delivery/route";
 
@@ -43,6 +47,7 @@ beforeEach(() => {
   delete process.env.AZURE_SQL_CONNECTION_STRING;
   delete process.env.AZURE_SQL_SERVER;
   delete process.env.SENDGRID_API_KEY;
+  delete process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY;
   globalThis.pulseMemoryUsers = undefined;
   globalThis.pulseMemoryOrganizations = undefined;
   globalThis.pulseMemoryAudit = undefined;
@@ -979,4 +984,148 @@ test("openapi: the worker's job route is documented behind the job secret", () =
   assert.ok(spec.components.securitySchemes.notificationJobSecret, "the scheme it names exists");
   assert.deepEqual(Object.keys(operation.responses).sort(), ["200", "400", "401", "404", "413", "429", "500"]);
   assert.ok(operation.requestBody, "it takes an optional JSON body with a limit");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The SendGrid Event Webhook: no session and no secret, only the signature SendGrid puts on the body
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const EVENTS = "/api/v1/internal/communications/events";
+/** A POST to the webhook signed with a new key pair; `publicKeyEnv` says whether that key (or no key at all) is the one that is configured. */
+function signedRequest(body: string, publicKeyEnv: boolean, offsetSeconds = 0) {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const timestamp = String(Math.floor(Date.now() / 1000) + offsetSeconds);
+  const signature = sign("sha256", Buffer.from(timestamp + body, "utf8"), privateKey).toString("base64");
+  if (publicKeyEnv) process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  else delete process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY;
+  return new Request(`http://localhost${EVENTS}`, {
+    method: "POST", body,
+    headers: { "content-type": "application/json", "x-twilio-email-event-webhook-signature": signature, "x-twilio-email-event-webhook-timestamp": timestamp },
+  });
+}
+const EVENT_BODY = JSON.stringify([{ sg_event_id: "r1", event: "delivered", email: "a@origo.is", timestamp: 1 }]);
+
+test("webhook route: 503 without a key, 401 on bad signature or stale timestamp, 200 when valid", async () => {
+  assert.equal((await eventsPost(signedRequest(EVENT_BODY, false))).status, 503);
+  assert.equal((await eventsPost(signedRequest(EVENT_BODY, true, -700))).status, 401);
+  const tampered = signedRequest(EVENT_BODY, true);
+  const wrong = new Request(tampered.url, { method: "POST", body: EVENT_BODY + " ", headers: tampered.headers });
+  assert.equal((await eventsPost(wrong)).status, 401);
+  const ok = await eventsPost(signedRequest(EVENT_BODY, true));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { applied: 0, ignored: 1 });
+});
+
+test("webhook route: without a key it answers 503 and asks SendGrid to come back, a blank key is no key, and a key that is not one refuses everything", async () => {
+  const missing = await eventsPost(signedRequest(EVENT_BODY, false));
+  assert.deepEqual([missing.status, missing.headers.get("retry-after"), missing.headers.get("cache-control")], [503, "300", "no-store"]);
+  assert.equal((await missing.json()).error.code, "WEBHOOK_NOT_CONFIGURED");
+  const blank = signedRequest(EVENT_BODY, false);
+  process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY = "   ";
+  assert.equal((await eventsPost(blank)).status, 503);
+  const unusable = signedRequest(EVENT_BODY, true);
+  process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY = "not a key";
+  assert.deepEqual(await refusal(await eventsPost(unusable)), [401, "UNAUTHORIZED"]);
+});
+
+test("webhook route: the signature and the timestamp must both come with the request, and the demo System admin gets no way in without them", async () => {
+  const good = signedRequest(EVENT_BODY, true);
+  const post = (headers: Headers) => eventsPost(new Request(good.url, { method: "POST", body: EVENT_BODY, headers }));
+  for (const name of ["x-twilio-email-event-webhook-signature", "x-twilio-email-event-webhook-timestamp"]) {
+    const headers = new Headers(good.headers);
+    headers.delete(name);
+    assert.deepEqual(await refusal(await post(headers)), [401, "UNAUTHORIZED"], `without ${name}`);
+  }
+  const garbled = new Headers(good.headers);
+  garbled.set("x-twilio-email-event-webhook-signature", "AAAA");
+  assert.deepEqual(await refusal(await post(garbled)), [401, "UNAUTHORIZED"]);
+  assert.deepEqual(await refusal(await post(new Headers({ "content-type": "application/json" }))), [401, "UNAUTHORIZED"], "only the signature opens this route");
+});
+
+test("webhook route: a signed body that is not a JSON array of events is 400 and applies nothing; an empty batch is fine", async () => {
+  for (const [raw, code] of [["{not json", "INVALID_JSON"], ["", "INVALID_JSON"], ["{}", "INVALID_EVENTS"], ['"text"', "INVALID_EVENTS"]] as const)
+    assert.deepEqual(await refusal(await eventsPost(signedRequest(raw, true))), [400, code], JSON.stringify(raw));
+  const empty = await eventsPost(signedRequest("[]", true));
+  assert.deepEqual([empty.status, await empty.json()], [200, { applied: 0, ignored: 0 }]);
+});
+
+test("webhook route: a body over 1 MiB is 413 — on its declared length and on what it carries — while 1 MiB itself is read", async () => {
+  const limit = 1024 * 1024;
+  const declared = signedRequest("[]", true);
+  const headers = new Headers(declared.headers);
+  headers.set("content-length", String(limit + 1));
+  assert.deepEqual(await refusal(await eventsPost(new Request(declared.url, { method: "POST", body: "[]", headers }))), [413, "PAYLOAD_TOO_LARGE"], "declared");
+  assert.deepEqual(await refusal(await eventsPost(signedRequest(`[${" ".repeat(limit - 1)}]`, true))), [413, "PAYLOAD_TOO_LARGE"], "carried, with no length declared");
+  const exactly = await eventsPost(signedRequest(`[${" ".repeat(limit - 2)}]`, true));
+  assert.deepEqual([exactly.status, await exactly.json()], [200, { applied: 0, ignored: 0 }]);
+});
+
+test("webhook route: a signed bounce reaches the delivery and the suppression list, a repeated batch changes nothing, and nothing is logged", async () => {
+  await enableSending();
+  await createContact({ email: "cio@origo.is", displayName: "CIO", locale: "is", topics: ["general"] });
+  const draft = await createDraft();
+  assert.equal((await sendCampaign(draft.id, {}, draft.version)).status, 200);
+  const idOf = (email: string) => memoryDeliveries().find((d) => d.email === email)!.id;
+  const batch = JSON.stringify([
+    { sg_event_id: "w1", event: "bounce", type: "bounce", reason: "550 5.1.1 cio@origo.is unknown", email: "CIO@origo.is", timestamp: 1_700_000_000, deliveryId: idOf("cio@origo.is"), communicationId: draft.id },
+    { sg_event_id: "w2", event: "open", email: "bjarki@uidata.com", timestamp: 1_700_000_001, deliveryId: idOf("bjarki@uidata.com"), communicationId: draft.id },
+  ]);
+  const lines: string[] = [];
+  const original = { log: console.log, warn: console.warn, error: console.error };
+  console.log = console.warn = console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  let first: Response;
+  try {
+    first = await eventsPost(signedRequest(batch, true));
+  } finally {
+    Object.assign(console, original);
+  }
+  assert.deepEqual([first.status, await first.json()], [200, { applied: 2, ignored: 0 }]);
+  assert.deepEqual(lines, [], "the webhook logs nothing per event");
+  assert.equal((await deliveriesOf(draft.id)).items.find((d) => d.email === "cio@origo.is")?.state, "Bounced");
+  const listed: Array<{ email: string; reason: string; source: string; note?: string }> = (await (await suppressionsGet(send("GET", SUPPRESSIONS))).json()).items;
+  assert.deepEqual(listed.map((s) => [s.email, s.reason, s.source, s.note]), [["cio@origo.is", "Bounced", "Webhook", "550 5.1.1 cio@origo.is unknown"]]);
+  const again = await eventsPost(signedRequest(batch, true));
+  assert.deepEqual(await again.json(), { applied: 0, ignored: 2 });
+});
+
+test("proxy: the SendGrid events route skips the JSON pre-parse so large batches reach the handler", async () => {
+  const body = JSON.stringify(Array.from({ length: 300 }, (_, i) => ({ sg_event_id: `p${i}`, event: "delivered", email: "a@origo.is", timestamp: 1 })));
+  const res = await proxy(new NextRequest("http://localhost:3000/api/v1/internal/communications/events", {
+    method: "POST", headers: { host: "localhost:3000", "content-type": "application/json" }, body,
+  }));
+  assert.notEqual(res.status, 400, "a 300-item array must not be rejected by the generic JSON gate");
+  assert.equal(res.status, 200);
+  const generic = await proxy(new NextRequest("http://localhost:3000/api/v1/requests", {
+    method: "POST", headers: { host: "localhost:3000", origin: "http://localhost:3000", "content-type": "application/json" }, body,
+  }));
+  assert.equal(generic.status, 400, "other routes keep the 250-item limit");
+  const otherMethod = await proxy(new NextRequest("http://localhost:3000/api/v1/internal/communications/events", {
+    method: "PUT", headers: { host: "localhost:3000", "content-type": "application/json" }, body,
+  }));
+  assert.equal(otherMethod.status, 400, "the exemption is for the webhook's POST alone");
+});
+
+test("proxy: the SendGrid events route has a rate-limit group of its own, 600 a minute, apart from the 180 of the API", async () => {
+  globalThis.pulseSharedLocalLimits = undefined; // every request below comes from the same address: start from an empty window
+  try {
+    const post = (path: string) => proxy(new NextRequest(`http://localhost:3000${path}`, { method: "POST", headers: { host: "localhost:3000", "content-type": "application/json" }, body: "[]" }));
+    const statuses: number[] = [];
+    for (let i = 0; i < 601; i++) statuses.push((await post(EVENTS)).status);
+    assert.deepEqual([statuses.slice(0, 600).every((status) => status === 200), statuses[600]], [true, 429], "600 pass and the 601st does not");
+    assert.equal((await post("/api/v1/requests")).status, 200, "and the API's own group is untouched");
+  } finally {
+    globalThis.pulseSharedLocalLimits = undefined;
+  }
+});
+
+test("openapi: the SendGrid events route is documented behind its signature, with the array body it takes", () => {
+  const spec = JSON.parse(readFileSync(new URL("../public/openapi.json", import.meta.url), "utf8"));
+  const operation = spec.paths[EVENTS]?.post;
+  assert.equal(operation?.operationId, "receiveSendGridEvents");
+  assert.deepEqual(operation.security, [{ sendgridEventSignature: [] }]);
+  assert.equal(operation["x-authorization"], "SendGrid Event Webhook signature");
+  assert.equal(operation["x-source-file"], "app/api/v1/internal/communications/events/route.ts");
+  assert.deepEqual(spec.components.securitySchemes.sendgridEventSignature, { type: "apiKey", in: "header", name: "X-Twilio-Email-Event-Webhook-Signature" });
+  assert.deepEqual(operation.requestBody.content["application/json"].schema, { type: "array", maxItems: 1000, items: { type: "object" } });
+  assert.deepEqual(Object.keys(operation.responses).sort(), ["200", "400", "401", "404", "413", "429", "500", "503"]);
 });

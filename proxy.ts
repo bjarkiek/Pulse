@@ -37,14 +37,22 @@ export async function proxy(request: NextRequest) {
           ? "oauth"
           : path === "/mcp"
             ? "mcp"
-            : path.includes("/chat/")
-              ? "chat"
-              : "api";
+            : path === "/api/v1/internal/communications/events"
+              ? "webhook-in" // SendGrid's Event Webhook: server-to-server batches, so its own group and a higher limit
+              : path.includes("/chat/")
+                ? "chat"
+                : "api";
     try {
       await enforceRateLimit(
         request,
         group,
-        group === "chat" ? 15 : group === "api" ? 180 : 60,
+        group === "chat"
+          ? 15
+          : group === "webhook-in"
+            ? 600
+            : group === "api"
+              ? 180
+              : 60,
       );
     } catch (error) {
       const limited =
@@ -145,12 +153,16 @@ export async function proxy(request: NextRequest) {
       { status: 403, headers: { "x-correlation-id": correlationId } },
     );
 
+  // Two routes take a body that is not the usual small JSON: an attachment upload, and SendGrid's Event Webhook, which verifies the signature
+  // of the raw body itself and whose batches (up to 1000 events, 1 MiB) exceed the 250-item / 64 KiB limits of the generic JSON gate.
   if (
     mutation &&
     request.body &&
     !(
-      request.method === "PUT" &&
-      /^\/api\/v1\/attachments\/[^/]+\/content$/.test(path)
+      (request.method === "PUT" &&
+        /^\/api\/v1\/attachments\/[^/]+\/content$/.test(path)) ||
+      (request.method === "POST" &&
+        path === "/api/v1/internal/communications/events")
     )
   ) {
     try {

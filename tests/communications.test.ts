@@ -1,8 +1,9 @@
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { PulseIdentity } from "../lib/domain";
-import { memoryCommunications, memoryContacts, memoryDeliveries, resetCommunicationMemory } from "../lib/server/communications/memory";
+import { memoryCommunications, memoryContacts, memoryDeliveries, memoryEvents, resetCommunicationMemory } from "../lib/server/communications/memory";
 import {
   DEFAULT_COMMUNICATION_SETTINGS,
   getCommunicationSettings,
@@ -39,6 +40,7 @@ import {
 import { BACKOFF_BASE_MS, communicationStats, freezeAudience, getDeliveryStore, LEASE_MS, MAX_ATTEMPTS, requeueDeadLetters, type DeliveryStore } from "../lib/server/communications/delivery-store";
 import { buildSendGridMessage, classifySendError, createMailTransport, SendError, type MailTransport, type OutboundBatch } from "../lib/server/communications/sendgrid";
 import { MAX_SPLIT_REQUESTS, processCommunicationBatch } from "../lib/server/communications/delivery-worker";
+import { applyEvents, mapEvent, normalizePublicKey, parseEvents, verifyEventSignature, type SendGridEvent } from "../lib/server/communications/event-webhook";
 import { deliveryStatus, retryDeliveries } from "../lib/server/delivery-status";
 import { makeT } from "../lib/i18n";
 import sgMail from "@sendgrid/mail";
@@ -3662,4 +3664,369 @@ test("worker store, SQL: releaseBatch gives back only rows that are still Proces
     assert.equal(calls.length, 1, "nothing to give back, no statement");
     assert.deepEqual(events, [], "one atomic statement, no unit of work");
   });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// SendGrid event webhook
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A key pair and a signature over `timestamp + body`, made the way SendGrid makes them; `offsetSeconds` moves the timestamp away from now. */
+function signedPayload(body: string, offsetSeconds = 0) {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const timestamp = String(Math.floor(Date.now() / 1000) + offsetSeconds);
+  const signature = sign("sha256", Buffer.from(timestamp + body, "utf8"), privateKey).toString("base64");
+  return { publicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64"), timestamp, signature };
+}
+/** Parses and applies a batch of events given as plain objects, the way the route does with the body it read. */
+const applyAll = (...events: Array<Record<string, unknown>>) => applyEvents(parseEvents(JSON.stringify(events)));
+const EVENT_DELIVERY = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+/** Which of the webhook's tables a recorded statement is about. */
+const touches = (call: SqlCall) =>
+  /^\s*INSERT dbo\.CommunicationEvents/.test(call.text) ? "ledger"
+    : /^\s*UPDATE TOP\(1\) dbo\.CommunicationDeliveries/.test(call.text) ? "delivery"
+      : /dbo\.CommunicationSuppressions/.test(call.text) ? "suppression" : "other";
+/** The database as the webhook meets it: the ledger takes each event id once, and the delivery update finds `rows` rows. */
+function sqlWebhook(rows = 1): SqlAnswers {
+  const ledger = new Set<string>();
+  return [
+    [/^\s*INSERT dbo\.CommunicationEvents/, (inputs) => ({ rowsAffected: [ledger.has(String(inputs.id)) ? 0 : (ledger.add(String(inputs.id)), 1)] })],
+    [/^\s*UPDATE TOP\(1\) dbo\.CommunicationDeliveries/, { rowsAffected: [rows] }],
+  ];
+}
+
+test("webhook: ECDSA signature verification, PEM-armoured keys and the 10-minute window", () => {
+  const body = JSON.stringify([{ sg_event_id: "e1", event: "delivered", email: "a@origo.is", timestamp: 1 }]);
+  const { publicKey, timestamp, signature } = signedPayload(body);
+  assert.equal(verifyEventSignature(publicKey, body, signature, timestamp), true);
+  assert.equal(verifyEventSignature(`-----BEGIN PUBLIC KEY-----\n${publicKey}\n-----END PUBLIC KEY-----`, body, signature, timestamp), true);
+  assert.equal(verifyEventSignature(publicKey, body + " ", signature, timestamp), false);
+  assert.equal(verifyEventSignature(publicKey, body, signature, String(Number(timestamp) - 601)), false);
+  assert.equal(verifyEventSignature(publicKey, body, null, timestamp), false);
+});
+
+test("webhook: the window is judged on a valid signature and is ten minutes either side of now; anything malformed is refused, never thrown", () => {
+  const body = JSON.stringify([{ sg_event_id: "e1", event: "delivered", email: "a@origo.is", timestamp: 1 }]);
+  const { publicKey, timestamp, signature } = signedPayload(body);
+  const verifyAt = (seconds: number) => verifyEventSignature(publicKey, body, signature, timestamp, (Number(timestamp) + seconds) * 1000);
+  assert.deepEqual([verifyAt(0), verifyAt(600), verifyAt(-600)], [true, true, true], "the edges are inside");
+  assert.deepEqual([verifyAt(601), verifyAt(-601), verifyAt(86_400)], [false, false, false], "older is a replay, and newer is a clock that is wrong");
+  for (const bad of ["", "abc", "12.5", "-1", "1e9", ` ${timestamp}`, "1".repeat(13)])
+    assert.equal(verifyEventSignature(publicKey, body, signature, bad), false, `timestamp ${JSON.stringify(bad)}`);
+  assert.equal(verifyEventSignature(publicKey, body, signature, null), false);
+  // The format alone refuses a timestamp that is not a plain whole number, though it is near enough to now and was signed just as it stands.
+  const pair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const pairKey = pair.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const signedAs = (text: string) => sign("sha256", Buffer.from(text + body, "utf8"), pair.privateKey).toString("base64");
+  assert.equal(verifyEventSignature(pairKey, body, signedAs(timestamp), timestamp), true, "the control: the plain timestamp, signed, is accepted");
+  for (const odd of [`${timestamp}.0`, `${timestamp}e0`, `+${timestamp}`, `${timestamp} `])
+    assert.equal(verifyEventSignature(pairKey, body, signedAs(odd), odd), false, `signed as ${JSON.stringify(odd)}`);
+  for (const bad of ["", "not base64 at all!", Buffer.from("short").toString("base64")])
+    assert.equal(verifyEventSignature(publicKey, body, bad, timestamp), false, `signature ${JSON.stringify(bad)}`);
+  for (const bad of ["", "   ", "not a key", Buffer.from("not a DER key").toString("base64"), signedPayload(body).publicKey])
+    assert.equal(verifyEventSignature(bad, body, signature, timestamp), false, `key ${JSON.stringify(bad)}`);
+});
+
+test("webhook: a configured key may carry PEM armour, line breaks and padding", () => {
+  assert.equal(normalizePublicKey("-----BEGIN PUBLIC KEY-----\r\nMFkw EwYH\nKoZI\n-----END PUBLIC KEY-----\n"), "MFkwEwYHKoZI");
+  assert.equal(normalizePublicKey("  MFkwEwYHKoZI \t"), "MFkwEwYHKoZI");
+  const body = "[]";
+  const { publicKey, timestamp, signature } = signedPayload(body);
+  const wrapped = `-----BEGIN PUBLIC KEY-----\r\n${publicKey.match(/.{1,64}/g)!.join("\r\n")}\r\n-----END PUBLIC KEY-----\r\n`;
+  assert.equal(verifyEventSignature(wrapped, body, signature, timestamp), true, "the 64-column form that openssl writes");
+  assert.equal(verifyEventSignature(`  ${publicKey}\n`, body, signature, timestamp), true);
+});
+
+test("webhook: event mapping", () => {
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "delivered", email: "a", timestamp: 1 }), { lastEvent: "delivered", state: "Delivered" });
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "bounce", type: "bounce", email: "a", timestamp: 1 }), { lastEvent: "bounce", state: "Bounced", suppress: "Bounced" });
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "bounce", type: "blocked", email: "a", timestamp: 1 }), { lastEvent: "bounce", state: "Bounced" });
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "dropped", reason: "Unsubscribed Address", email: "a", timestamp: 1 }), { lastEvent: "dropped", state: "Dropped", suppress: "Unsubscribed" });
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "group_resubscribe", email: "a", timestamp: 1 }), { lastEvent: "group_resubscribe", release: "Unsubscribed" });
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "open", email: "a", timestamp: 1 }), { lastEvent: "open", opened: true });
+  assert.deepEqual(mapEvent({ sg_event_id: "1", event: "processed", email: "a", timestamp: 1 }), { lastEvent: "processed" });
+});
+
+test("webhook: the rest of the mapping table — deferrals, clicks, spam reports, unsubscribes, the reasons of a drop, and events that only move last_event", () => {
+  const map = (event: string, extra: Partial<SendGridEvent> = {}) => mapEvent({ sg_event_id: "1", event, email: "a", timestamp: 1, ...extra });
+  assert.deepEqual(map("deferred"), { lastEvent: "deferred", state: "Deferred" });
+  assert.deepEqual(map("click"), { lastEvent: "click", clicked: true });
+  assert.deepEqual(map("spamreport"), { lastEvent: "spamreport", suppress: "SpamReport" });
+  assert.deepEqual(map("unsubscribe"), { lastEvent: "unsubscribe", suppress: "Unsubscribed" });
+  assert.deepEqual(map("group_unsubscribe"), { lastEvent: "group_unsubscribe", suppress: "Unsubscribed" });
+  assert.deepEqual(map("bounce"), { lastEvent: "bounce", state: "Bounced", suppress: "Bounced" }, "a bounce that names no type is a real one");
+  for (const [reason, suppress] of [["Bounced Address", "Bounced"], ["unsubscribed address", "Unsubscribed"], ["Spam Reporting Address", "SpamReport"]] as const)
+    assert.deepEqual(map("dropped", { reason }), { lastEvent: "dropped", state: "Dropped", suppress }, reason);
+  for (const reason of [undefined, "", "Invalid", "Spam Content (if spam checker app enabled)"])
+    assert.deepEqual(map("dropped", { reason }), { lastEvent: "dropped", state: "Dropped" }, `a drop for ${JSON.stringify(reason)} suppresses nothing`);
+  for (const name of ["processed", "something_new"]) assert.deepEqual(map(name), { lastEvent: name });
+});
+
+test("webhook: parseEvents keeps well-formed events with the address trimmed and lower-cased, cuts each field to its column, and drops the rest", () => {
+  const full = {
+    sg_event_id: "e1", sg_message_id: "m.filter0001", event: "bounce", email: "  Jon@Origo.IS ", timestamp: 1_700_000_000, reason: "550 unknown", type: "bounce",
+    deliveryId: "7C9E6679-7425-40DE-944B-E07FC1F90AE7", communicationId: "COM-001", category: ["not", "kept"],
+  };
+  assert.deepEqual(parseEvents(JSON.stringify([full])), [{
+    sg_event_id: "e1", sg_message_id: "m.filter0001", event: "bounce", email: "jon@origo.is", timestamp: 1_700_000_000, reason: "550 unknown", type: "bounce",
+    deliveryId: "7c9e6679-7425-40de-944b-e07fc1f90ae7", communicationId: "COM-001",
+  }], "what the handler uses, and nothing else");
+  const [cut] = parseEvents(JSON.stringify([{
+    sg_event_id: "i".repeat(150), event: "e".repeat(50), email: `${"a".repeat(400)}@x.is`, timestamp: 1, sg_message_id: "m".repeat(300), reason: "r".repeat(600),
+    type: "t".repeat(50), communicationId: "C".repeat(50),
+  }]));
+  assert.deepEqual(
+    [cut.sg_event_id.length, cut.event.length, cut.email.length, cut.sg_message_id?.length, cut.reason?.length, cut.type?.length, cut.communicationId?.length],
+    [100, 32, 320, 200, 500, 32, 32], "each is cut to the width of its column",
+  );
+  const ok = { sg_event_id: "ok", event: "delivered", email: "a@origo.is", timestamp: 1 };
+  for (const deliveryId of ["not-a-uuid", "-".repeat(36), "7c9e6679-7425-40de-944b-e07fc1f90ae7x", 7, null])
+    assert.equal(parseEvents(JSON.stringify([{ ...ok, deliveryId }]))[0].deliveryId, undefined, `delivery id ${JSON.stringify(deliveryId)} is no delivery id`);
+  const malformed: unknown[] = [
+    null, 7, "text", [], {}, { event: "delivered" },
+    { ...ok, sg_event_id: 4 }, { ...ok, sg_event_id: "" }, { ...ok, sg_event_id: "  " },
+    { ...ok, event: undefined }, { ...ok, event: "" },
+    { ...ok, email: undefined }, { ...ok, email: "" }, { ...ok, email: "   \t" },
+    { ...ok, timestamp: "1" }, { ...ok, timestamp: -1 }, { ...ok, timestamp: 253_402_300_800 }, { ...ok, timestamp: "__INFINITY__" },
+  ];
+  const raw = JSON.stringify([...malformed, { ...ok, sg_event_id: "zero", timestamp: 0 }, { ...ok, sg_event_id: "last", timestamp: 253_402_300_799 }, ok]).replace('"__INFINITY__"', "1e999");
+  assert.deepEqual(parseEvents(raw).map((e) => e.sg_event_id), ["zero", "last", "ok"], "no id, no event, no address (or one that is blank once trimmed) and no usable time: dropped; the first and the last second the ledger can hold: kept");
+});
+
+test("webhook: parseEvents refuses a body that is not a JSON array and reads at most 1000 events", () => {
+  for (const body of ["{oops", ""]) assert.throws(() => parseEvents(body), /INVALID_JSON/, JSON.stringify(body));
+  for (const body of ["{}", '{"sg_event_id":"e"}', '"text"', "7", "null"]) assert.throws(() => parseEvents(body), /INVALID_EVENTS/, body);
+  assert.deepEqual(parseEvents("[]"), []);
+  const many = Array.from({ length: 1200 }, (_, i) => ({ sg_event_id: `m${i}`, event: "delivered", email: "a@origo.is", timestamp: 1 }));
+  const kept = parseEvents(JSON.stringify(many));
+  assert.deepEqual([kept.length, kept[0].sg_event_id, kept[999].sg_event_id], [1000, "m0", "m999"]);
+});
+
+test("webhook: applies delivery states, bounce suppresses the address, duplicates and unknown ids are no-ops", async () => {
+  const id = await readyCampaign();
+  await processCommunicationBatch(500, { transport: fakeTransport().transport });
+  const items = (await listDeliveries(PM, id, {})).items;
+  const jon = items.find((d) => d.email === "jon@origo.is")!;
+  const cio = items.find((d) => d.email === "cio@origo.is")!;
+  const events = parseEvents(JSON.stringify([
+    { sg_event_id: "e1", event: "delivered", email: jon.email, timestamp: 1, deliveryId: jon.id, communicationId: id },
+    { sg_event_id: "e2", event: "open", email: jon.email, timestamp: 2, deliveryId: jon.id, communicationId: id },
+    { sg_event_id: "e3", event: "bounce", type: "bounce", reason: "550 unknown", email: cio.email, timestamp: 3, deliveryId: cio.id, communicationId: id },
+    { sg_event_id: "e1", event: "delivered", email: jon.email, timestamp: 1, deliveryId: jon.id, communicationId: id },
+    { sg_event_id: "e4", event: "delivered", email: "ghost@x.is", timestamp: 1, deliveryId: crypto.randomUUID() },
+    { event: "delivered" },
+  ]));
+  assert.equal(events.length, 5, "malformed event dropped by parseEvents");
+  const result = await applyEvents(events);
+  assert.deepEqual(result, { applied: 3, ignored: 2 });
+  const after = (await listDeliveries(PM, id, {})).items;
+  assert.equal(after.find((d) => d.id === jon.id)?.state, "Delivered");
+  assert.ok(after.find((d) => d.id === jon.id)?.openedAt);
+  assert.equal(after.find((d) => d.id === cio.id)?.state, "Bounced");
+  assert.equal((await loadSuppressionMap()).get(cio.email), "Bounced");
+  assert.equal((await listContacts(PM, "ORG-001")).find((c) => c.email === cio.email)?.status, "Bounced");
+  // the bounced address is now excluded from the next campaign even though the contact still exists: a contact the webhook flagged is no longer
+  // an audience member at all (the resolver takes Active contacts only), so it is absent rather than counted as suppressed — see the next test
+  // for an address that the suppression list itself catches
+  const next = await createCommunication(PM, draftInput);
+  const estimate = await audienceEstimate(PM, next.id);
+  assert.deepEqual([estimate.members, estimate.contacts, estimate.sendable, estimate.suppressed], [3, 0, 3, {}]);
+  assert.equal((await listContacts(PM, "ORG-001")).some((c) => c.email === cio.email), true, "the contact itself is still there");
+});
+
+test("webhook: a member's bounced address stays in the next audience as a suppressed row, counted by its reason", async () => {
+  const id = await readyCampaign();
+  await processCommunicationBatch(500, { transport: fakeTransport().transport });
+  const jon = rowOf("jon@origo.is");
+  await applyAll({ sg_event_id: "b1", event: "bounce", type: "bounce", reason: "550 unknown", email: jon.email, timestamp: 1, deliveryId: jon.id, communicationId: id });
+  assert.equal(jon.state, "Bounced");
+  const next = await createCommunication(PM, draftInput);
+  const estimate = await audienceEstimate(PM, next.id);
+  assert.deepEqual([estimate.total, estimate.sendable, estimate.suppressed], [4, 3, { Bounced: 1 }], "a Pulse user is not a contact: the list is what keeps the address out");
+});
+
+test("webhook: an open or a click stamps the first time only, and with no delivery id the row is found by message id and address", async () => {
+  await readyCampaign();
+  await processCommunicationBatch(500, { transport: fakeTransport().transport });
+  const [jon, anna, cio] = ["jon@origo.is", "anna@advania.is", "cio@origo.is"].map(rowOf);
+  assert.equal(jon.providerMessageId, anna.providerMessageId, "one request, one message id");
+  assert.notEqual(jon.providerMessageId, cio.providerMessageId);
+  const message = `${jon.providerMessageId}.filter0001.1234.5678.0`; // SendGrid appends its own suffix to the id the request got
+  const result = await applyAll(
+    { sg_event_id: "o1", event: "open", email: "Jon@Origo.is", timestamp: 100, sg_message_id: message },
+    { sg_event_id: "o2", event: "open", email: "jon@origo.is", timestamp: 200, sg_message_id: message },
+    { sg_event_id: "c1", event: "click", email: "jon@origo.is", timestamp: 300, sg_message_id: message },
+    { sg_event_id: "o3", event: "open", email: "cio@origo.is", timestamp: 400, sg_message_id: message }, // cio's request had another message id
+    { sg_event_id: "o4", event: "open", email: "jon@origo.is", timestamp: 500 }, // nothing to find the row by
+    { sg_event_id: "o5", event: "open", email: "stranger@origo.is", timestamp: 600, sg_message_id: message }, // not an address of that request
+  );
+  assert.deepEqual(result, { applied: 3, ignored: 3 });
+  const at = (seconds: number) => new Date(seconds * 1000).toISOString();
+  assert.deepEqual([jon.openedAt, jon.clickedAt, jon.lastEvent, jon.lastEventAt, jon.state], [at(100), at(300), "click", at(300), "Accepted"], "the first open stays, and neither an open nor a click moves the state");
+  assert.deepEqual([anna, cio].map((d) => [d.openedAt ?? null, d.lastEvent ?? null]), [[null, null], [null, null]], "no other row was touched");
+});
+
+test("webhook: unsubscribes and spam reports suppress the address and flag its contacts; a resubscribe lifts an Unsubscribed suppression and nothing else", async () => {
+  await seedAudience(); // cio@origo.is is a contact of ORG-001
+  const state = async () => [(await loadSuppressionMap()).get("cio@origo.is") ?? null, (await listContacts(PM, "ORG-001")).find((c) => c.email === "cio@origo.is")?.status];
+  let n = 0;
+  const event = (name: string) => ({ sg_event_id: `u${++n}`, event: name, email: "CIO@origo.is", timestamp: n });
+  await applyAll(event("group_unsubscribe"));
+  assert.deepEqual(await state(), ["Unsubscribed", "Unsubscribed"]);
+  await applyAll(event("spamreport"));
+  assert.deepEqual(await state(), ["SpamReport", "Unsubscribed"]);
+  await applyAll(event("group_resubscribe"));
+  assert.deepEqual(await state(), ["SpamReport", "Unsubscribed"], "a resubscribe does not lift a spam report");
+  await applyAll(event("unsubscribe"));
+  assert.deepEqual(await state(), ["Unsubscribed", "Unsubscribed"]);
+  await applyAll(event("group_resubscribe"));
+  assert.deepEqual(await state(), [null, "Active"], "it lifts an unsubscribe, and the contact is active again");
+  await applyAll(event("bounce"));
+  assert.deepEqual(await state(), ["Bounced", "Bounced"]);
+  await applyAll(event("group_resubscribe"));
+  assert.deepEqual(await state(), ["Bounced", "Bounced"], "nor does it lift a bounce");
+});
+
+test("webhook: a Manual suppression is an admin's decision — webhook events neither replace it nor lift it, and the contacts keep the status it gave them", async () => {
+  await seedOrganizations();
+  await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
+  await addSuppression(ADMIN, { email: "anna@advania.is", note: "asked by phone" });
+  const [manual] = await listSuppressions(ADMIN);
+  assert.deepEqual([manual.reason, manual.source, manual.note], ["Manual", "Admin", "asked by phone"]);
+  const status = async () => (await listContacts(PM, "ORG-002"))[0].status;
+  assert.equal(await status(), "Unsubscribed");
+  for (const [reason, note] of [["Bounced", "550 unknown"], ["Unsubscribed", undefined], ["SpamReport", "complaint"]] as const) await suppressAddress("Anna@Advania.is", reason, "Webhook", note);
+  for (const reason of ["Unsubscribed", "Bounced", "SpamReport"] as const) await releaseAddress("anna@advania.is", reason);
+  assert.deepEqual(await listSuppressions(ADMIN), [manual], "the row is as the admin left it: reason, source, note and creation time");
+  assert.equal(await status(), "Unsubscribed", "and a bounce did not turn the contact into a Bounced one");
+  await applyAll(
+    { sg_event_id: "m1", event: "bounce", type: "bounce", reason: "550 unknown", email: "anna@advania.is", timestamp: 1 },
+    { sg_event_id: "m2", event: "group_unsubscribe", email: "anna@advania.is", timestamp: 2 },
+    { sg_event_id: "m3", event: "group_resubscribe", email: "anna@advania.is", timestamp: 3 },
+  );
+  assert.deepEqual(await listSuppressions(ADMIN), [manual], "the same through the webhook's own entry point");
+  assert.equal(await status(), "Unsubscribed");
+  // An admin's own call still edits the row and removing it still lifts it; once it is gone the webhook is heard again.
+  await addSuppression(ADMIN, { email: "anna@advania.is", note: "second call" });
+  assert.equal((await listSuppressions(ADMIN))[0].note, "second call");
+  await removeSuppression(ADMIN, "anna@advania.is");
+  assert.equal(await status(), "Active");
+  await suppressAddress("anna@advania.is", "Bounced", "Webhook", "550 unknown");
+  assert.deepEqual([(await loadSuppressionMap()).get("anna@advania.is"), await status()], ["Bounced", "Bounced"]);
+  await addSuppression(ADMIN, { email: "anna@advania.is" });
+  assert.deepEqual((await listSuppressions(ADMIN)).map((s) => [s.reason, s.source]), [["Manual", "Admin"]], "and an admin's Manual takes the row from a webhook's reason");
+});
+
+test("suppressions: an address that is empty once trimmed is ignored — no row, and in SQL no statement", async () => {
+  for (const blank of ["", " ", "\t \n"]) await suppressAddress(blank, "Bounced", "Webhook", "550 unknown");
+  assert.deepEqual([...(await loadSuppressionMap()).keys()], []);
+  await withFakeSql([], async (calls) => {
+    await suppressAddress("  ", "Bounced", "Webhook", "550 unknown");
+    assert.deepEqual(calls, [], "nothing reached the database");
+  });
+});
+
+test("suppressions: a note from the webhook is trimmed, a blank one is no note, and the cut is at 500 characters — in memory and in SQL", async () => {
+  await suppressAddress("blank@origo.is", "Bounced", "Webhook", " \n\t ");
+  await suppressAddress("padded@origo.is", "Bounced", "Webhook", "  550 user unknown \n");
+  await suppressAddress("long@origo.is", "Bounced", "Webhook", ` ${"x".repeat(600)}`);
+  const notes = Object.fromEntries((await listSuppressions(ADMIN)).map((s) => [s.email, s.note]));
+  assert.deepEqual(notes, { "blank@origo.is": undefined, "padded@origo.is": "550 user unknown", "long@origo.is": "x".repeat(500) });
+  await withFakeSql([], async (calls) => {
+    await suppressAddress("blank@origo.is", "Bounced", "Webhook", " \n\t ");
+    await suppressAddress("padded@origo.is", "Bounced", "Webhook", "  550 user unknown \n");
+    assert.deepEqual(calls.map((c) => c.inputs.note), [null, "550 user unknown"]);
+  });
+});
+
+test("suppressions, SQL: the upsert leaves a Manual row alone when the source is the webhook, and flags contacts only when it wrote a row", async () => {
+  await withFakeSql([], async (calls) => {
+    await suppressAddress(" Bounce@Origo.IS ", "Bounced", "Webhook", "550 user unknown");
+    const [merge] = calls;
+    assert.match(merge.text, /WHEN MATCHED AND NOT \(target\.reason='Manual' AND @source='Webhook'\) THEN UPDATE SET reason=@reason,source=@source,note=@note\s+WHEN NOT MATCHED THEN INSERT/);
+    assert.match(merge.text, /\);\s+IF @@ROWCOUNT>0 UPDATE dbo\.CommunicationContacts SET status=@status,updated_at=SYSUTCDATETIME\(\) WHERE email=@email AND deleted_at IS NULL;\s*$/);
+    assert.deepEqual([merge.inputs.email, merge.inputs.reason, merge.inputs.source, merge.inputs.note, merge.inputs.status], ["bounce@origo.is", "Bounced", "Webhook", "550 user unknown", "Bounced"]);
+  });
+});
+
+test("webhook: nothing is logged for an event — not the address, not the reason, not a count", async () => {
+  await seedAudience();
+  const run = await captured("log", () => captured("warn", () => captured("error", () => applyAll(
+    { sg_event_id: "l1", event: "bounce", type: "bounce", reason: "550 5.1.1 secret.person@origo.is does not exist", email: "secret.person@origo.is", timestamp: 1 },
+    { sg_event_id: "l2", event: "group_unsubscribe", email: "secret.person@origo.is", timestamp: 2 },
+    { sg_event_id: "l3", event: "group_resubscribe", email: "secret.person@origo.is", timestamp: 3 },
+    { sg_event_id: "l4", event: "open", email: "secret.person@origo.is", timestamp: 4, sg_message_id: "x.filter0001" },
+  ))));
+  assert.deepEqual([run.lines, run.value.lines, run.value.value.lines], [[], [], []]);
+  assert.deepEqual(run.value.value.value, { applied: 3, ignored: 1 });
+});
+
+test("webhook, SQL: an event is one unit of work — ledger row, delivery update and suppression — and a repeat stops at the ledger", async () => {
+  const bounce = {
+    sg_event_id: "s1", event: "bounce", type: "bounce", reason: "550 5.1.1 unknown", email: " Cio@Origo.is ", timestamp: 1_700_000_000,
+    sg_message_id: "MSG.filter0001", deliveryId: EVENT_DELIVERY, communicationId: "COM-001",
+  };
+  await withFakeSql(sqlWebhook(), async (calls, events) => {
+    assert.deepEqual(await applyAll(bounce, bounce), { applied: 1, ignored: 1 });
+    assert.deepEqual(events, ["begin", "commit", "begin", "commit"], "a unit of work for each event");
+    assert.deepEqual(calls.map((c) => [touches(c), c.inTransaction]), [["ledger", true], ["delivery", true], ["suppression", true], ["ledger", true]], "the suppression is written with the ledger row, so a retry can never find one without the other");
+    const [ledger, delivery, suppression] = calls;
+    assert.deepEqual([ledger.inputs.id, ledger.inputs.delivery, ledger.inputs.event, ledger.inputs.email, ledger.inputs.reason], ["s1", EVENT_DELIVERY, "bounce", "cio@origo.is", "550 5.1.1 unknown"]);
+    assert.equal((ledger.inputs.occurred as Date).toISOString(), "2023-11-14T22:13:20.000Z");
+    assert.equal(ledger.inputs.payload, JSON.stringify({ type: "bounce", sg_message_id: "MSG.filter0001" }), "the payload is trimmed to the two fields the ledger keeps");
+    assert.deepEqual(
+      [delivery.inputs.delivery, delivery.inputs.email, delivery.inputs.message, delivery.inputs.last, delivery.inputs.state, delivery.inputs.opened, delivery.inputs.clicked],
+      [EVENT_DELIVERY, "cio@origo.is", "MSG.filter0001", "bounce", "Bounced", 0, 0],
+    );
+    assert.deepEqual([suppression.inputs.email, suppression.inputs.reason, suppression.inputs.source, suppression.inputs.note], ["cio@origo.is", "Bounced", "Webhook", "550 5.1.1 unknown"]);
+  });
+});
+
+test("webhook, SQL: an event no delivery matches is ignored unless it suppresses or releases, and those still apply", async () => {
+  await withFakeSql(sqlWebhook(0), async (calls) => {
+    const result = await applyAll(
+      { sg_event_id: "q1", event: "delivered", email: "ghost@x.is", timestamp: 1, deliveryId: EVENT_DELIVERY },
+      { sg_event_id: "q2", event: "open", email: "ghost@x.is", timestamp: 2 },
+      { sg_event_id: "q3", event: "unsubscribe", email: "ghost@x.is", timestamp: 3 },
+      { sg_event_id: "q4", event: "group_resubscribe", email: "ghost@x.is", timestamp: 4 },
+    );
+    assert.deepEqual(result, { applied: 2, ignored: 2 });
+    assert.deepEqual(calls.map(touches), ["ledger", "delivery", "ledger", "delivery", "ledger", "delivery", "suppression", "ledger", "delivery", "suppression"]);
+    assert.ok(calls.filter((c) => touches(c) === "suppression").every((c) => c.inTransaction));
+    assert.match(calls[6].text, /^\s*MERGE dbo\.CommunicationSuppressions/);
+    assert.match(calls[9].text, /^\s*DELETE dbo\.CommunicationSuppressions/);
+    assert.equal(calls[2].inputs.delivery, null, "an event that names no delivery has none in the ledger");
+    assert.equal(calls[3].inputs.message, null, "and the update then has no message id to correlate by");
+  });
+});
+
+test("webhook, SQL: a suppression that fails rolls its event back, so SendGrid's retry finds neither a ledger row nor a half-applied event", async () => {
+  const answers: SqlAnswers = [[/MERGE dbo\.CommunicationSuppressions/, () => { throw new Error("deadlock victim"); }], ...sqlWebhook()];
+  await withFakeSql(answers, async (calls, events) => {
+    await assert.rejects(applyAll({ sg_event_id: "f1", event: "spamreport", email: "a@origo.is", timestamp: 1, deliveryId: EVENT_DELIVERY }), /deadlock victim/);
+    assert.deepEqual(events, ["begin", "rollback"]);
+    assert.deepEqual(calls.map((c) => [touches(c), c.inTransaction]), [["ledger", true], ["delivery", true], ["suppression", true]]);
+  });
+});
+
+test("webhook, demo data: with SQL configured and the switch on, events follow the in-memory deliveries — like the campaigns do — while suppressions still go to SQL", async () => {
+  const row = deliveryRow("COM-001", "Accepted", { email: "jon@origo.is" });
+  memoryDeliveries().push(row);
+  await withFakeSql([], async (calls, events) => {
+    globalThis.pulseShowDemoData = true;
+    try {
+      const bounce = { sg_event_id: "d1", event: "bounce", type: "bounce", reason: "550 unknown", email: "jon@origo.is", timestamp: 5, deliveryId: row.id };
+      assert.deepEqual(await applyAll(bounce, bounce), { applied: 1, ignored: 1 });
+      assert.equal(row.state, "Bounced");
+      assert.equal(memoryEvents().has("d1"), true, "the ledger is the memory one");
+      assert.deepEqual(calls.map(touches), ["suppression"], "only the suppression reached SQL");
+      assert.deepEqual(events, [], "and no unit of work was opened");
+    } finally {
+      globalThis.pulseShowDemoData = undefined;
+    }
+  });
+});
+
+test("retention: the cleanup batch purges webhook events after 90 days, a limited number per run, and counts them", () => {
+  const source = readFileSync(new URL("../lib/server/retention-worker.ts", import.meta.url), "utf8");
+  assert.match(source, /DELETE TOP \(@limit\) FROM dbo\.CommunicationEvents WHERE received_at\s*<\s*DATEADD\(day,-90,SYSUTCDATETIME\(\)\);\s+SET @deleted\+=@@ROWCOUNT;/);
 });
