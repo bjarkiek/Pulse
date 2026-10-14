@@ -14,7 +14,7 @@ are the **screenshots** and the **chapter intro texts**.
 | Piece | File | Refresh needed when… |
 | --- | --- | --- |
 | Tour catalog (steps, anchors, en/is strings) | `lib/server/tour-catalog.ts` | you change tours — this IS the manual's content |
-| Help page (layout, intros, about/admin-extra prose) | `app/help/route.ts` | a NEW tour needs a `CHAPTER_INTROS` entry; feature behavior described in the static prose changed |
+| Help page (layout, intros, about/admin-extra prose, the Communications guide and the note for Company admins) | `app/help/route.ts` | a NEW tour needs a `CHAPTER_INTROS` entry; feature behavior described in the static prose changed |
 | Manual split / audience gating | `getHelpData` in `lib/server/tour-repository.ts` | never, unless audience semantics change (All/Customers → user manual, Internal/SystemAdmins → admin manual) |
 | Screenshots | `public/help/*.png` | tours changed, UI changed visibly, or anchors moved — **recapture** |
 | Capture script | `scripts/capture-help-screenshots.mjs` | rarely; see contract below |
@@ -32,8 +32,10 @@ rename): `public/help/{tourKey}-step-{N}.png` (N is 1-based) plus
   `lib/server/tour-catalog.ts`. For a **new tour**, add a matching entry to
   `CHAPTER_INTROS` in `app/help/route.ts` (en + is, one narration-style opener).
 - If the changed behavior is described in the static prose ("The help system in
-  one minute", "Administering onboarding" / `adminExtra`), update those strings
-  in `app/help/route.ts` (both languages).
+  one minute", "Administering onboarding" / `adminExtra`, "Customer
+  communications" / `communicationsGuide`, "Communications from DataCentral" /
+  `companyCommunications`), update those strings in `app/help/route.ts` (both
+  languages).
 - Rule from the tour kit: any step whose anchor lives inside a conditionally
   rendered container (modal/drawer) must carry a pseudo-`route` that the
   TourHost glue can map to "open that container" — see `/compose` →
@@ -49,11 +51,14 @@ Prereqs (already in the repo): `playwright` devDependency + Chromium
 # 1. Fresh dev server in memory mode — REQUIRED, memory state must be clean so
 #    the help-menu screenshot shows tours as not-started
 #    (kill any running one first; the demo identity is a System admin and the
-#    master switch defaults ON, so all four tours are capturable)
+#    master switch defaults ON, so all five tours are capturable)
 npm run dev
 
 # 2. In another terminal:
 npm run help:screenshots        # → node scripts/capture-help-screenshots.mjs
+
+# Port 3000 taken by something else? Start the server with `npx next dev -p 3100`
+# and pass its address: npm run help:screenshots -- http://localhost:3100
 ```
 
 The script drives the **real Driver.js tours**: for every tour step it calls
@@ -65,7 +70,7 @@ The script drives the **real Driver.js tours**: for every tour step it calls
 - the Next dev-overlay badge and the resume chip are hidden via injected CSS
   (the badge sits exactly over the ? button bottom-left and broke clicks).
 
-Expected output: one line per step (currently 22 steps / 4 tours) plus
+Expected output: one line per step (currently 26 steps / 5 tours) plus
 `help-menu`, ending `Done → …\public\help`. If it says "No tours in state",
 the master switch is off or a tour was disabled — fix in Settings → Onboarding
 (or restart the server to reset memory settings) and rerun.
@@ -87,8 +92,8 @@ npm run lint && npm run build
 
 If tour keys/audiences changed, update the assertions in `tests/tours.test.ts`
 (they reference the keys `welcome`, `submit-request`, `team-workspace`,
-`admin-settings` and assert customers never receive admin chapters — keep that
-guarantee).
+`admin-settings`, `customer-communications` and assert customers never receive
+admin chapters — keep that guarantee).
 
 ## Known quirks (not bugs — don't chase them)
 
@@ -100,6 +105,12 @@ guarantee).
 - The build prints pre-existing `instrumentation.ts` Edge-runtime warnings
   ("Ecmascript file had an error" then "Compiled successfully") — unrelated to
   the help system.
+- **A step can show "Done" instead of "Next".** The engine labels a step "Done"
+  when none of the later steps' anchors is on the page at that moment: they are
+  on another page (typical for the step before a page change), or the page is
+  still loading when the popover opens (the first step of Customer
+  communications). Pressing it still continues the tour (`onDoneClick` in
+  `public/tours/tour-engine.js`).
 - Screenshots are English: memory mode resolves every user's locale to `en`.
   The Icelandic manual (`?lang=is`) intentionally reuses them.
 - Screenshots are committed binaries (~300 KB each @2x). Recapture replaces

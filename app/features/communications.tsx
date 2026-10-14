@@ -25,9 +25,13 @@ import {
 import { useResource } from "./use-resource";
 
 type Tab = "campaigns" | "contacts" | "suppressions";
-const TABS: Array<{ id: Tab; label: string }> = [
+/**
+ * `tour` is the anchor of a stop in the customer-communications tour. Its Recipients step highlights the Contacts tab, because the tab is on
+ * the page whichever tab is open and the tour cannot switch one for the person: they click the highlighted tab to carry on.
+ */
+const TABS: Array<{ id: Tab; label: string; tour?: string }> = [
   { id: "campaigns", label: "Campaigns" },
-  { id: "contacts", label: "Contacts" },
+  { id: "contacts", label: "Contacts", tour: "communications-contacts" },
   { id: "suppressions", label: "Suppressions" },
 ];
 const API = "/api/v1/internal/communications";
@@ -274,6 +278,7 @@ export function CommunicationsPage({
             role="tab"
             aria-selected={tab === entry.id}
             className={tab === entry.id ? "active" : ""}
+            data-tour={entry.tour}
             onClick={() => setTab(entry.id)}
           >
             {t(entry.label)}

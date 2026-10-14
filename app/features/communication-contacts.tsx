@@ -91,7 +91,7 @@ export function CommunicationContactsTab({
   };
 
   return (
-    <section className="page-stack" data-tour="communications-contacts">
+    <section className="page-stack">
       <div className="management-toolbar">
         <label className="select-wrap">
           <Icon name="building" size={15} />

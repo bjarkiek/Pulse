@@ -10,3 +10,6 @@ IF NOT EXISTS (SELECT 1 FROM dbo.Memberships WHERE user_id=@UserId AND organizat
   INSERT dbo.Memberships(id,user_id,organization_id,role,status) VALUES(NEWID(),@UserId,'ORG-001','Company admin','Active');
 IF NOT EXISTS (SELECT 1 FROM dbo.Memberships WHERE user_id=@UserId AND organization_id='ORG-INTERNAL')
   INSERT dbo.Memberships(id,user_id,organization_id,role,status) VALUES(NEWID(),@UserId,'ORG-INTERNAL','System admin','Active');
+IF NOT EXISTS (SELECT 1 FROM dbo.CommunicationContacts WHERE organization_id='ORG-001' AND email='cio@origo.is')
+  INSERT dbo.CommunicationContacts(id,organization_id,email,display_name,locale,topics_json,source,created_by_user_id)
+  VALUES(NEWID(),'ORG-001','cio@origo.is',N'Origo CIO','is',N'["product-updates","service-notices"]','Admin',@UserId);

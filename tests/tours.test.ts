@@ -1,6 +1,9 @@
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PulseIdentity } from "../lib/domain";
 import {
   createSessionToken,
@@ -83,6 +86,62 @@ test("audiences: internal contributors get the team tour but not admin-settings"
 test("audiences: System admins get every tour", async () => {
   const keys = (await getTourState(ADMIN)).tours.map((tour) => tour.key);
   for (const def of TOUR_CATALOG) assert.ok(keys.includes(def.key));
+});
+
+test("audiences: the customer-communications tour is internal-only and never auto-starts", async () => {
+  const internal = (await getTourState(CONTRIBUTOR)).tours.find((tour) => tour.key === "customer-communications");
+  assert.ok(internal);
+  assert.equal(internal?.autoStart, false);
+  assert.ok(!(await getTourState(CUSTOMER)).tours.some((tour) => tour.key === "customer-communications"));
+});
+
+test("customer-communications: it starts on the Communications page, opens the Contacts tab by a click, and ends on the Settings card", async () => {
+  const tour = (await getTourState(ADMIN)).tours.find((item) => item.key === "customer-communications");
+  assert.ok(tour);
+  assert.equal(tour.version, 1);
+  assert.deepEqual(
+    tour.steps.map((step) => [step.element, step.route]),
+    [
+      ["[data-tour='nav-communications']", "/communications"],
+      ["[data-tour='communications-new']", "/communications"],
+      ["[data-tour='communications-contacts']", "/communications"],
+      ["[data-tour='settings-communications']", "/settings"],
+    ],
+  );
+  // The Contacts tab is on the page from the first moment, so the person opens it by clicking the highlighted tab:
+  // the tour has no way to switch a tab for them, and the section behind the tab is not there until it is open.
+  assert.deepEqual(
+    tour.steps.map((step) => step.advanceOnClick),
+    [false, false, true, false],
+  );
+});
+
+test("every tour step is written in both languages, and the Icelandic is not a copy of the English", () => {
+  for (const def of TOUR_CATALOG) {
+    for (const field of [def.title, ...def.steps.flatMap((step) => [step.title, step.description])]) {
+      assert.ok(field.en.trim() && field.is.trim(), `${def.key}: both languages are written`);
+      assert.notEqual(field.en, field.is, `${def.key}: "${field.en}" is not translated`);
+    }
+  }
+});
+
+test("every tour step points at an anchor that the app renders", () => {
+  const appDirectory = fileURLToPath(new URL("../app", import.meta.url));
+  const files = readdirSync(appDirectory, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".tsx"));
+  const source = files.map((file) => readFileSync(join(appDirectory, file), "utf8")).join("\n");
+  for (const def of TOUR_CATALOG) {
+    for (const [index, step] of def.steps.entries()) {
+      if (!step.element) continue;
+      const name = /^\[data-tour='([a-z-]+)'\]$/.exec(step.element)?.[1];
+      assert.ok(name, `${def.key} step ${index + 1}: ${step.element} is a data-tour selector`);
+      // An anchor is written data-tour="x" or dataTour="x"; the tabs of the Communications page give theirs as the `tour` of the tab.
+      const written = [`data-tour="${name}"`, `dataTour="${name}"`, `tour: "${name}"`];
+      assert.ok(
+        written.some((text) => source.includes(text)),
+        `${def.key} step ${index + 1}: nothing in app/ carries data-tour="${name}"`,
+      );
+    }
+  }
 });
 
 test("embed sessions are gated on the DataCentral Onboard role", async () => {
@@ -256,6 +315,67 @@ test("/help never serves admin chapters to a customer session", async () => {
   assert.ok(!html.includes('id="team-workspace"'));
   assert.ok(!html.includes('id="admin-settings"'));
   assert.ok(!html.includes("Triage inbox")); // no internal tour content leaks
+});
+
+test("/help: the customer-communications chapter and its guide are for the DataCentral team, in both languages", async () => {
+  // memory mode, no cookie → demo System-admin identity
+  const html = await (await helpGet(new Request("http://localhost/help"))).text();
+  assert.ok(html.includes('id="customer-communications"'), "the tour is a chapter of the admin manual");
+  for (let step = 1; step <= 4; step++) {
+    assert.ok(html.includes(`id="customer-communications-step-${step}"`), `step ${step}`);
+    assert.ok(html.includes(`src="/help/customer-communications-step-${step}.png"`), `the screenshot of step ${step}`);
+  }
+  assert.ok(html.includes("Do: click the highlighted element to continue."), "the Contacts step is opened by a click");
+  // the guide follows the chapters of the admin manual; it is not part of the user manual
+  assert.ok(html.indexOf('id="admin"') < html.indexOf('id="communications-guide"'));
+  assert.ok(html.indexOf('id="customer-communications"') < html.indexOf('id="communications-guide"'));
+  for (const topic of [
+    "Suppressions tab", "safe mode", "“Send test to me”", "“Send now”", "“Schedule”", "“Cancel sending”", "Dead letter",
+    "“Retry dead letters”", "“Customer communications (SendGrid)”", "“Enable sending”",
+  ])
+    assert.ok(html.includes(topic), `the guide covers ${topic}`);
+
+  const icelandic = await (await helpGet(new Request("http://localhost/help?lang=is"))).text();
+  assert.ok(icelandic.includes('id="communications-guide"'));
+  for (const topic of ["öruggur hamur", "„Senda prófun á mig“", "„Senda núna“", "„Hætta við sendingu“", "„Samskipti við viðskiptavini (SendGrid)“"])
+    assert.ok(icelandic.includes(topic), `the Icelandic guide covers ${topic}`);
+});
+
+test("/help: the note for Company admins is in the user manual, for every reader and in both languages, and says nothing about the team's tools", async () => {
+  const token = await createSessionToken({
+    sub: CUSTOMER.id,
+    email: CUSTOMER.email,
+    name: CUSTOMER.name,
+    ext: "dev:test",
+    amr: "entra",
+  });
+  const read = async (query: string) => {
+    const response = await helpGet(
+      new Request(`http://localhost/help${query}`, {
+        headers: { cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}` },
+      }),
+    );
+    assert.equal(response.status, 200);
+    return response.text();
+  };
+  const english = await read("");
+  assert.ok(english.includes('id="company-communications"'));
+  assert.ok(english.includes("“Who receives DataCentral communications for your company”"));
+  assert.ok(english.includes("“Notification preferences”"));
+  assert.ok(english.indexOf('id="submit-request"') < english.indexOf('id="company-communications"'), "after the chapters of the user manual");
+  const icelandic = await read("?lang=is");
+  assert.ok(icelandic.includes('id="company-communications"'));
+  assert.ok(icelandic.includes("„Hverjir fá samskipti frá DataCentral fyrir fyrirtækið þitt“"));
+  assert.ok(icelandic.includes("„Tilkynningastillingar“"));
+  for (const html of [english, icelandic]) {
+    assert.ok(!html.includes('id="customer-communications"'), "no chapter of the team's tour");
+    assert.ok(!html.includes('id="communications-guide"'), "no guide to the team's tools");
+    assert.ok(!html.includes("SendGrid"));
+    assert.ok(!html.includes('id="admin"'));
+  }
+  // the demo System admin reads the same note, before the admin manual starts
+  const admin = await (await helpGet(new Request("http://localhost/help"))).text();
+  assert.ok(admin.indexOf('id="company-communications"') < admin.indexOf('id="admin"'));
 });
 
 test("dc-auth stamps dc_onboard only when the launch carries the Onboard role", async () => {

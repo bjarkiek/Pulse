@@ -53,6 +53,22 @@ const STRINGS = {
       "<strong>Restore</strong> — users who chose “Hide tours forever” appear in an amber bar above the grid; the Restore button next to their name brings tours back for them. There is deliberately no user-facing undo.",
       "<strong>DataCentral embeds</strong> — inside a DataCentral iframe, tours additionally require the launch to carry the <code>Onboard</code> role. Assign that role in DataCentral to control who gets onboarding there; standalone sign-ins are unaffected.",
     ],
+    communicationsGuideTitle: "Customer communications",
+    communicationsGuide: [
+      "<strong>Where it lives</strong> — Communications, in the “DataCentral team” menu. Product managers and System admins write and send. The rest of the team can read the lists and the delivery results.",
+      "<strong>Three templates</strong> — “New product update”, “Service notice” and “Announcement”. Each one is branded and holds English and Icelandic text. Recipients who prefer Icelandic get the English text until an Icelandic version exists. On the Releases page, “Draft customer email” starts a product update from a published release.",
+      "<strong>Who receives it</strong> — On the Audience step you pick companies, or all customers. Pulse members receive it by their own topic preferences. Contacts, the people without a Pulse account kept on the Contacts tab, receive it by topic. Security advisories reach members even when they have turned the topic off.",
+      "<strong>Suppressions and safe mode</strong> — An address on the Suppressions tab never receives anything, whatever company it belongs to. Bounces, spam reports and unsubscribes join the list by themselves. While safe mode is on, only allow-listed domains receive mail. The Audience and Review steps show who will receive it and who is left out, with the reason.",
+      "<strong>Preview and test send</strong> — The preview beside the form shows the saved draft in the language you are editing. “Send test to me” mails the draft to your own address, marked [TEST]. Test mails never count in the results.",
+      "<strong>Send, schedule, cancel</strong> — On the last step choose “Send now”, or pick a time and choose “Schedule”. Content and audience are locked once sending starts. A scheduled communication goes back to a draft with “Unschedule”. “Cancel sending” stops everyone SendGrid has not received yet. Mail already handed over is not recalled.",
+      "<strong>Delivery states</strong> — Each recipient moves from Queued to Accepted to Delivered. Deferred means the receiving server asked for more time. Bounced and Dropped mean the mail did not arrive. Dead letter means every attempt failed; “Retry dead letters” tries again. Suppressed recipients were left out before sending. Opens and clicks are counted separately.",
+      "<strong>Settings card</strong> — System admins use Settings → “Customer communications (SendGrid)”. Turn on “Enable sending”, choose the sender, keep safe mode on until the first real send, and press “Send configuration test”. The API key and the webhook key come from Key Vault, not from this page.",
+    ],
+    companyCommunicationsTitle: "Communications from DataCentral",
+    companyCommunications: [
+      "<strong>Your choices</strong> — DataCentral emails product updates, service notices and general announcements. On the Updates page, under “Notification preferences”, everyone switches each topic on or off for themselves. Security advisories are always delivered.",
+      "<strong>For Company admins</strong> — The same page shows “Who receives DataCentral communications for your company”. Colleagues with a Pulse account receive email automatically. Add people without an account here, one at a time or with “Paste list”, and edit or remove them whenever you need to. Only Company admins see this section.",
+    ],
     printHint: "Tip: this page prints cleanly — use it as a hand-out or a video-recording script.",
     languageToggle: "Íslenska",
     languageToggleHref: "?lang=is",
@@ -90,6 +106,22 @@ const STRINGS = {
       "<strong>Endurvirkja</strong> — notendur sem völdu „Fela leiðsagnir fyrir fullt og allt“ birtast í gulri rönd fyrir ofan töfluna; Restore-hnappurinn við nafnið þeirra kveikir aftur á leiðsögnum fyrir þá. Það er viljandi engin afturköllun fyrir notandann sjálfan.",
       "<strong>DataCentral-innfellingar</strong> — inni í DataCentral-iframe þurfa leiðsagnir að auki að ræsingin beri <code>Onboard</code>-hlutverkið. Úthlutaðu því hlutverki í DataCentral til að stýra hverjir fá leiðsögn þar; bein innskráning er óbreytt.",
     ],
+    communicationsGuideTitle: "Samskipti við viðskiptavini",
+    communicationsGuide: [
+      "<strong>Staðsetning</strong> — Samskipti eru í valmyndinni „DataCentral-teymið“. Vörustjórar og kerfisstjórar semja og senda. Aðrir í teyminu geta skoðað listana og niðurstöður sendinga.",
+      "<strong>Þrjú sniðmát</strong> — „Ný vöruuppfærsla“, „Þjónustutilkynning“ og „Tilkynning“. Öll eru með vörumerki og geyma texta á ensku og íslensku. Viðtakendur sem kjósa íslensku fá enska textann þar til íslensk útgáfa er til. Á útgáfusíðunni er hægt að velja „Semja tölvupóst til viðskiptavina“ fyrir útgefnar útgáfur; þá byrjar vöruuppfærsla með texta úr útgáfunni.",
+      "<strong>Hverjir fá sendinguna</strong> — Í skrefinu „Viðtakendur“ velur þú fyrirtæki eða öll fyrirtæki viðskiptavina. Meðlimir í Pulse fá hana eftir eigin stillingum. Tengiliðir, fólk án Pulse-aðgangs á flipanum „Tengiliðir“, fá hana eftir efnisflokki. Öryggistilkynningar ná til meðlima þótt þeir hafi slökkt á efnisflokknum.",
+      "<strong>Útilokanir og öruggur hamur</strong> — Netfang á flipanum „Útilokanir“ fær aldrei neitt, sama hvaða fyrirtæki það tilheyrir. Netföng sem skila sér ekki, ruslpóstskvartanir og afskráningar bætast sjálfkrafa á listann. Meðan öruggur hamur er á fá aðeins leyfð lén póst. Skrefin „Viðtakendur“ og „Yfirfara og senda“ sýna hverjir fá sendinguna og hverjir eru útilokaðir, með ástæðu.",
+      "<strong>Forskoðun og prófun</strong> — Forskoðunin við hliðina á forminu sýnir vistuðu drögin á tungumálinu sem þú ert að breyta. „Senda prófun á mig“ sendir drögin á þitt eigið netfang, merkt [TEST]. Prófanir telja aldrei með í niðurstöðum.",
+      "<strong>Senda, tímasetja, hætta við</strong> — Í síðasta skrefinu velur þú „Senda núna“, eða velur tíma og „Tímasetja“. Efni og viðtakendur læsast þegar sending hefst. Tímasetta sendingu má gera aftur að drögum með „Aftengja tímasetningu“. „Hætta við sendingu“ stöðvar alla sem SendGrid hefur ekki enn fengið. Póstur sem þegar er farinn er ekki kallaður til baka.",
+      "<strong>Sendingarstöður</strong> — Hver viðtakandi fer úr „Í biðröð“ í „Móttekið“ og svo „Afhent“. „Frestað“ þýðir að móttökuþjónninn bað um meiri tíma. „Skiluðu sér ekki“ og „Fellt niður“ þýða að pósturinn barst ekki. „Endurtilraunir tæmdar“ þýðir að allar tilraunir mistókust; „Reyna aftur sendingar sem mistókust“ reynir aftur. „Útilokað“ merkir að viðtakandinn var undanskilinn áður en sending hófst. Opnanir og smellir eru talin sérstaklega.",
+      "<strong>Stillingaspjaldið</strong> — Kerfisstjórar nota Stillingar → „Samskipti við viðskiptavini (SendGrid)“. Þar kveikja þeir á „Virkja sendingar“, velja sendanda, halda öruggum ham á þar til fyrsta raunverulega sendingin fer út og ýta á „Senda prófun á uppsetningu“. API-lykillinn og lykillinn fyrir atburðavefkrókinn koma úr Key Vault, ekki héðan.",
+    ],
+    companyCommunicationsTitle: "Samskipti frá DataCentral",
+    companyCommunications: [
+      "<strong>Þínar stillingar</strong> — DataCentral sendir vöruuppfærslur, þjónustutilkynningar og almennar tilkynningar í tölvupósti. Á uppfærslusíðunni, undir „Tilkynningastillingar“, kveikir eða slekkur hver og einn á hverjum efnisflokki fyrir sig. Öryggistilkynningar eru alltaf sendar.",
+      "<strong>Fyrir fyrirtækisstjóra</strong> — Á sömu síðu er hlutinn „Hverjir fá samskipti frá DataCentral fyrir fyrirtækið þitt“. Samstarfsfólk með Pulse-aðgang fær tölvupóst sjálfkrafa. Bættu hér við fólki án aðgangs, einu í einu eða með „Líma lista“, og breyttu þeim eða fjarlægðu þegar þörf krefur. Aðeins fyrirtækisstjórar sjá þennan hluta.",
+    ],
     printHint: "Ábending: síðan prentast hreint — nýttu hana sem dreifiblað eða upptökuhandrit.",
     languageToggle: "English",
     languageToggleHref: "?lang=en",
@@ -114,6 +146,10 @@ const CHAPTER_INTROS: Record<string, { en: string; is: string }> = {
   "admin-settings": {
     en: "System administration: product settings and the onboarding controls — the master switch, per-tour audiences, and the per-user progress grid with Restore.",
     is: "Kerfisstjórnun: vörustillingar og stýringar nýliðaleiðsagna — aðalrofinn, markhópar hverrar leiðsagnar og framvindutafla með endurvirkjun.",
+  },
+  "customer-communications": {
+    en: "Writing to customer companies from Pulse: where Communications lives, how a draft starts from a template, who receives it, and where System admins set up sending. Customers never see these views.",
+    is: "Að skrifa til fyrirtækja viðskiptavina í Pulse: hvar Samskipti eru, hvernig drög byrja á sniðmáti, hverjir fá þau og hvar kerfisstjórar setja upp sendingar. Viðskiptavinir sjá aldrei þessi svæði.",
   },
 };
 
@@ -162,6 +198,14 @@ function renderChapter(chapter: HelpChapter, lang: Lang) {
     <p><a class="start-link" href="/?tour=${encodeURIComponent(def.key)}">${esc(t.startTour)}</a></p>
     ${steps}
   </section>`;
+}
+
+// A block of short prose after the chapters of a manual. The class is the manual's prose-block style, which is not only for the admin manual.
+function renderExtra(title: string, items: readonly string[], id?: string) {
+  return `<div class="admin-extra"${id ? ` id="${id}"` : ""}>
+    <h5>${esc(title)}</h5>
+    <ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>
+  </div>`;
 }
 
 function tocEntry(chapter: HelpChapter, lang: Lang) {
@@ -283,15 +327,14 @@ export async function GET(request: Request) {
 
   <h2 id="user">${esc(t.userManual)}</h2>
   ${data.userChapters.map((chapter) => renderChapter(chapter, lang)).join("")}
+  ${renderExtra(t.companyCommunicationsTitle, t.companyCommunications, "company-communications")}
 
   ${
     showAdmin
       ? `<h2 id="admin">${esc(t.adminManual)}</h2>
   ${data.adminChapters.map((chapter) => renderChapter(chapter, lang)).join("")}
-  <div class="admin-extra">
-    <h5>${esc(t.adminExtraTitle)}</h5>
-    <ul>${t.adminExtra.map((item) => `<li>${item}</li>`).join("")}</ul>
-  </div>`
+  ${renderExtra(t.adminExtraTitle, t.adminExtra)}
+  ${renderExtra(t.communicationsGuideTitle, t.communicationsGuide, "communications-guide")}`
       : ""
   }
 </div>

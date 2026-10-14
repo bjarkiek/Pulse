@@ -314,4 +314,56 @@ export const TOUR_CATALOG: TourDefinition[] = [
       },
     ],
   },
+  {
+    key: "customer-communications",
+    version: 1,
+    title: { en: "Customer communications", is: "Samskipti við viðskiptavini" },
+    defaultAutoStart: false,
+    defaultAudience: "Internal",
+    reofferOnNewVersion: false,
+    steps: [
+      {
+        element: "[data-tour='nav-communications']",
+        route: "/communications",
+        side: "right",
+        title: { en: "Communications", is: "Samskipti" },
+        description: {
+          en: "Compose product updates, service notices and announcements for customer companies, then track every delivery.",
+          is: "Semdu vöruuppfærslur, þjónustutilkynningar og tilkynningar fyrir fyrirtæki viðskiptavina og fylgstu með hverri sendingu.",
+        },
+      },
+      {
+        element: "[data-tour='communications-new']",
+        route: "/communications",
+        title: { en: "Start from a template", is: "Byrjaðu með sniðmáti" },
+        description: {
+          en: "Each template is branded and bilingual. Published releases also offer “Draft customer email”.",
+          is: "Hvert sniðmát er með vörumerki og á tveimur tungumálum. Útgefnar útgáfur bjóða líka upp á „Semja tölvupóst til viðskiptavina“.",
+        },
+      },
+      {
+        // The anchor is the Contacts tab itself, which is on the page whichever tab is open: the tour cannot switch a tab for the person, and the
+        // section behind the tab is not rendered until it is open. A click on the highlighted tab carries the tour on (the tab opens as the tour
+        // moves to the Settings page); "Next" does the same without opening it.
+        element: "[data-tour='communications-contacts']",
+        route: "/communications",
+        side: "bottom",
+        advanceOnClick: true,
+        title: { en: "Recipients", is: "Viðtakendur" },
+        description: {
+          en: "Pulse members receive communications automatically. Add contacts for people without a Pulse account; Company admins can maintain their own company's list.",
+          is: "Meðlimir í Pulse fá samskipti sjálfkrafa. Bættu við tengiliðum fyrir fólk án Pulse-aðgangs; stjórnendur fyrirtækja geta viðhaldið sínum eigin lista.",
+        },
+      },
+      {
+        element: "[data-tour='settings-communications']",
+        route: "/settings",
+        title: { en: "SendGrid settings", is: "SendGrid-stillingar" },
+        description: {
+          en: "System admins enable sending, choose the sender, keep safe mode on until the first real send, and verify the configuration here.",
+          is: "Kerfisstjórar virkja sendingar, velja sendanda, halda öruggum ham á þar til fyrsta raunverulega sendingin fer út og staðfesta uppsetninguna hér.",
+        },
+      },
+    ],
+  },
 ];
