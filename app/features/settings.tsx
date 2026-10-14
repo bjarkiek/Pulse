@@ -1,5 +1,6 @@
 "use client";
 
+import { CommunicationSettingsCard } from "./communication-settings";
 import { DeliveryStatus } from "./delivery-status";
 import { useEffect, useState } from "react";
 
@@ -169,6 +170,7 @@ export function SettingsPage({
       />
       <section className="settings-grid">
         <DeliveryStatus />
+        <CommunicationSettingsCard onToast={onToast} />
         <article className="settings-card">
           <header>
             <Icon name="plus" size={19} />

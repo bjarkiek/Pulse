@@ -28,6 +28,7 @@ export type Page =
   | "triage"
   | "productIdeas"
   | "releases"
+  | "communications"
   | "audit"
   | "analytics"
   | "companies"
@@ -260,6 +261,140 @@ export type TaxonomyValue = {
   value: string;
   active: boolean;
   sortOrder: number;
+};
+
+export type CommunicationStatus =
+  "Draft" | "Scheduled" | "Sending" | "Sent" | "Cancelled";
+export type CommunicationStatsItem = {
+  recipients: number;
+  queued: number;
+  accepted: number;
+  delivered: number;
+  bounced: number;
+  dropped: number;
+  deadLettered: number;
+  suppressed: number;
+  cancelled: number;
+  opened: number;
+  clicked: number;
+  byOrganization: Array<{
+    organizationId: string;
+    recipients: number;
+    delivered: number;
+    opened: number;
+  }>;
+};
+export type CommunicationItem = {
+  version?: string;
+  id: string;
+  templateKey: "product-update" | "service-notice" | "plain";
+  topic:
+    "product-updates" | "service-notices" | "security-advisories" | "general";
+  title: string;
+  content: {
+    subject: { en: string; is?: string };
+    preheader?: { en?: string; is?: string };
+    body: { en: Record<string, unknown>; is?: Record<string, unknown> };
+  };
+  audience: {
+    organizations: "all-customers" | string[];
+    includeOnboarding: boolean;
+    includeTestOrganizations: boolean;
+    includeMembers: boolean;
+    memberRoles: Array<"Company admin" | "Requester" | "Viewer"> | null;
+    includeContacts: boolean;
+    includeInternalCopy: boolean;
+  };
+  status: CommunicationStatus;
+  scheduledAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  recipientCount: number;
+  releaseId?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  stats?: CommunicationStatsItem;
+};
+export type AudienceBreakdownItem = {
+  organizations: number;
+  members: number;
+  contacts: number;
+  internal: number;
+  suppressed: Record<string, number>;
+  total: number;
+  sendable: number;
+};
+export type DeliveryItem = {
+  id: string;
+  organizationId: string | null;
+  email: string;
+  displayName: string | null;
+  locale: "en" | "is";
+  source: "Member" | "Contact" | "Test";
+  state: string;
+  suppressedReason?: string | null;
+  attemptCount: number;
+  providerMessageId?: string | null;
+  lastEvent?: string | null;
+  lastEventAt?: string | null;
+  openedAt?: string | null;
+  clickedAt?: string | null;
+  lastErrorCode?: string | null;
+  createdAt: string;
+};
+export type ContactItem = {
+  id: string;
+  organizationId: string;
+  userId: string | null;
+  email: string;
+  displayName: string;
+  locale: "en" | "is";
+  topics: string[];
+  status: "Active" | "Unsubscribed" | "Bounced";
+  source: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type SuppressionItem = {
+  email: string;
+  reason: string;
+  source: string;
+  note?: string;
+  createdAt: string;
+};
+export type CommunicationSettingsItem = {
+  enabled: boolean;
+  fromName: string;
+  fromEmail: string;
+  replyTo: string;
+  dataResidency: "global" | "eu";
+  unsubscribeGroupId: number | null;
+  sandboxMode: boolean;
+  safeMode: { enabled: boolean; allowedDomains: string[] };
+  tracking: { opens: boolean; clicks: boolean };
+  dailyCap: number;
+  maxRecipientsPerCampaign: number;
+  categoriesPrefix: string;
+  boilerplate: Record<
+    "en" | "is",
+    { signOff: string; footer: string; supportEmail: string }
+  >;
+};
+export type CommunicationProviderStatus = {
+  providerConfigured: boolean;
+  webhookConfigured: boolean;
+  webhookUrl: string;
+  effectiveSendingState:
+    "disabled" | "provider-missing" | "sandbox" | "safe-mode" | "live";
+};
+export const COMMUNICATION_TOPIC_LABELS: Record<string, string> = {
+  "product-updates": "Product updates",
+  "service-notices": "Service notices",
+  "security-advisories": "Security advisories",
+  general: "General announcements",
 };
 
 export type IconName =

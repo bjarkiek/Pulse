@@ -74,6 +74,11 @@ const ReleasesPage = dynamic(
   { loading: () => <LoadingFeature /> },
 );
 
+const CommunicationsPage = dynamic(
+  () => import("./communications").then((m) => m.CommunicationsPage),
+  { loading: () => <LoadingFeature /> },
+);
+
 const AuditPage = dynamic(() => import("./audit").then((m) => m.AuditPage), {
   loading: () => <LoadingFeature />,
 });
@@ -107,6 +112,7 @@ export const pageTitles: Record<Page, string> = {
   triage: "Triage inbox",
   productIdeas: "Product ideas",
   releases: "Releases",
+  communications: "Communications",
   audit: "Audit log",
   analytics: "Analytics",
   companies: "Companies",
@@ -585,6 +591,14 @@ export function AppShell() {
                   <span>{t("Releases")}</span>
                 </button>
                 <button
+                  className={`nav-item ${page === "communications" ? "active" : ""}`}
+                  onClick={() => navigate("communications")}
+                  data-tour="nav-communications"
+                >
+                  <Icon name="send" size={17} />
+                  <span>{t("Communications")}</span>
+                </button>
+                <button
                   className={`nav-item ${page === "analytics" ? "active" : ""}`}
                   onClick={() => navigate("analytics")}
                   data-tour="nav-analytics"
@@ -814,6 +828,13 @@ export function AppShell() {
                     ideas={internalIdeas}
                     onChange={setReleases}
                     onIdeasChange={setInternalIdeas}
+                    onToast={setToast}
+                  />
+                )}
+                {page === "communications" && (
+                  <CommunicationsPage
+                    companies={companies}
+                    releases={releases}
                     onToast={setToast}
                   />
                 )}

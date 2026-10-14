@@ -401,3 +401,51 @@ Object.assign(internalTranslations, {
   Processing: "Í vinnslu",
   "Dead letter": "Endurtilraunir tæmdar",
 });
+
+Object.assign(internalTranslations, {
+  "Customer communications (SendGrid)":
+    "Samskipti við viðskiptavini (SendGrid)",
+  "Enable sending — the worker and the Send action stay disabled until this is on.":
+    "Virkja sendingar — bakgrunnsverkið og Senda-hnappurinn eru óvirk þar til þetta er kveikt.",
+  "From name": "Nafn sendanda",
+  "From address (verified in SendGrid)":
+    "Netfang sendanda (staðfest í SendGrid)",
+  "Reply-to": "Svarnetfang",
+  "Data residency": "Gagnasvæði",
+  "Unsubscribe group id (ASM)": "Auðkenni afskráningarhóps (ASM)",
+  "Daily cap": "Hámark á dag",
+  "Max recipients per communication":
+    "Hámarksfjöldi viðtakenda í hverri sendingu",
+  "Category prefix": "Forskeyti flokka",
+  "Safe mode — only send to the allow-listed domains below; everyone else is recorded as suppressed.":
+    "Öruggur hamur — aðeins sent á lénin hér fyrir neðan; aðrir eru skráðir sem útilokaðir.",
+  "Allowed domains (comma separated)": "Leyfð lén (aðskilin með kommu)",
+  "Sandbox mode — SendGrid validates requests without delivering.":
+    "Prófunarhamur — SendGrid staðfestir beiðnir án þess að senda.",
+  "Track opens": "Mæla opnanir",
+  "Track clicks": "Mæla smelli",
+  "Boilerplate (English)": "Fastur texti (enska)",
+  "Boilerplate (Icelandic)": "Fastur texti (íslenska)",
+  "Sign-off": "Kveðja",
+  "Footer line": "Fótlína",
+  "Support address": "Netfang þjónustu",
+  "Event webhook URL": "Slóð fyrir atburðavefkrók",
+  "Save communication settings": "Vista samskiptastillingar",
+  "Send configuration test": "Senda prófun á uppsetningu",
+  "Communication settings saved and added to the audit trail.":
+    "Samskiptastillingar vistaðar og skráðar í atburðaskrá.",
+  "Configuration test sent to your address.": "Prófun send á netfangið þitt.",
+  "Configuration test logged to the server console (no SendGrid key configured).":
+    "Prófun skráð í miðlaraskrá (enginn SendGrid-lykill stilltur).",
+  "Broadcast product updates and notices to customer companies. Secrets live in Key Vault; everything else is configured here.":
+    "Sendu vöruuppfærslur og tilkynningar til fyrirtækja viðskiptavina. Leyndarmál eru geymd í Key Vault; allt annað er stillt hér.",
+  "API key configured": "API-lykill stilltur",
+  "API key missing": "API-lykil vantar",
+  "Event webhook verified": "Atburðavefkrókur staðfestur",
+  "Event webhook key missing": "Lykil fyrir atburðavefkrók vantar",
+  "Sending: disabled": "Sendingar: óvirkar",
+  "Sending: provider-missing": "Sendingar: tölvupóstveitu vantar",
+  "Sending: sandbox": "Sendingar: prófunarhamur",
+  "Sending: safe-mode": "Sendingar: öruggur hamur",
+  "Sending: live": "Sendingar: í notkun",
+});
