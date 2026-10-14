@@ -1065,6 +1065,9 @@ test("webhook route: a signed bounce reaches the delivery and the suppression li
   await createContact({ email: "cio@origo.is", displayName: "CIO", locale: "is", topics: ["general"] });
   const draft = await createDraft();
   assert.equal((await sendCampaign(draft.id, {}, draft.version)).status, 200);
+  // The worker has sent the mail: events only touch rows the provider accepted.
+  const store = getDeliveryStore();
+  for (let claimed = await store.claimBatch(500); claimed; claimed = await store.claimBatch(500)) await store.markAccepted(claimed.deliveries.map((d) => d.id), "msg-route", new Date());
   const idOf = (email: string) => memoryDeliveries().find((d) => d.email === email)!.id;
   const batch = JSON.stringify([
     { sg_event_id: "w1", event: "bounce", type: "bounce", reason: "550 5.1.1 cio@origo.is unknown", email: "CIO@origo.is", timestamp: 1_700_000_000, deliveryId: idOf("cio@origo.is"), communicationId: draft.id },

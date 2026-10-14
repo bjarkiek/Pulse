@@ -85,6 +85,25 @@ export function mapEvent(event: SendGridEvent): EventEffect {
   }
 }
 
+/**
+ * How far the provider has got with a message, for the states an event can set: accepted, then deferred, then a verdict. Events arrive in any order (a batch
+ * that SendGrid posts again after one of our failures, two batches in flight), so an event moves the state forward or sideways and never back: a deferral
+ * that arrives after the delivery leaves it Delivered. A failure outweighs a delivery, so a late `delivered` does not turn a bounce into a success, while a
+ * bounce after a delivery (a late bounce) does move it. The states the worker owns (Queued, Retry, Processing, Dead letter, Suppressed, Cancelled) have no rank.
+ * The SQL update spells the same table out.
+ */
+const STATE_RANK: Partial<Record<DeliveryState, number>> = { Accepted: 1, Deferred: 2, Delivered: 3, Bounced: 4, Dropped: 4 };
+/** From this rank a state is a verdict: the provider has finished with the message. */
+const VERDICT_RANK = 3;
+const rankOf = (state: DeliveryState | undefined) => (state ? STATE_RANK[state] ?? 0 : 0);
+/**
+ * Whether an event touches this delivery at all: only a row the provider accepted, or a row still Processing when the event is a verdict (the webhook
+ * can overtake the worker, which has not yet recorded the acceptance). A row in any other state is the worker's, and an event leaves it alone.
+ */
+const touchable = (d: DeliveryRecord, effect: EventEffect) => rankOf(d.state) > 0 || (d.state === "Processing" && rankOf(effect.state) >= VERDICT_RANK);
+/** Whether a touched row takes the event's state: the event must not weigh less than the row. A row still Processing has no rank, so it takes the verdict that overtook the worker. */
+const advances = (d: DeliveryRecord, effect: EventEffect) => rankOf(effect.state) >= rankOf(d.state);
+
 /** The suppression side of an event. The list keeps its own rules: the newest event wins, and a Manual suppression is never replaced or lifted from here. */
 async function applySuppression(event: SendGridEvent, effect: EventEffect) {
   if (effect.suppress) await suppressAddress(event.email, effect.suppress, "Webhook", event.reason);
@@ -97,6 +116,10 @@ async function applySuppression(event: SendGridEvent, effect: EventEffect) {
  * An event updates the delivery it belongs to (by the `deliveryId` we sent as a custom argument; failing that, by the request's message id and the
  * address) and may suppress or release the address. `applied` counts the events that changed a delivery or the suppression list; `ignored` counts
  * the repeats and the events that match no delivery and suppress nothing.
+ *
+ * An event never moves a delivery backwards (see `STATE_RANK`), whatever the order it arrives in; the last event, the first open and the first click are
+ * recorded all the same. It touches only a row the provider accepted (see `touchable`): one in a state the worker owns is left as it is, and counts as
+ * a delivery that was not found.
  *
  * Ledger and deliveries follow `isContentSqlActive`, like the campaigns they belong to: with "Show demo data" on they are in memory while SQL is
  * configured, and the suppression list (which keeps `isAzureSqlConfigured`) is still the real one. In SQL an event is one unit of work, ledger row, delivery
@@ -117,10 +140,10 @@ export async function applyEvents(events: SendGridEvent[]) {
       const belongs = (d: DeliveryRecord) => event.deliveryId
         ? d.id === event.deliveryId
         : Boolean(event.sg_message_id && d.providerMessageId && event.sg_message_id.startsWith(d.providerMessageId) && d.email === event.email);
-      const delivery = memoryDeliveries().find(belongs);
+      const delivery = memoryDeliveries().find((d) => belongs(d) && touchable(d, effect));
       if (delivery) {
         delivery.lastEvent = effect.lastEvent; delivery.lastEventAt = occurredAt;
-        if (effect.state) delivery.state = effect.state;
+        if (effect.state && advances(delivery, effect)) delivery.state = effect.state;
         if (effect.opened) delivery.openedAt ||= occurredAt;
         if (effect.clicked) delivery.clickedAt ||= occurredAt;
       }
@@ -139,10 +162,15 @@ export async function applyEvents(events: SendGridEvent[]) {
       if (!inserted.rowsAffected[0]) return "duplicate" as const;
       const updated = await pool.request().input("delivery", sql.UniqueIdentifier, event.deliveryId || null).input("email", sql.NVarChar(320), event.email)
         .input("message", sql.NVarChar(200), event.sg_message_id || null).input("last", sql.NVarChar(32), effect.lastEvent).input("occurred", sql.DateTime2, new Date(occurredAt))
-        .input("state", sql.NVarChar(32), effect.state || null).input("opened", sql.Bit, effect.opened ? 1 : 0).input("clicked", sql.Bit, effect.clicked ? 1 : 0)
-        .query(`UPDATE TOP(1) dbo.CommunicationDeliveries SET last_event=@last,last_event_at=@occurred,state=COALESCE(@state,state),
+        .input("state", sql.NVarChar(32), effect.state || null).input("rank", sql.Int, rankOf(effect.state)).input("opened", sql.Bit, effect.opened ? 1 : 0).input("clicked", sql.Bit, effect.clicked ? 1 : 0)
+        // The state follows STATE_RANK: an event that sets one moves the row when it weighs at least what the row does (a row still Processing has no rank, so it
+        // takes any verdict); only a row the provider accepted is touched, or one still Processing when the event is a verdict (@rank>=3). The other columns are
+        // recorded whatever the state.
+        .query(`UPDATE TOP(1) dbo.CommunicationDeliveries SET last_event=@last,last_event_at=@occurred,
+          state=CASE WHEN @state IS NOT NULL AND @rank>=(CASE state WHEN 'Accepted' THEN 1 WHEN 'Deferred' THEN 2 WHEN 'Delivered' THEN 3 WHEN 'Bounced' THEN 4 WHEN 'Dropped' THEN 4 ELSE 0 END) THEN @state ELSE state END,
           opened_at=CASE WHEN @opened=1 THEN COALESCE(opened_at,@occurred) ELSE opened_at END,clicked_at=CASE WHEN @clicked=1 THEN COALESCE(clicked_at,@occurred) ELSE clicked_at END
-          WHERE (@delivery IS NOT NULL AND id=@delivery) OR (@delivery IS NULL AND @message IS NOT NULL AND provider_message_id IS NOT NULL AND email=@email AND @message LIKE provider_message_id+'%')`);
+          WHERE ((@delivery IS NOT NULL AND id=@delivery) OR (@delivery IS NULL AND @message IS NOT NULL AND provider_message_id IS NOT NULL AND email=@email AND @message LIKE provider_message_id+'%'))
+            AND (state IN ('Accepted','Deferred','Delivered','Bounced','Dropped') OR (state='Processing' AND @rank>=3))`);
       await applySuppression(event, effect);
       return updated.rowsAffected[0] ? "applied" as const : "orphan" as const;
     });

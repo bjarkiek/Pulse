@@ -32,7 +32,7 @@ import {
 import { listUsers, organizations, users } from "../lib/server/admin-repository";
 import { loadAudienceInput, resolveAudience, type AudienceInput } from "../lib/server/communications/audience";
 import { COMMUNICATION_TOPICS, MANDATORY_TOPICS, topicEventType } from "../lib/server/communications/topics";
-import type { AudienceSpec, CommunicationTopic, DeliveryRecord } from "../lib/server/communications/types";
+import type { AudienceSpec, CommunicationTopic, DeliveryRecord, DeliveryState } from "../lib/server/communications/types";
 import {
   audienceEstimate, cancelCommunication, createCommunication, deleteCommunication, duplicateCommunication, findCommunicationUuid, getCommunication,
   listCommunications, listDeliveries, prefillFromRelease, previewCommunication, retryDeadLetters, sendCommunication, testSendCommunication, updateCommunication,
@@ -3886,6 +3886,64 @@ test("webhook: unsubscribes and spam reports suppress the address and flag its c
   assert.deepEqual(await state(), ["Bounced", "Bounced"], "nor does it lift a bounce");
 });
 
+test("webhook: events never move a delivery backwards — a late deferral leaves Delivered, a late delivery leaves a bounce, a late bounce still counts — and last_event, opens and clicks are always recorded", async () => {
+  await readyCampaign();
+  await processCommunicationBatch(500, { transport: fakeTransport().transport });
+  const row = rowOf("jon@origo.is");
+  let n = 0;
+  /** Starts the delivery as the provider accepted it, applies the events in the order they arrive (each carries the time it happened) and says where it ends. */
+  const walk = async (...arrivals: Array<[event: string, at: number]>) => {
+    Object.assign(row, { state: "Accepted", lastEvent: null, lastEventAt: null, openedAt: null, clickedAt: null });
+    for (const [event, at] of arrivals) await applyAll({ sg_event_id: `w${++n}`, event, email: row.email, timestamp: at, deliveryId: row.id });
+    return row.state;
+  };
+  const at = (seconds: number) => new Date(seconds * 1000).toISOString();
+  assert.equal(await walk(["delivered", 200], ["deferred", 100]), "Delivered", "a deferral that arrives after the delivery it preceded");
+  assert.equal(await walk(["deferred", 100], ["delivered", 200]), "Delivered", "the usual order");
+  assert.equal(await walk(["deferred", 100], ["deferred", 200]), "Deferred");
+  assert.equal(await walk(["processed", 50], ["delivered", 200], ["processed", 60]), "Delivered", "an event that sets no state moves nothing");
+  assert.equal(await walk(["bounce", 200], ["delivered", 100]), "Bounced", "a delivery that arrives after the bounce it preceded");
+  assert.equal(await walk(["bounce", 200], ["deferred", 100]), "Bounced");
+  assert.equal(await walk(["delivered", 100], ["bounce", 200]), "Bounced", "a bounce after a delivery is a late bounce, and it counts");
+  assert.equal(await walk(["dropped", 200], ["delivered", 100]), "Dropped");
+  assert.equal(await walk(["dropped", 100], ["bounce", 200]), "Bounced", "a verdict of the same weight: the one that arrives later wins");
+  assert.equal(await walk(["bounce", 100], ["dropped", 200]), "Dropped");
+  await walk(["delivered", 200], ["deferred", 100]);
+  assert.deepEqual([row.lastEvent, row.lastEventAt], ["deferred", at(100)], "last_event is the last event that arrived; the state is how far the provider got");
+  await walk(["bounce", 200], ["open", 300], ["click", 400]);
+  assert.deepEqual([row.state, row.openedAt, row.clickedAt], ["Bounced", at(300), at(400)], "opens and clicks are recorded whatever the state");
+});
+
+test("webhook: an event touches only a delivery the provider accepted — a row in a state the worker owns is left as it is — except that a verdict for a row still Processing is applied, the webhook having overtaken the worker", async () => {
+  await readyCampaign(); // the worker has not run: the rows are Queued
+  const row = rowOf("jon@origo.is");
+  let n = 0;
+  const arrive = (...names: string[]) => applyAll(...names.map((event) => ({ sg_event_id: `x${++n}`, event, email: row.email, timestamp: 1000 + n, deliveryId: row.id })));
+  const reset = (state: DeliveryState) => Object.assign(row, { state, lastEvent: null, lastEventAt: null, openedAt: null, clickedAt: null });
+  for (const state of ["Queued", "Retry", "Dead letter", "Suppressed", "Cancelled"] as const) {
+    reset(state);
+    assert.deepEqual(await arrive("delivered", "deferred", "open", "click", "processed"), { applied: 0, ignored: 5 }, `${state}: ignored`);
+    assert.deepEqual([row.state, row.lastEvent, row.lastEventAt, row.openedAt, row.clickedAt], [state, null, null, null, null], `${state}: not touched at all`);
+  }
+  reset("Dead letter");
+  assert.deepEqual(await arrive("bounce"), { applied: 1, ignored: 0 }, "a bounce still suppresses the address, which is not the row's to keep");
+  assert.deepEqual([row.state, row.lastEvent], ["Dead letter", null]);
+  assert.equal((await loadSuppressionMap()).get(row.email), "Bounced");
+  reset("Processing");
+  assert.deepEqual(await arrive("deferred", "open", "click", "processed"), { applied: 0, ignored: 4 }, "Processing: only a verdict is taken");
+  assert.deepEqual([row.state, row.lastEvent, row.openedAt, row.clickedAt], ["Processing", null, null, null]);
+  for (const [event, state] of [["delivered", "Delivered"], ["bounce", "Bounced"], ["dropped", "Dropped"]] as const) {
+    reset("Processing");
+    assert.deepEqual(await arrive(event), { applied: 1, ignored: 0 }, event);
+    assert.deepEqual([row.state, row.lastEvent], [state, event], `a ${event} for a row still Processing: the row keeps the provider's state`);
+  }
+  // The same rule decides which row a message id and an address find.
+  reset("Retry");
+  Object.assign(row, { providerMessageId: "msg-found" });
+  assert.deepEqual(await applyAll({ sg_event_id: "x-fallback", event: "delivered", email: row.email, timestamp: 1, sg_message_id: "msg-found.filter0001" }), { applied: 0, ignored: 1 });
+  assert.equal(row.state, "Retry");
+});
+
 test("webhook: a Manual suppression is an admin's decision — webhook events neither replace it nor lift it, and the contacts keep the status it gave them", async () => {
   await seedOrganizations();
   await saveContact(PM, { organizationId: "ORG-002", email: "anna@advania.is", displayName: "Anna", locale: "en", topics: ["general"] });
@@ -3974,8 +4032,8 @@ test("webhook, SQL: an event is one unit of work — ledger row, delivery update
     assert.equal((ledger.inputs.occurred as Date).toISOString(), "2023-11-14T22:13:20.000Z");
     assert.equal(ledger.inputs.payload, JSON.stringify({ type: "bounce", sg_message_id: "MSG.filter0001" }), "the payload is trimmed to the two fields the ledger keeps");
     assert.deepEqual(
-      [delivery.inputs.delivery, delivery.inputs.email, delivery.inputs.message, delivery.inputs.last, delivery.inputs.state, delivery.inputs.opened, delivery.inputs.clicked],
-      [EVENT_DELIVERY, "cio@origo.is", "MSG.filter0001", "bounce", "Bounced", 0, 0],
+      [delivery.inputs.delivery, delivery.inputs.email, delivery.inputs.message, delivery.inputs.last, delivery.inputs.state, delivery.inputs.rank, delivery.inputs.opened, delivery.inputs.clicked],
+      [EVENT_DELIVERY, "cio@origo.is", "MSG.filter0001", "bounce", "Bounced", 4, 0, 0],
     );
     assert.deepEqual([suppression.inputs.email, suppression.inputs.reason, suppression.inputs.source, suppression.inputs.note], ["cio@origo.is", "Bounced", "Webhook", "550 5.1.1 unknown"]);
   });
@@ -3996,6 +4054,20 @@ test("webhook, SQL: an event no delivery matches is ignored unless it suppresses
     assert.match(calls[9].text, /^\s*DELETE dbo\.CommunicationSuppressions/);
     assert.equal(calls[2].inputs.delivery, null, "an event that names no delivery has none in the ledger");
     assert.equal(calls[3].inputs.message, null, "and the update then has no message id to correlate by");
+  });
+});
+
+test("webhook, SQL: the delivery update moves the state only forward, touches only rows the provider accepted, and takes a verdict for a row still Processing — by the same ranks as memory", async () => {
+  await withFakeSql(sqlWebhook(), async (calls) => {
+    const event = (n: number, name: string) => ({ sg_event_id: `k${n}`, event: name, email: "a@origo.is", timestamp: n, deliveryId: EVENT_DELIVERY });
+    await applyAll(event(1, "delivered"), event(2, "deferred"), event(3, "bounce"), event(4, "dropped"), event(5, "open"), event(6, "processed"));
+    const updates = calls.filter((c) => touches(c) === "delivery");
+    assert.deepEqual(updates.map((c) => [c.inputs.state, c.inputs.rank]), [["Delivered", 3], ["Deferred", 2], ["Bounced", 4], ["Dropped", 4], [null, 0], [null, 0]], "each event says the state it sets and the weight of it");
+    const text = updates[0].text;
+    assert.deepEqual([...text.matchAll(/WHEN '(\w+)' THEN (\d)/g)].map((m) => [m[1], Number(m[2])]), [["Accepted", 1], ["Deferred", 2], ["Delivered", 3], ["Bounced", 4], ["Dropped", 4]], "the statement ranks the states as memory does");
+    assert.match(text, /state=CASE WHEN @state IS NOT NULL AND @rank>=\(CASE state WHEN 'Accepted' THEN 1 .* ELSE 0 END\) THEN @state ELSE state END,/, "a state is set when the event has one that weighs at least what the row's does (a row still Processing has no rank: ELSE 0)");
+    assert.match(text, /\)\s+AND \(state IN \('Accepted','Deferred','Delivered','Bounced','Dropped'\) OR \(state='Processing' AND @rank>=3\)\)\s*$/, "and only a row the provider accepted is touched, or one still Processing when the event is a verdict");
+    assert.match(text, /WHERE \(\(@delivery IS NOT NULL AND id=@delivery\) OR \(@delivery IS NULL AND @message IS NOT NULL/, "the correlation is grouped, so the state condition applies to both ways of finding the row");
   });
 });
 
