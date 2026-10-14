@@ -352,7 +352,7 @@ export const TOUR_CATALOG: TourDefinition[] = [
         title: { en: "Recipients", is: "Viðtakendur" },
         description: {
           en: "Pulse members receive communications automatically. Add contacts for people without a Pulse account; Company admins can maintain their own company's list.",
-          is: "Meðlimir í Pulse fá samskipti sjálfkrafa. Bættu við tengiliðum fyrir fólk án Pulse-aðgangs; stjórnendur fyrirtækja geta viðhaldið sínum eigin lista.",
+          is: "Meðlimir í Pulse fá samskipti sjálfkrafa. Bættu við tengiliðum fyrir fólk án Pulse-aðgangs; fyrirtækisstjórar geta viðhaldið sínum eigin lista.",
         },
       },
       {
@@ -364,7 +364,7 @@ export const TOUR_CATALOG: TourDefinition[] = [
         title: { en: "SendGrid settings", is: "SendGrid-stillingar" },
         description: {
           en: "System admins enable sending, choose the sender, keep safe mode on until the first real send, and verify the configuration under Settings.",
-          is: "Kerfisstjórar virkja sendingar, velja sendanda, halda öruggum ham á þar til fyrsta raunverulega sendingin fer út og staðfesta uppsetninguna undir Stillingar.",
+          is: "Kerfisstjórar virkja sendingar, velja sendanda, halda öruggum ham á þar til fyrsta raunverulega sendingin fer út og staðfesta uppsetninguna undir Stillingum.",
         },
       },
     ],

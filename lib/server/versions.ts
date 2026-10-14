@@ -21,6 +21,7 @@ export async function addVersions<T extends { id: string }>(
   )
     .request()
     .input("ids", sql.NVarChar(sql.MAX), JSON.stringify(items.map((i) => i.id)))
+    // Through binary(8): style 1 of a raw rowversion returns its eight bytes on SQL Server 2025, where a binary gives 0x and the hexadecimal digits.
     .query(
       `SELECT public_id id,CONVERT(varchar(18),CAST(row_version AS binary(8)),1) version FROM dbo.${entity} WHERE public_id IN (SELECT value FROM OPENJSON(@ids))`,
     );
@@ -73,6 +74,7 @@ export async function checkedMutation<T>(
       .request()
       .input("id", sql.NVarChar(32), id)
       .input("org", sql.NVarChar(32), identity.organizationId)
+      // Through binary(8), as in addVersions: style 1 of a raw rowversion returns its eight bytes on SQL Server 2025.
       .query(
         `SELECT CONVERT(varchar(18),CAST(row_version AS binary(8)),1) version FROM dbo.${entity} WITH (UPDLOCK,HOLDLOCK) WHERE public_id=@id ${entity === "Requests" ? "AND organization_id=@org AND deleted_at IS NULL" : ""}`,
       );

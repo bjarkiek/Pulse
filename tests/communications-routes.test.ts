@@ -1476,8 +1476,11 @@ test("errorMessage: a 400 says what its code means, followed by the support id w
 test("errorMessage: a 400 whose code has no sentence of its own is told in the words of the code, and anything else keeps the usual text", () => {
   assert.equal(errorMessage(new ApiFailure(400, "INVALID_SOMETHING_NEW", "support-2")), "Something new. Support ID: support-2");
   assert.equal(errorMessage(new ApiFailure(400, "INVALID_EMAIL_PROVIDER_HTTP_401")), "Email provider http 401.", "the provider's own code stays in it");
-  // only a 400 is a refusal that can be explained, and only an INVALID_ code has words to say
+  assert.equal(errorMessage(new ApiFailure(400, "MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE", "support-7")), "Notification must be immediate. Support ID: support-7", "a refusal against a mandatory rule reads like an INVALID_ one");
+  // only a 400 is a refusal that can be explained, and only an INVALID_ or MANDATORY_ code has words to say
   const usual = "The operation failed. Please try again.";
+  assert.equal(errorMessage(new ApiFailure(400, "MANDATORY_")), usual, "a MANDATORY_ with nothing after it");
+  assert.equal(errorMessage(new ApiFailure(500, "MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE")), usual, "a mandatory code on another status");
   assert.equal(errorMessage(new ApiFailure(400, "REQUEST_FAILED")), usual, "a 400 without a code from the server");
   assert.equal(errorMessage(new ApiFailure(400, "INVALID_")), usual, "an INVALID_ with nothing after it");
   assert.equal(errorMessage(new ApiFailure(500, "INVALID_INPUT")), usual, "a code on another status");

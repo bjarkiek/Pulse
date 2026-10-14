@@ -49,16 +49,22 @@ const REFUSALS: Record<string, string> = {
   INVALID_TEMPLATE: "Unknown template.",
 };
 
+/** What the codes of a refusal start with: a request that was not valid, and one against a mandatory rule (`apiError` answers both with a 400). */
+const REFUSAL_PREFIXES = ["INVALID_", "MANDATORY_"];
+
 /**
  * The sentence for a failure. A 400 is the server explaining a refusal with a code: the sentence written for the code, else the words of
- * the code itself ("INVALID_FOO_BAR" is "Foo bar."). Any other failure keeps the text it was built with.
+ * the code itself ("INVALID_FOO_BAR" is "Foo bar.", and so is "MANDATORY_FOO_BAR"). Any other failure keeps the text it was built with.
  */
 function failureSentence(error: ApiFailure) {
   if (error.status !== 400) return error.message;
   if (Object.hasOwn(REFUSALS, error.code)) return REFUSALS[error.code];
-  const words = error.code.startsWith("INVALID_")
+  const prefix = REFUSAL_PREFIXES.find((candidate) =>
+    error.code.startsWith(candidate),
+  );
+  const words = prefix
     ? error.code
-        .slice("INVALID_".length)
+        .slice(prefix.length)
         .toLowerCase()
         .split("_")
         .filter(Boolean)

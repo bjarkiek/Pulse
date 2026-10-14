@@ -202,7 +202,7 @@ function renderChapter(chapter: HelpChapter, lang: Lang) {
 
 // A block of short prose after the chapters of a manual. The class is the manual's prose-block style, which is not only for the admin manual.
 function renderExtra(title: string, items: readonly string[], id?: string) {
-  return `<div class="admin-extra"${id ? ` id="${id}"` : ""}>
+  return `<div class="admin-extra"${id ? ` id="${esc(id)}"` : ""}>
     <h5>${esc(title)}</h5>
     <ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>
   </div>`;
