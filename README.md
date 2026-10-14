@@ -6,6 +6,8 @@ Pulse is a responsive customer-feedback and product-planning application based o
 
 Requirements: Node.js 22.13 or newer.
 
+The `braces` npm override pins a reviewed nesting-depth guard backport for [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm), which has no patched upstream npm release. It retains normal glob behavior and rejects nesting beyond 100 levels; regression coverage lives in `tests/security.test.ts`. Replace the override with an upstream fix when available.
+
 ```bash
 npm ci
 npm run dev
