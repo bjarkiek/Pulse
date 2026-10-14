@@ -42,6 +42,11 @@ const schemaNames: Record<string, string> = {
   "DELETE /api/v1/internal/communications/suppressions": "communicationSuppressionRemoveSchema",
   "POST /api/v1/communications/contacts": "companyContactCreateSchema",
   "PATCH /api/v1/communications/contacts/{contactId}": "companyContactCreateSchema",
+  "POST /api/v1/internal/communications": "communicationInputSchema",
+  "PATCH /api/v1/internal/communications/{id}": "communicationInputSchema",
+  "POST /api/v1/internal/communications/{id}/send": "communicationSendInputSchema",
+  "POST /api/v1/internal/communications/{id}/test": "communicationTestSendSchema",
+  "POST /api/v1/internal/communications/{id}/cancel": "communicationCancelInputSchema",
 };
 const paths: Record<string, Record<string, unknown>> = {};
 for (const file of walk("app/api/v1").sort()) {

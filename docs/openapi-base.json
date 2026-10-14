@@ -500,6 +500,87 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
     },
+    "/api/v1/internal/communications": {
+      "get": {
+        "operationId": "listCommunications",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createCommunication",
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}": {
+      "get": {
+        "operationId": "getCommunication",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "patch": {
+        "operationId": "updateCommunication",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "delete": {
+        "operationId": "deleteCommunication",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/duplicate": {
+      "post": {
+        "operationId": "duplicateCommunication",
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/preview": {
+      "get": {
+        "operationId": "previewCommunication",
+        "responses": {
+          "200": {
+            "description": "The rendered mail, under a strict Content-Security-Policy. ?locale=en|is picks the language; ?format=text answers the plain-text part as text/plain.",
+            "headers": { "x-correlation-id": { "schema": { "type": "string", "format": "uuid" } } },
+            "content": {
+              "text/html": { "schema": { "type": "string" } },
+              "text/plain": { "schema": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/communications/{id}/audience": {
+      "get": {
+        "operationId": "communicationAudienceEstimate",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/test": {
+      "post": {
+        "operationId": "testSendCommunication",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/send": {
+      "post": {
+        "operationId": "sendCommunication",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/cancel": {
+      "post": {
+        "operationId": "cancelCommunication",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/deliveries": {
+      "get": {
+        "operationId": "listCommunicationDeliveries",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/api/v1/internal/communications/{id}/deliveries/retry": {
+      "post": {
+        "operationId": "retryCommunicationDeliveries",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
     "parameters": {
       "Id": {
         "name": "id",
