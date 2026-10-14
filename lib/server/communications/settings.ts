@@ -67,9 +67,13 @@ export function communicationProviderStatus(settings: CommunicationSettings) {
   };
 }
 
+/**
+ * The stored row laid over the defaults. The result is a deep copy: the spreads leave `safeMode.allowedDomains` as the defaults' own array whenever
+ * the row has none, and a caller that changed it (a push is enough) would change the defaults for every read after it.
+ */
 function merge(stored: unknown): CommunicationSettings {
   const value = (stored && typeof stored === "object" ? stored : {}) as Partial<CommunicationSettings>;
-  return {
+  return structuredClone({
     ...DEFAULT_COMMUNICATION_SETTINGS,
     ...value,
     safeMode: { ...DEFAULT_COMMUNICATION_SETTINGS.safeMode, ...(value.safeMode || {}) },
@@ -78,7 +82,7 @@ function merge(stored: unknown): CommunicationSettings {
       en: { ...DEFAULT_COMMUNICATION_SETTINGS.boilerplate.en, ...(value.boilerplate?.en || {}) },
       is: { ...DEFAULT_COMMUNICATION_SETTINGS.boilerplate.is, ...(value.boilerplate?.is || {}) },
     },
-  };
+  });
 }
 
 /** No authorisation: used by the worker, the webhook and the renderer. */

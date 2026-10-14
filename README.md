@@ -102,12 +102,15 @@ az deployment group create \
                sessionSecret=<32-plus-char-secret> \
                entraClientSecret=<entra-app-client-secret> \
                dcAppSecret=<datacentral-tool-shared-secret> \
-               mcpTokenSigningKey=<base64-64-plus-byte-key>
+               mcpTokenSigningKey=<base64-64-plus-byte-key> \
+               sendgridApiKey=<restricted-api-key>
 ```
 
 Entra sign-in is handled by the application. If Easy Auth is present, configure `AllowAnonymous` forwarding and leave `PULSE_TRUST_EASYAUTH_HEADERS=false`; it must not intercept the DataCentral handshake, OTP, or MCP OAuth routes.
 
 `sessionSecret`, `entraClientSecret`, `dcAppSecret`, and `mcpTokenSigningKey` are `@secure()` Bicep parameters with no default — the deployment fails without them. They back the app-level session/auth layer, MCP OAuth server, and DataCentral embed described in [configInfo.md](configInfo.md); `anthropicApiKey`, `anthropicModel`, `slackBotToken`, and `slackAppToken` are optional siblings for the AI assistant and Slack bot, also covered there.
+
+`sendgridApiKey` in the command above is optional too: leave it out (or empty) and customer communications stay unconfigured. Together with the optional `sendgridEventWebhookPublicKey` it switches on SendGrid; see [Customer communications](#customer-communications) below and [configInfo.md](configInfo.md) section 7.
 
 Before a production launch, replace the `AllowAzureServices` SQL firewall rule with private endpoint/VNet integration where required by the organization’s network policy, wire Defender for Storage events to the scan-result endpoint, and complete the backup-restore, accessibility, penetration, and load-test gates described in the PRD.
 
@@ -116,6 +119,14 @@ Before a production launch, replace the `AllowAzureServices` SQL firewall rule w
 In-app and email notifications are inserted transactionally with the change that caused them. Configure Azure Communication Services Email with a verified domain, grant the App Service managed identity permission to send email, and invoke `POST /api/v1/internal/jobs/notifications` from a Logic Apps recurrence or Azure Functions timer every minute using the Key Vault-backed `x-pulse-job-secret`. The worker re-checks active user membership, emits localized content without confidential subject text, retries transient failures with exponential delay, and dead-letters after five attempts.
 
 The same scheduler identity should invoke `POST /api/v1/internal/jobs/webhooks` every minute and `POST /api/v1/internal/jobs/retention` daily. Webhook deliveries use an HMAC-SHA256 signature over `<timestamp>.<raw-body>`, reject private-network destinations, retry with backoff, and expose no customer text in the event envelope. Retention first removes eligible private blobs, then hard-deletes expired soft-deleted records using the administrator-configured retention period.
+
+### Customer communications
+
+Staff write product updates, service notices and announcements on the Communications page and send them to customers through SendGrid. Recipients are the members of the customer organizations and the contacts their admins keep. Safe mode, a daily cap and a global suppression list (bounces, spam reports, unsubscribes) guard every send. The options are in Settings, under Customer communications.
+
+The same scheduler identity invokes `POST /api/v1/internal/jobs/communications` every minute with the `x-pulse-job-secret` header. The worker takes queued deliveries in requests of at most 500 recipients, retries transient failures with backoff, and dead-letters a delivery after five attempts. SendGrid reports delivered, bounced, opened, clicked and unsubscribed mail to `POST /api/v1/internal/communications/events`. That route has no session: the signature of SendGrid's Signed Event Webhook is the credential.
+
+Two optional environment values switch it on (see [`.env.example`](.env.example) and [`infra/main.bicep`](infra/main.bicep)): `SENDGRID_API_KEY`, a restricted key with Mail Send only (Bicep parameter `sendgridApiKey`, kept in Key Vault), and `SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY`, the verification key of the Signed Event Webhook (Bicep parameter `sendgridEventWebhookPublicKey`). Without the API key a local run logs sends to the console and production refuses to send. Setup is in [configInfo.md](configInfo.md) section 7. The design is in [the specification](docs/superpowers/specs/2026-10-13-customer-communications-design.md).
 
 ## AI assistant, Slack, MCP, and DataCentral embedding
 

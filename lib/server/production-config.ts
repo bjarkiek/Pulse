@@ -59,6 +59,15 @@ export function productionConfigurationErrors(
         : group.some((n) => Boolean(env[n]));
     if (enabled) group.forEach((n) => required(n));
   }
+  // SendGrid (customer communications) is optional, but a value that is
+  // there must be a real one: a Key Vault reference that did not resolve, or
+  // a blank, would read as "configured" and the mail would go nowhere. An
+  // empty value is "not set": infra/main.bicep writes both settings as ''
+  // when their parameters are left empty, and that must not stop a
+  // deployment that does not use communications.
+  if (env.SENDGRID_API_KEY) required("SENDGRID_API_KEY", 10);
+  if (env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY)
+    required("SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY", 40);
   if (env.DC_APP_SECRET) required("DC_APP_SECRET", 32);
   return [...new Set(errors)];
 }

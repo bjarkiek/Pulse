@@ -10,6 +10,7 @@ import {
   getRuntimeCommunicationSettings,
   saveCommunicationSettings,
   communicationProviderStatus,
+  type CommunicationSettings,
 } from "../lib/server/communications/settings";
 import { escapeHtml, inlineToText, renderInline } from "../lib/server/communications/html";
 import { getTemplate, renderCommunication } from "../lib/server/communications/templates/index";
@@ -38,10 +39,11 @@ import {
   listCommunications, listDeliveries, prefillFromRelease, previewCommunication, retryDeadLetters, sendCommunication, testSendCommunication, updateCommunication,
 } from "../lib/server/communications/campaign-repository";
 import { BACKOFF_BASE_MS, communicationStats, freezeAudience, getDeliveryStore, LEASE_MS, MAX_ATTEMPTS, requeueDeadLetters, type DeliveryStore } from "../lib/server/communications/delivery-store";
-import { buildSendGridMessage, classifySendError, createMailTransport, SendError, type MailTransport, type OutboundBatch } from "../lib/server/communications/sendgrid";
+import { buildSendGridMessage, classifySendError, createMailTransport, sendConfigurationTest, SendError, type MailTransport, type OutboundBatch } from "../lib/server/communications/sendgrid";
 import { MAX_SPLIT_REQUESTS, processCommunicationBatch } from "../lib/server/communications/delivery-worker";
 import { applyEvents, mapEvent, normalizePublicKey, parseEvents, verifyEventSignature, type SendGridEvent } from "../lib/server/communications/event-webhook";
 import { deliveryStatus, retryDeliveries } from "../lib/server/delivery-status";
+import { productionConfigurationErrors } from "../lib/server/production-config";
 import { makeT } from "../lib/i18n";
 import sgMail from "@sendgrid/mail";
 import { sql } from "../lib/server/database";
@@ -112,6 +114,7 @@ test("settings: enabling requires a from address; domains are normalised; audit 
   });
   assert.equal(saved.fromEmail, "updates@datacentral.ai");
   assert.deepEqual(saved.safeMode.allowedDomains, ["datacentral.ai", "origo.is"]);
+  assert.deepEqual(await getCommunicationSettings(ADMIN), saved, "a read gives back exactly what was saved");
   assert.equal(globalThis.pulseMemoryAudit?.[0]?.action, "communication.settings.updated");
   const status = communicationProviderStatus(saved);
   assert.equal(status.providerConfigured, false);
@@ -4194,4 +4197,248 @@ test("webhook, demo data: with SQL configured and the switch on, events follow t
 test("retention: the cleanup batch purges webhook events after 90 days, a limited number per run, and counts them", () => {
   const source = readFileSync(new URL("../lib/server/retention-worker.ts", import.meta.url), "utf8");
   assert.match(source, /DELETE TOP \(@limit\) FROM dbo\.CommunicationEvents WHERE received_at\s*<\s*DATEADD\(day,-90,SYSUTCDATETIME\(\)\);\s+SET @deleted\+=@@ROWCOUNT;/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The settings round trip, the configuration test and the production check
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Answers for the settings row in SQL: a System admin passes the role check, a save (the MERGE) keeps the JSON it was given and a read gives it
+ * back, or nothing while nothing is stored. `initial` is a row that is there already.
+ */
+function settingsRow(initial: string | null = null): { answers: SqlAnswers; stored: () => string | null } {
+  let stored = initial;
+  return {
+    stored: () => stored,
+    answers: [
+      [/FROM dbo\.Memberships m JOIN dbo\.Organizations o/, { recordset: [{ role: "System admin", allowedAuth: '["OTP","Entra ID"]' }] }],
+      [/MERGE dbo\.Settings/, (inputs) => { stored = inputs.value as string; return {}; }],
+      [/FROM dbo\.Settings/, () => ({ recordset: stored === null ? [] : [{ value: stored }] })],
+    ],
+  };
+}
+/** The defaults are shared by every test that follows: whatever a test did to their list of domains, put it back. */
+const restoreDefaultDomains = (pristine: typeof DEFAULT_COMMUNICATION_SETTINGS) =>
+  DEFAULT_COMMUNICATION_SETTINGS.safeMode.allowedDomains.splice(0, Infinity, ...pristine.safeMode.allowedDomains);
+
+test("settings, SQL: with nothing stored a read is a copy of the defaults — nothing a caller does to it reaches DEFAULT_COMMUNICATION_SETTINGS", async () => {
+  const pristine = structuredClone(DEFAULT_COMMUNICATION_SETTINGS);
+  await withFakeSql(settingsRow().answers, async () => {
+    try {
+      const read = await getRuntimeCommunicationSettings();
+      assert.deepEqual(read, pristine);
+      read.safeMode.allowedDomains.push("attacker.example");
+      read.boilerplate.en.footer = "changed";
+      assert.deepEqual(DEFAULT_COMMUNICATION_SETTINGS, pristine, "the defaults are the defaults still");
+      assert.deepEqual(await getRuntimeCommunicationSettings(), pristine, "and so is the next read");
+    } finally {
+      restoreDefaultDomains(pristine);
+    }
+  });
+});
+
+test("settings, SQL: a stored row that lacks newer fields is filled in from the defaults, and what it is filled in with is a copy", async () => {
+  const pristine = structuredClone(DEFAULT_COMMUNICATION_SETTINGS);
+  const older = settingsRow(JSON.stringify({ enabled: true, fromEmail: "updates@datacentral.ai", tracking: { opens: false } }));
+  await withFakeSql(older.answers, async () => {
+    try {
+      const read = await getRuntimeCommunicationSettings();
+      assert.deepEqual(read, { ...pristine, enabled: true, fromEmail: "updates@datacentral.ai", tracking: { opens: false, clicks: true } });
+      read.safeMode.allowedDomains.push("attacker.example");
+      assert.deepEqual(DEFAULT_COMMUNICATION_SETTINGS, pristine, "the row had no safeMode: its list of domains came from the defaults");
+    } finally {
+      restoreDefaultDomains(pristine);
+    }
+  });
+});
+
+test("settings, SQL: a save is one audited unit of work, and a read gives back exactly what it saved", async () => {
+  const { answers, stored } = settingsRow();
+  await withFakeSql(answers, async (calls, events) => {
+    const first = await saveCommunicationSettings(ADMIN, {
+      ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "Updates@DataCentral.ai",
+      safeMode: { enabled: true, allowedDomains: ["DataCentral.AI", "datacentral.ai", "origo.is"] },
+    });
+    assert.deepEqual(first.safeMode.allowedDomains, ["datacentral.ai", "origo.is"], "normalised and without repeats");
+    assert.equal(stored(), JSON.stringify(first), "the row holds what the save answered");
+    assert.deepEqual(events, ["begin", "commit"]);
+    assert.deepEqual(await getCommunicationSettings(ADMIN), first, "a read gives back exactly what was saved");
+    const second = await saveCommunicationSettings(ADMIN, { ...first, fromName: "DC Updates", dailyCap: 100 });
+    assert.deepEqual(await getCommunicationSettings(ADMIN), second);
+    const audits = calls.filter((c) => /INSERT dbo\.AuditEvents/.test(c.text));
+    assert.deepEqual(audits.map((a) => [a.inputs.before, a.inputs.after, a.inTransaction]), [[null, JSON.stringify(first), true], [JSON.stringify(first), JSON.stringify(second), true]], "each save writes what changed, in its own transaction");
+  });
+});
+
+/** A verification key as SendGrid shows it: the base64 of a P-256 public key's SPKI. */
+const verificationKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).publicKey.export({ type: "spki", format: "der" }).toString("base64");
+
+test("production config: Key Vault placeholders for SendGrid values are rejected", () => {
+  const errors = productionConfigurationErrors({ NODE_ENV: "production", SENDGRID_API_KEY: "@Microsoft.KeyVault(SecretUri=x)", SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY: " " });
+  assert.ok(errors.includes("SENDGRID_API_KEY"));
+  assert.ok(errors.includes("SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY"));
+});
+
+test("production config: both SendGrid values are optional — unset or empty is fine — but a value that is there must be a resolved one of a real length", () => {
+  const flagged = (env: Record<string, string>) => productionConfigurationErrors({ NODE_ENV: "production", ...env }).filter((name) => name.startsWith("SENDGRID_"));
+  const apiKey = `SG.${"a".repeat(22)}.${"b".repeat(43)}`;
+  assert.deepEqual(flagged({}), [], "neither is required");
+  assert.deepEqual(flagged({ SENDGRID_API_KEY: "", SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY: "" }), [], "infra/main.bicep writes an empty app setting when its parameter is left empty, and that is not set");
+  assert.deepEqual(flagged({ SENDGRID_API_KEY: apiKey, SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY: verificationKey }), [], "a real key and a real verification key");
+  assert.deepEqual(flagged({ SENDGRID_API_KEY: apiKey }), [], "a key without the webhook key is allowed: the webhook answers 503 until it is set");
+  assert.deepEqual(flagged({ SENDGRID_API_KEY: "   " }), ["SENDGRID_API_KEY"], "blank");
+  assert.deepEqual(flagged({ SENDGRID_API_KEY: "SG.short" }), ["SENDGRID_API_KEY"], "too short to be a key");
+  assert.deepEqual(flagged({ SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY: "MFkwEwYHKoZIzj0C" }), ["SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY"], "too short to be a verification key");
+  assert.deepEqual(flagged({ SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY: "@Microsoft.KeyVault(SecretUri=https://kv.vault.azure.net/secrets/sg/1)" }), ["SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY"], "a reference that did not resolve");
+  assert.deepEqual(productionConfigurationErrors({ NODE_ENV: "development", SENDGRID_API_KEY: "   " }), [], "outside production nothing is checked");
+});
+
+/** Settings for the configuration tests: a sender, and safe mode on with the admin's own domain (uidata.com) allowed. */
+const configurationSettings = (over: Partial<CommunicationSettings> = {}): CommunicationSettings => ({
+  ...DEFAULT_COMMUNICATION_SETTINGS, fromEmail: "updates@datacentral.ai", safeMode: { enabled: true, allowedDomains: ["uidata.com"] }, ...over,
+});
+/** What went over the wire for one configuration test mail: the v3 request body, as the SDK would send it. */
+type ConfigurationMail = {
+  from: unknown; reply_to: unknown; subject: string; personalizations: unknown; categories: string[]; asm: unknown;
+  tracking_settings: unknown; mail_settings: unknown; content: Array<{ type: string; value: string }>;
+};
+
+test("configuration test: System admin only, respects safe mode, uses the console transport without a key", async () => {
+  await assert.rejects(sendConfigurationTest(PM), /FORBIDDEN/);
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, fromEmail: "updates@datacentral.ai", safeMode: { enabled: true, allowedDomains: ["datacentral.ai"] } });
+  await assert.rejects(sendConfigurationTest(ADMIN), /INVALID_SAFE_MODE_BLOCKS_RECIPIENT/); // bjarki@uidata.com is not allow-listed
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, fromEmail: "updates@datacentral.ai", safeMode: { enabled: true, allowedDomains: ["uidata.com"] } });
+  const { value: result, lines } = await captured("log", () => sendConfigurationTest(ADMIN));
+  assert.equal(result.ok, true);
+  assert.equal(result.transport, "console");
+  await assert.rejects(sendConfigurationTest(ADMIN, { settingsOverride: { ...DEFAULT_COMMUNICATION_SETTINGS, fromEmail: "" } }), /INVALID_EMAIL_PROVIDER_CONFIGURATION/);
+  assert.match(result.providerMessageId ?? "", /^console-[0-9a-f-]{36}$/);
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [{ level: "info", event: "communications.console-send", recipients: 1, sandbox: false }], "one log line: a count, never the address");
+  assert.ok(lines.every((line) => !line.includes("uidata.com") && !line.includes("Bjarki")));
+  assert.deepEqual(memoryDeliveries(), [], "it does not go through the worker's queue");
+});
+
+test("configuration test: one mail, to the caller alone, marked [TEST] and untracked, built from the saved settings — whether or not sending is enabled", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test-key";
+  await saveCommunicationSettings(ADMIN, configurationSettings({
+    enabled: false, fromName: "DC Updates", replyTo: "support@datacentral.ai", unsubscribeGroupId: 42, sandboxMode: true,
+    tracking: { opens: true, clicks: true }, categoriesPrefix: "pulse-x",
+  }));
+  const client = sdkClient();
+  const requests: Array<ReturnType<SdkClient["createRequest"]>> = [];
+  // Nothing goes out: the SDK builds the request as it would, and this answers it instead of the network.
+  client.request = async (data) => { requests.push(client.createRequest(data)); return [{ statusCode: 202, body: "", headers: { "x-message-id": "sg-config-1" } }, ""]; };
+  const sent = async (settingsOverride?: CommunicationSettings) => {
+    const { value, lines } = await captured("log", () => sendConfigurationTest(ADMIN, settingsOverride ? { settingsOverride } : {}));
+    assert.deepEqual(lines, [], "nothing is logged");
+    const request = requests[requests.length - 1];
+    return { result: value, request, mail: JSON.parse(JSON.stringify(request.data)) as ConfigurationMail };
+  };
+  try {
+    const { result, request, mail } = await sent();
+    assert.deepEqual(result, { ok: true, transport: "sendgrid", providerMessageId: "sg-config-1" });
+    assert.equal(requests.length, 1, "one request");
+    assert.deepEqual([request.baseURL, request.headers.Authorization], ["https://api.sendgrid.com/", "Bearer SG.test-key"], "to the region the settings name, with the key from the environment");
+    assert.deepEqual(mail.personalizations, [{ to: [{ email: "bjarki@uidata.com", name: "Bjarki" }], custom_args: { deliveryId: "configuration-test", communicationId: "configuration-test" } }], "to the signed-in admin and nobody else");
+    assert.deepEqual([mail.from, mail.reply_to, mail.asm], [{ email: "updates@datacentral.ai", name: "DC Updates" }, { email: "support@datacentral.ai" }, { group_id: 42 }]);
+    assert.equal(mail.subject, "[TEST] Pulse communications configuration test");
+    assert.deepEqual(mail.categories, ["pulse-x", "pulse-x-configuration-test"]);
+    assert.deepEqual(mail.tracking_settings, { click_tracking: { enable: false, enable_text: false }, open_tracking: { enable: false } }, "a test mail is not tracked, whatever the settings say");
+    assert.deepEqual(mail.mail_settings, { sandbox_mode: { enable: true } }, "and it is sandboxed when the settings are");
+    const [text, html] = mail.content;
+    assert.deepEqual([text.type, html.type], ["text/plain", "text/html"]);
+    for (const part of [text.value, html.value]) assert.match(part, /Sending state: sandbox\./);
+    // The state line says what a campaign would do now.
+    const states: Array<[Partial<CommunicationSettings>, string]> = [
+      [{ sandboxMode: false }, "safe mode"],
+      [{ sandboxMode: false, safeMode: { enabled: false, allowedDomains: [] } }, "live"],
+      [{ sandboxMode: true, safeMode: { enabled: false, allowedDomains: [] } }, "sandbox"],
+    ];
+    for (const [over, state] of states) {
+      const other = await sent(configurationSettings(over));
+      assert.match(other.mail.content[0].value, new RegExp(`Sending state: ${state}\\.`), state);
+      assert.deepEqual(other.mail.mail_settings, { sandbox_mode: { enable: over.sandboxMode === true } });
+    }
+    const eu = await sent(configurationSettings({ dataResidency: "eu" }));
+    assert.equal(eu.request.baseURL, "https://api.eu.sendgrid.com/", "an EU setting goes to the EU region, which is what the test is there to prove");
+  } finally {
+    delete client.request;
+    client.setDataResidency("global");
+  }
+});
+
+test("configuration test: safe mode compares the caller's whole domain, whatever its case; switched off it lets any address through", async () => {
+  const as = (email: string, safeMode: CommunicationSettings["safeMode"]) => sendConfigurationTest({ ...ADMIN, email }, { settingsOverride: configurationSettings({ safeMode }) });
+  const blocks = /INVALID_SAFE_MODE_BLOCKS_RECIPIENT/;
+  await assert.rejects(as("bjarki@mail.uidata.com", { enabled: true, allowedDomains: ["uidata.com"] }), blocks, "a subdomain is not the domain");
+  await assert.rejects(as("bjarki@uidata.com.attacker.example", { enabled: true, allowedDomains: ["uidata.com"] }), blocks, "nor is a domain that starts with it");
+  await assert.rejects(as("bjarki@evil-uidata.com", { enabled: true, allowedDomains: ["uidata.com"] }), blocks, "nor one that ends with it");
+  await assert.rejects(as("bjarki@uidata.com", { enabled: true, allowedDomains: [] }), blocks, "an empty list allows nobody");
+  const { value } = await captured("log", async () => [
+    await as("Bjarki@UiData.COM", { enabled: true, allowedDomains: ["uidata.com"] }),
+    await as("bjarki@uidata.com", { enabled: true, allowedDomains: ["UIDATA.com"] }),
+    await as("someone@anywhere.example", { enabled: false, allowedDomains: [] }),
+  ]);
+  assert.deepEqual(value.map((r) => r.ok), [true, true, true], "the case of the address or of the list is no difference, and with safe mode off nobody is blocked");
+});
+
+test("configuration test: a role other than System admin is refused before anything is read or sent — an override changes nothing", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test-key";
+  await saveCommunicationSettings(ADMIN, configurationSettings({ safeMode: { enabled: false, allowedDomains: [] } }));
+  const client = sdkClient();
+  let requests = 0;
+  client.request = async () => { requests++; return [{ statusCode: 202, body: "", headers: {} }, ""]; };
+  try {
+    const { lines } = await captured("log", async () => {
+      for (const who of [PM, CONTRIBUTOR, COMPANY_ADMIN, REQUESTER, { ...ADMIN, role: "Product manager" }, { ...ADMIN, isInternal: false }])
+        await assert.rejects(sendConfigurationTest(who), /FORBIDDEN/, `${who.role}, internal: ${who.isInternal}`);
+      await assert.rejects(sendConfigurationTest(PM, { settingsOverride: configurationSettings({ fromEmail: "" }) }), /FORBIDDEN/, "the override is not looked at first");
+    });
+    assert.equal(requests, 0, "no request reached the provider");
+    assert.deepEqual(lines, [], "and nothing reached the console transport");
+  } finally {
+    delete client.request;
+    client.setDataResidency("global");
+  }
+});
+
+test("configuration test, SQL: the role is the membership's, not the session's — a System admin in the session who is a Product manager in SQL is refused, and no setting is read", async () => {
+  await withFakeSql([], async (calls) => { // the fake answers the membership check as a Product manager
+    await assert.rejects(sendConfigurationTest(ADMIN), /FORBIDDEN/);
+    assert.ok(calls.every((call) => !/dbo\.Settings/.test(call.text)), "the settings were not even read");
+  });
+  const { answers } = settingsRow(JSON.stringify(configurationSettings()));
+  await withFakeSql(answers, async (calls) => {
+    const { value, lines } = await captured("log", () => sendConfigurationTest(ADMIN));
+    assert.deepEqual([value.ok, value.transport, lines.length], [true, "console", 1], "a System admin in SQL gets the settings from SQL and sends");
+    assert.ok(calls.some((call) => /FROM dbo\.Settings/.test(call.text)));
+  });
+});
+
+test("configuration test: a refusal from the provider is INVALID_EMAIL_PROVIDER_<code> — the code and nothing else, never the provider's words or the address — and nothing is logged", async () => {
+  process.env.SENDGRID_API_KEY = "SG.test-key";
+  await saveCommunicationSettings(ADMIN, configurationSettings());
+  const client = sdkClient();
+  const body = { errors: [{ message: "The provided authorization grant is invalid for bjarki@uidata.com", field: "from" }] };
+  const failures: Array<[unknown, string]> = [
+    [Object.assign(new Error("Unauthorized"), { code: 401, response: { headers: {}, body } }), "INVALID_EMAIL_PROVIDER_HTTP_401"],
+    [Object.assign(new Error("Forbidden"), { code: 403, response: { headers: {}, body } }), "INVALID_EMAIL_PROVIDER_HTTP_403"],
+    [Object.assign(new Error("Bad Request"), { code: 400, response: { headers: {}, body } }), "INVALID_EMAIL_PROVIDER_HTTP_400"],
+    [Object.assign(new Error("Too Many Requests"), { code: 429, response: { headers: { "retry-after": "30" }, body } }), "INVALID_EMAIL_PROVIDER_HTTP_429"],
+    [Object.assign(new Error("Service Unavailable"), { code: 503, response: { headers: {}, body } }), "INVALID_EMAIL_PROVIDER_HTTP_503"],
+    [Object.assign(new Error("connect ECONNREFUSED 10.1.2.3:443"), { code: "ECONNREFUSED" }), "INVALID_EMAIL_PROVIDER_ECONNREFUSED"],
+    [new Error("socket hang up while sending to bjarki@uidata.com"), "INVALID_EMAIL_PROVIDER_SEND_FAILED"],
+  ];
+  try {
+    for (const [error, expected] of failures) {
+      client.request = async () => { throw error; };
+      const run = await captured("log", () => captured("warn", () => captured("error", () => sendConfigurationTest(ADMIN).then(() => "sent", (e: unknown) => (e as Error).message))));
+      assert.equal(run.value.value.value, expected, "the whole message is the code");
+      assert.deepEqual([run.lines, run.value.lines, run.value.value.lines], [[], [], []], `${expected}: nothing is logged`);
+    }
+  } finally {
+    delete client.request;
+    client.setDataResidency("global");
+  }
 });

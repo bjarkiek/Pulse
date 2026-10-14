@@ -31,6 +31,8 @@ import { PATCH as companyContactPatch, DELETE as companyContactDelete } from "..
 import { POST as eventsPost } from "../app/api/v1/internal/communications/events/route";
 import { POST as communicationsJobPost } from "../app/api/v1/internal/jobs/communications/route";
 import { GET as deliveryStatusGet, POST as deliveryStatusPost } from "../app/api/v1/admin/delivery/route";
+import { GET as settingsGet, PATCH as settingsPatch } from "../app/api/v1/admin/communications/settings/route";
+import { POST as settingsTestPost } from "../app/api/v1/admin/communications/settings/test/route";
 
 // Memory mode (no AZURE_SQL_*, NODE_ENV !== production): an anonymous request resolves to the
 // demo fallback identity in lib/server/auth.ts — the seeded System admin (ORG-001, isInternal).
@@ -289,7 +291,7 @@ let keyCounter = 0;
 const freshKey = () => `route-test-key-${++keyCounter}`;
 const inAnHour = () => new Date(Date.now() + 3_600_000).toISOString();
 const ADMIN: PulseIdentity = { id: "11111111-1111-4111-8111-111111111111", email: "bjarki@uidata.com", name: "Bjarki", organizationId: "ORG-INTERNAL", role: "System admin", isInternal: true };
-/** Sending on: the provider key is set and the settings are enabled with safe mode off. The settings have no route yet, so a System admin saves them through the repository. */
+/** Sending on: the provider key is set and the settings are enabled with safe mode off. A System admin saves them here through the repository; the settings route has tests of its own further down. */
 async function enableSending() {
   process.env.SENDGRID_API_KEY = "SG.test";
   await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, enabled: true, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
@@ -1131,4 +1133,145 @@ test("openapi: the SendGrid events route is documented behind its signature, wit
   assert.deepEqual(spec.components.securitySchemes.sendgridEventSignature, { type: "apiKey", in: "header", name: "X-Twilio-Email-Event-Webhook-Signature" });
   assert.deepEqual(operation.requestBody.content["application/json"].schema, { type: "array", maxItems: 1000, items: { type: "object" } });
   assert.deepEqual(Object.keys(operation.responses).sort(), ["200", "400", "401", "404", "413", "429", "500", "503"]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The settings routes and the configuration test: System admin only (demo System admin identity, bjarki@uidata.com)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const SETTINGS = "/api/v1/admin/communications/settings";
+const SETTINGS_TEST = `${SETTINGS}/test`;
+/** A whole settings object, as the PATCH takes it: the defaults with `over` laid on top. */
+const settingsBody = (over: Record<string, unknown> = {}) => ({ ...structuredClone(DEFAULT_COMMUNICATION_SETTINGS), ...over });
+
+test("settings routes: a System admin reads the settings with the provider status beside them, and saves them whole", async () => {
+  process.env.PULSE_PUBLIC_URL = "https://pulse.test//";
+  try {
+    const read = await settingsGet(send("GET", SETTINGS));
+    assert.equal(read.status, 200);
+    assert.equal(read.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await read.json(), {
+      item: DEFAULT_COMMUNICATION_SETTINGS,
+      status: { providerConfigured: false, webhookConfigured: false, webhookUrl: "https://pulse.test/api/v1/internal/communications/events", effectiveSendingState: "disabled" },
+    });
+
+    process.env.SENDGRID_API_KEY = "SG.route-test-key-0123456789";
+    process.env.SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY = "route-test-verification-key-0123456789";
+    const saved = await settingsPatch(send("PATCH", SETTINGS, settingsBody({
+      enabled: true, fromEmail: "Updates@DataCentral.ai", safeMode: { enabled: true, allowedDomains: ["DataCentral.AI", "datacentral.ai", "origo.is"] },
+    })));
+    assert.equal(saved.status, 200);
+    const body = await saved.json();
+    assert.deepEqual([body.item.enabled, body.item.fromEmail, body.item.safeMode.allowedDomains], [true, "updates@datacentral.ai", ["datacentral.ai", "origo.is"]], "normalised, and without repeats");
+    assert.deepEqual(body.status, { providerConfigured: true, webhookConfigured: true, webhookUrl: "https://pulse.test/api/v1/internal/communications/events", effectiveSendingState: "safe-mode" });
+    assert.ok(!JSON.stringify(body).includes("route-test"), "neither key is in an answer, only whether it is set");
+    assert.deepEqual(await (await settingsGet(send("GET", SETTINGS))).json(), body, "a read gives back what was saved");
+    assert.equal(auditCount("communication.settings.updated"), 1);
+  } finally {
+    delete process.env.PULSE_PUBLIC_URL;
+  }
+});
+
+test("settings routes: a body that does not fit the contract is 400 and saves nothing; what the contract does not name is dropped", async () => {
+  const valid = settingsBody({ enabled: true, fromEmail: "updates@datacentral.ai" });
+  const invalid: Array<[string, unknown]> = [
+    ["enabled without a from address", { ...valid, fromEmail: "" }],
+    ["a from address that is none", { ...valid, fromEmail: "not-an-address" }],
+    ["a field missing", Object.fromEntries(Object.entries(valid).filter(([key]) => key !== "tracking"))],
+    ["a daily cap of zero", { ...valid, dailyCap: 0 }],
+    ["a campaign size past the limit", { ...valid, maxRecipientsPerCampaign: 100_001 }],
+    ["a region that is none", { ...valid, dataResidency: "us" }],
+    ["an unsubscribe group that is no id", { ...valid, unsubscribeGroupId: 0 }],
+    ["a category prefix with a space", { ...valid, categoriesPrefix: "Has Space" }],
+    ["a domain that is none", { ...valid, safeMode: { enabled: true, allowedDomains: ["not a domain"] } }],
+    ["boilerplate for one language only", { ...valid, boilerplate: { en: valid.boilerplate.en } }],
+  ];
+  for (const [what, body] of invalid) assert.deepEqual(await refusal(await settingsPatch(send("PATCH", SETTINGS, body))), [400, "INVALID_INPUT"], what);
+  assert.deepEqual(await refusal(await settingsPatch(req(SETTINGS, { method: "PATCH", body: "{not json" }))), [400, "INVALID_JSON"]);
+  assert.deepEqual(await refusal(await settingsPatch(req(SETTINGS, { method: "PATCH" }))), [400, "INVALID_JSON"], "no body");
+  assert.deepEqual(await refusal(await settingsPatch(send("PATCH", SETTINGS, [valid]))), [400, "INVALID_JSON_OBJECT"], "a list is no settings");
+  assert.deepEqual((await (await settingsGet(send("GET", SETTINGS))).json()).item, DEFAULT_COMMUNICATION_SETTINGS, "nothing was saved");
+  assert.equal(auditCount("communication.settings.updated"), 0);
+  const extra = await (await settingsPatch(send("PATCH", SETTINGS, { ...valid, apiKey: "SG.leak", id: "x" }))).json();
+  assert.deepEqual(Object.keys(extra.item).sort(), Object.keys(DEFAULT_COMMUNICATION_SETTINGS).sort(), "only the settings are stored and answered");
+});
+
+test("settings routes: a signed-in user who is not a System admin is refused by the settings and the test, and nothing is saved or sent", async () => {
+  await saveCommunicationSettings(ADMIN, { ...DEFAULT_COMMUNICATION_SETTINGS, fromEmail: "updates@datacentral.ai", safeMode: { enabled: false, allowedDomains: [] } });
+  const token = await createSessionToken({ sub: "22222222-2222-4222-8222-222222222222", email: "jon@origo.is", name: "Jón Jónsson", ext: "dev:test", amr: "dev" });
+  const as = { authorization: `Bearer ${token}` };
+  const logged: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  let refused: Response[];
+  try {
+    refused = [
+      await settingsGet(send("GET", SETTINGS, undefined, as)),
+      await settingsPatch(send("PATCH", SETTINGS, settingsBody({ enabled: true, fromEmail: "attacker@evil.example" }), as)),
+      await settingsTestPost(send("POST", SETTINGS_TEST, undefined, as)),
+    ];
+  } finally {
+    console.log = original;
+  }
+  assert.deepEqual(refused.map((response) => response.status), [404, 404, 404]);
+  for (const response of refused) assert.equal((await response.json()).error.code, "FORBIDDEN");
+  assert.deepEqual(logged, [], "no mail, not even to the console");
+  const { item } = await (await settingsGet(send("GET", SETTINGS))).json();
+  assert.deepEqual([item.enabled, item.fromEmail], [false, "updates@datacentral.ai"], "the settings are the admin's, as they were");
+  assert.equal(auditCount("communication.settings.updated"), 1, "only the admin's own save");
+});
+
+test("settings routes: the configuration test mails the signed-in admin and says which transport took it; no sender, or safe mode, is a 400 with the reason", async () => {
+  const id = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const post = () => settingsTestPost(send("POST", SETTINGS_TEST, undefined, { "x-correlation-id": id }));
+  const noSender = await post();
+  assert.deepEqual(await refusal(noSender), [400, "INVALID_EMAIL_PROVIDER_CONFIGURATION"], "there is no from address yet");
+  assert.equal(noSender.headers.get("x-correlation-id"), id);
+  assert.equal((await settingsPatch(send("PATCH", SETTINGS, settingsBody({ fromEmail: "updates@datacentral.ai" })))).status, 200); // sending is still off: the test does not need it on
+  assert.deepEqual(await refusal(await post()), [400, "INVALID_SAFE_MODE_BLOCKS_RECIPIENT"], "bjarki@uidata.com is not on the default list, datacentral.ai");
+  assert.equal((await settingsPatch(send("PATCH", SETTINGS, settingsBody({ fromEmail: "updates@datacentral.ai", safeMode: { enabled: true, allowedDomains: ["uidata.com"] } })))).status, 200);
+  const logged: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  let answer: Response;
+  try {
+    answer = await post();
+  } finally {
+    console.log = original;
+  }
+  assert.equal(answer.status, 200);
+  assert.equal(answer.headers.get("cache-control"), "no-store");
+  assert.equal(answer.headers.get("x-correlation-id"), id);
+  const result = await answer.json();
+  assert.deepEqual([result.ok, result.transport], [true, "console"], "no API key: the console transport took it");
+  assert.match(result.providerMessageId, /^console-[0-9a-f-]{36}$/);
+  assert.deepEqual(logged.map((line) => JSON.parse(line)), [{ level: "info", event: "communications.console-send", recipients: 1, sandbox: false }], "a count and no address");
+});
+
+test("openapi: the settings operations are documented behind the System admin role, with the settings contract as the PATCH body and no body for the test", () => {
+  const spec = JSON.parse(readFileSync(new URL("../public/openapi.json", import.meta.url), "utf8"));
+  const settings = spec.paths[SETTINGS];
+  const configurationTest = spec.paths[SETTINGS_TEST];
+  assert.deepEqual([settings?.get?.operationId, settings?.patch?.operationId, configurationTest?.post?.operationId], ["getCommunicationSettings", "saveCommunicationSettings", "sendCommunicationConfigurationTest"]);
+  assert.deepEqual([Object.keys(settings).sort(), Object.keys(configurationTest)], [["get", "patch"], ["post"]], "no other method");
+  for (const operation of [settings.get, settings.patch, configurationTest.post]) {
+    assert.equal(operation["x-authorization"], "System admin");
+    assert.deepEqual(operation.security, [{ sessionCookie: [] }, { sessionBearer: [] }]);
+    assert.deepEqual(Object.keys(operation.responses).sort(), ["200", "400", "401", "404", "413", "429", "500"]);
+    assert.ok(operation.summary && operation.description, "curated: it says what it does");
+  }
+  assert.equal(settings.get["x-source-file"], "app/api/v1/admin/communications/settings/route.ts");
+  assert.equal(configurationTest.post["x-source-file"], "app/api/v1/admin/communications/settings/test/route.ts");
+  assert.equal(settings.get.requestBody, undefined);
+  assert.equal(configurationTest.post.requestBody, undefined, "the test takes no body: it mails the caller");
+  assert.deepEqual(settings.patch.requestBody, { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/communicationSettingsInputSchema" } } } });
+  assert.deepEqual(Object.keys(spec.components.schemas.communicationSettingsInputSchema.properties).sort(), Object.keys(DEFAULT_COMMUNICATION_SETTINGS).sort(), "the contract names exactly the settings");
+  for (const operation of [settings.get, settings.patch]) assert.deepEqual(operation.responses["200"].content["application/json"].schema, { $ref: "#/components/schemas/CommunicationSettingsResponse" });
+  const response = spec.components.schemas.CommunicationSettingsResponse;
+  assert.deepEqual(response.required, ["item", "status"]);
+  assert.deepEqual(response.properties.item, { $ref: "#/components/schemas/communicationSettingsInputSchema" });
+  assert.deepEqual(Object.keys(response.properties.status.properties).sort(), ["effectiveSendingState", "providerConfigured", "webhookConfigured", "webhookUrl"]);
+  assert.deepEqual(response.properties.status.properties.effectiveSendingState.enum, ["disabled", "provider-missing", "sandbox", "safe-mode", "live"]);
+  const answer = configurationTest.post.responses["200"].content["application/json"].schema;
+  assert.deepEqual([answer.required, answer.properties.transport.enum], [["ok", "transport", "providerMessageId"], ["sendgrid", "console"]]);
 });

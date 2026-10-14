@@ -469,6 +469,72 @@
         "operationId": "saveSettings",
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
+    },
+    "/api/v1/admin/communications/settings": {
+      "get": {
+        "operationId": "getCommunicationSettings",
+        "summary": "Customer communications settings",
+        "description": "System admin only. Returns the saved settings (sender, safe mode, tracking, caps, boilerplate) and, beside them, what the environment says: whether SENDGRID_API_KEY and SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY are set (never their values), the URL to enter in SendGrid's Event Webhook settings, and the effective sending state. Until a System admin has saved settings, the defaults are returned: sending off, safe mode on for datacentral.ai.",
+        "responses": {
+          "200": {
+            "description": "The settings and their status.",
+            "headers": {
+              "x-correlation-id": { "schema": { "type": "string", "format": "uuid" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CommunicationSettingsResponse" }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "saveCommunicationSettings",
+        "summary": "Save the customer communications settings",
+        "description": "System admin only. Replaces the settings with the whole object in the body, validated and normalised (addresses and domains in lower case, repeated domains dropped). fromEmail is required while sending is enabled. Writes the audit event communication.settings.updated with the settings before and after. Answers like the GET.",
+        "responses": {
+          "200": {
+            "description": "The settings as saved, and their status.",
+            "headers": {
+              "x-correlation-id": { "schema": { "type": "string", "format": "uuid" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CommunicationSettingsResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/communications/settings/test": {
+      "post": {
+        "operationId": "sendCommunicationConfigurationTest",
+        "summary": "Send a configuration test",
+        "description": "System admin only; the request has no body. Sends one test mail to the signed-in admin with the saved settings, straight to the provider and not through the delivery queue, whether or not sending is enabled. Safe mode still applies: the admin's own domain must be on its list, or safe mode off (400 INVALID_SAFE_MODE_BLOCKS_RECIPIENT). 400 INVALID_EMAIL_PROVIDER_CONFIGURATION means no from address is saved. 400 INVALID_EMAIL_PROVIDER_<code> is a refusal from SendGrid, named by its HTTP status or network code alone, never by its message (HTTP_401 and HTTP_403 mean a rotated key or an unverified sender). Without SENDGRID_API_KEY the console transport takes the mail, logs a count and answers transport console.",
+        "responses": {
+          "200": {
+            "description": "The provider accepted the mail (or, with transport console, the server log did).",
+            "headers": {
+              "x-correlation-id": { "schema": { "type": "string", "format": "uuid" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "transport", "providerMessageId"],
+                  "properties": {
+                    "ok": { "const": true },
+                    "transport": { "type": "string", "enum": ["sendgrid", "console"] },
+                    "providerMessageId": { "type": ["string", "null"], "description": "SendGrid's x-message-id; null in sandbox mode, which answers without one." }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -672,6 +738,27 @@
       }
     },
     "schemas": {
+      "CommunicationSettingsResponse": {
+        "type": "object",
+        "required": ["item", "status"],
+        "properties": {
+          "item": { "$ref": "#/components/schemas/communicationSettingsInputSchema" },
+          "status": {
+            "type": "object",
+            "required": ["providerConfigured", "webhookConfigured", "webhookUrl", "effectiveSendingState"],
+            "properties": {
+              "providerConfigured": { "type": "boolean", "description": "SENDGRID_API_KEY is set." },
+              "webhookConfigured": { "type": "boolean", "description": "SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY is set." },
+              "webhookUrl": { "type": "string", "format": "uri", "description": "The URL to enter in SendGrid's Event Webhook settings." },
+              "effectiveSendingState": {
+                "type": "string",
+                "enum": ["disabled", "provider-missing", "sandbox", "safe-mode", "live"],
+                "description": "What the worker would do now: disabled (the switch is off), provider-missing (on, but no API key), sandbox (SendGrid validates and delivers nothing), safe-mode (only allow-listed domains), live."
+              }
+            }
+          }
+        }
+      },
       "ApiError": {
         "type": "object",
         "required": ["error"],

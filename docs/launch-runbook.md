@@ -9,9 +9,9 @@
 
 ## 2. Database
 
-1. Run migrations `001` through `007` in order using a dedicated deployment identity.
+1. Run migrations `001` through `015` in order using a dedicated deployment identity.
 2. Create a contained Azure SQL user for the App Service managed identity.
-3. Grant `db_datareader`, `db_datawriter`, and `SELECT` on the three public-number sequences; do not grant schema ownership.
+3. Grant `db_datareader`, `db_datawriter`, and `UPDATE` on the four public-number sequences (`RequestNumber`, `IdeaNumber`, `ReleaseNumber`, `CommunicationNumber`; `NEXT VALUE FOR` needs UPDATE); do not grant schema ownership.
 4. Verify point-in-time restore configuration and complete a restore drill before pilot access.
 
 ## 3. Identity and authorization
@@ -34,9 +34,18 @@ Configure Logic Apps recurrence or a timer function to call with `x-pulse-job-se
 
 - `POST /api/v1/internal/jobs/notifications` every minute;
 - `POST /api/v1/internal/jobs/webhooks` every minute;
+- `POST /api/v1/internal/jobs/communications` every minute (customer communications; it does nothing while sending is switched off in Settings);
 - `POST /api/v1/internal/jobs/retention` daily.
 
 Alert on dead-letter growth, job failures, high latency, and delivery backlog. Webhook consumers verify `x-pulse-signature` as HMAC-SHA256 of `<x-pulse-timestamp>.<raw-body>` and reject stale timestamps.
+
+Customer communications add these alerts:
+
+- The log event `communications.send.misconfigured`. SendGrid answered 401 or 403: the API key was rotated or revoked, the sender is not verified, or the data residency is wrong. The run stops, gives the rows back and dead-letters nothing, but nothing is sent until someone fixes it.
+- Growth of `Communications · Dead letter` in the Settings delivery card. The card requeues dead letters (100 per click); so does the campaign page.
+- A 400 `INVALID_EMAIL_PROVIDER_CONFIGURATION` from the job. Sending is on but `SENDGRID_API_KEY` is not set in production.
+
+Mail is sent at least once: a batch whose lease runs out (15 minutes) is sent again, at most five times per delivery. A wrong or truncated `SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY` makes every batch the Event Webhook sends answer 401, the same answer a forgery gets. SendGrid retries for about a day and then drops the events, so deliveries stay Accepted and no bounce or unsubscribe reaches the suppression list. After changing the key, check the Event Webhook in SendGrid and the campaign's deliveries.
 
 ## 6. Pilot sign-off
 

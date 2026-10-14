@@ -42,6 +42,11 @@ param slackBotToken string = ''
 @description('Slack app-level token (xapp-…) for Socket Mode. Leave empty to leave Slack unconfigured.')
 @secure()
 param slackAppToken string = ''
+@description('SendGrid API key (Mail Send permission only) for customer communications. Leave empty to leave communications unconfigured.')
+@secure()
+param sendgridApiKey string = ''
+@description('SendGrid Signed Event Webhook verification key (base64). Not secret; empty disables the webhook.')
+param sendgridEventWebhookPublicKey string = ''
 @description('Signs and verifies MCP OAuth 2.1 authorization codes and access tokens issued by /oauth/token.')
 @secure()
 param mcpTokenSigningKey string
@@ -132,6 +137,12 @@ resource slackAppTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if
   parent: vault
   name: 'slack-app-token'
   properties: { value: slackAppToken }
+}
+
+resource sendgridApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(sendgridApiKey)) {
+  parent: vault
+  name: 'sendgrid-api-key'
+  properties: { value: sendgridApiKey }
 }
 
 resource mcpTokenSigningKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
@@ -261,6 +272,10 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'ANTHROPIC_MODEL', value: anthropicModel }
         { name: 'SLACK_BOT_TOKEN', value: !empty(slackBotToken) ? '@Microsoft.KeyVault(SecretUri=${slackBotTokenSecret!.properties.secretUriWithVersion})' : '' }
         { name: 'SLACK_APP_TOKEN', value: !empty(slackAppToken) ? '@Microsoft.KeyVault(SecretUri=${slackAppTokenSecret!.properties.secretUriWithVersion})' : '' }
+        // Customer communications (SendGrid). Both optional: without the API key sending is unconfigured (the console
+        // transport only logs, and production refuses to send); without the verification key the Event Webhook answers 503.
+        { name: 'SENDGRID_API_KEY', value: !empty(sendgridApiKey) ? '@Microsoft.KeyVault(SecretUri=${sendgridApiKeySecret!.properties.secretUriWithVersion})' : '' }
+        { name: 'SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY', value: sendgridEventWebhookPublicKey }
         // Signs/verifies MCP OAuth 2.1 authorization codes and access tokens (app/oauth/*, app/mcp).
         { name: 'MCP_TOKEN_SIGNING_KEY', value: '@Microsoft.KeyVault(SecretUri=${mcpTokenSigningKeySecret.properties.secretUriWithVersion})' }
       ]

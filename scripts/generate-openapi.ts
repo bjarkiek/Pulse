@@ -47,6 +47,7 @@ const schemaNames: Record<string, string> = {
   "POST /api/v1/internal/communications/{id}/send": "communicationSendInputSchema",
   "POST /api/v1/internal/communications/{id}/test": "communicationTestSendSchema",
   "POST /api/v1/internal/communications/{id}/cancel": "communicationCancelInputSchema",
+  "PATCH /api/v1/admin/communications/settings": "communicationSettingsInputSchema",
 };
 const paths: Record<string, Record<string, unknown>> = {};
 for (const file of walk("app/api/v1").sort()) {

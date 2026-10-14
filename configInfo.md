@@ -15,8 +15,11 @@ manifest + token walkthrough), [`docs/architecture.md`](docs/architecture.md)
 (security boundaries and the single-instance constraint), and the design
 plan at
 [`docs/superpowers/plans/2026-07-15-ai-chat-mcp-datacentral-embed.md`](docs/superpowers/plans/2026-07-15-ai-chat-mcp-datacentral-embed.md).
+Section 7 covers a fourth, optional integration, SendGrid for customer
+communications; its design is in
+[`docs/superpowers/specs/2026-10-13-customer-communications-design.md`](docs/superpowers/specs/2026-10-13-customer-communications-design.md).
 
-Production startup validates SQL, Blob Storage, session signing, stable MCP signing, scanner/job secrets, HTTPS public URL, replay settings, and enabled integrations. Missing or unresolved required secrets stop startup. AI and Slack remain optional, but partial Slack configuration fails validation. Ephemeral MCP keys and memory/demo adapters are development-only. See [production hardening](docs/production-hardening.md) for the current requirements.
+Production startup validates SQL, Blob Storage, session signing, stable MCP signing, scanner/job secrets, HTTPS public URL, replay settings, and enabled integrations. Missing or unresolved required secrets stop startup. AI, Slack and SendGrid (§7) remain optional, but partial Slack configuration fails validation, and a SendGrid value that is set must be resolved and non-blank. Ephemeral MCP keys and memory/demo adapters are development-only. See [production hardening](docs/production-hardening.md) for the current requirements.
 
 ---
 
@@ -294,6 +297,7 @@ the bot doesn't respond.
 **Future VNet/egress lockdown** must allow outbound access to, at minimum:
 - `wss://*.slack.com` and `https://slack.com` — Slack Socket Mode + Web API;
 - `https://api.anthropic.com` — the AI assistant;
+- `https://api.sendgrid.com` (`https://api.eu.sendgrid.com` when **Data residency** is EU) — customer communications (§7);
 - `https://graph.microsoft.com` — the Graph-token fallback validation path (§3);
 - `https://login.microsoftonline.com` — Entra OIDC discovery/token exchange.
 
@@ -370,3 +374,115 @@ Easy Auth headers again.
    ```
    (i.e. microphone is allowed for same-origin use, camera and geolocation
    are not requested by the app and stay blocked).
+
+## 7. SendGrid (customer communications)
+
+Pulse sends customer communications (product updates, service notices and
+announcements written on the Communications page) through SendGrid. The
+design is in
+[`docs/superpowers/specs/2026-10-13-customer-communications-design.md`](docs/superpowers/specs/2026-10-13-customer-communications-design.md);
+the sending code is in `lib/server/communications/`. The options live in
+Pulse under **Settings → Customer communications (SendGrid)**.
+
+Everything here is optional. Without `SENDGRID_API_KEY`,
+`createMailTransport()` (`lib/server/communications/sendgrid.ts`) returns the
+console transport: it logs a count, never an address, and sends nothing. The
+worker refuses that transport in production. The two SendGrid values are
+environment settings only, never stored in the database, and the Settings
+card shows only whether each one is set.
+
+1. **API key.** In SendGrid, Settings → API Keys → **Create API Key** →
+   **Restricted Access**, and switch on **Mail Send** only. SendGrid shows the
+   key once; copy it. This is `SENDGRID_API_KEY`.
+   - **Dev** — add to `.env.local`:
+
+     ```text
+     SENDGRID_API_KEY=SG....
+     ```
+
+   - **Prod** — pass it as a Bicep parameter. The template creates the Key
+     Vault secret `sendgrid-api-key` and wires the App Service setting to a Key
+     Vault reference for you (`infra/main.bicep`, `sendgridApiKeySecret`
+     resource):
+
+     ```bash
+     az deployment group create \
+       --resource-group <resource-group> \
+       --template-file infra/main.bicep \
+       --parameters ... sendgridApiKey='SG....'
+     ```
+
+     Leaving `sendgridApiKey` empty (its default) leaves the setting empty in
+     the deployed app, and communications stay unconfigured.
+2. **Sender authentication.** In SendGrid, Settings → Sender Authentication →
+   **Authenticate Your Domain**. Add the DNS records it shows (CNAMEs for SPF
+   and DKIM) to the `datacentral.ai` zone and verify them in SendGrid. Mail is
+   then DKIM-signed as `datacentral.ai`, and its return path is a
+   `datacentral.ai` subdomain. SPF and DKIM both align with the From domain,
+   which is what DMARC checks. If the zone has no DMARC record, publish one at
+   `_dmarc.datacentral.ai`. Start with `p=none` and a reporting address, and
+   tighten it once the reports are clean. Then set **From address** in Pulse to
+   an address on that domain, for example `updates@datacentral.ai`. Pulse will
+   not enable sending without one.
+3. **Unsubscribe group.** In SendGrid, Suppressions → **Unsubscribe Groups** →
+   create a group, and enter its numeric id as **Unsubscribe group id** in
+   Pulse. Mail then carries the one-click `List-Unsubscribe` headers and the
+   unsubscribe link in the footer. Turn off SendGrid's own **Subscription
+   Tracking** footer (Settings → Tracking), so that recipients do not see two
+   unsubscribe links.
+4. **Event Webhook.** In SendGrid, Settings → Mail Settings → **Event Webhook**:
+   - Set the **HTTP POST URL** to the **Event webhook URL** the Pulse Settings
+     card shows: `{PULSE_PUBLIC_URL}/api/v1/internal/communications/events`.
+   - Select the events Processed, Delivered, Deferred, Bounce, Dropped, Open,
+     Click, Spam Report, Unsubscribe, Group Unsubscribe and Group Resubscribe.
+   - Enable **Signed Event Webhook** and copy the **verification key** it
+     shows. This is `SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY`. It is not secret, but
+     it comes from the environment so that it cannot be changed from the UI.
+     SendGrid shows bare base64; Pulse also accepts the key with PEM header
+     lines. In `.env.local`:
+
+     ```text
+     SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY=<base64 key>
+     ```
+
+     In production it is the Bicep parameter `sendgridEventWebhookPublicKey`:
+     a plain app setting, not a Key Vault secret, empty by default.
+
+   Until the key is set, Pulse answers 503 and SendGrid keeps retrying. A wrong
+   or truncated key makes every batch answer 401, which looks the same as a
+   forgery. SendGrid retries for about a day and then drops the events, so copy
+   the whole key. A server clock more than ten minutes off also gives 401.
+5. **Data residency.** Leave **Data residency** on Global, unless the SendGrid
+   subuser the key belongs to is pinned to the EU. Then set it to **EU** in
+   Pulse, and requests go to `api.eu.sendgrid.com` instead of
+   `api.sendgrid.com`. A key belongs to one region, so a mismatch between the
+   key and this setting shows as a 401 or 403 from SendGrid.
+6. **Rollout.** A new installation is safe: sending is off, and **Safe mode**
+   is on with only `datacentral.ai` allowed.
+   1. Save the sender settings and press **Send configuration test**. It mails
+      the signed-in System admin straight to SendGrid, not through the queue,
+      and works while sending is still off. Safe mode still applies, so your own
+      domain must be on the list. Without an API key it reports that the mail
+      was logged to the server console.
+   2. Switch **Enable sending** on and send a real communication to internal
+      recipients. Safe mode keeps everyone else out. **Sandbox mode** can come
+      first: SendGrid validates the request and delivers nothing.
+   3. Run the checklist below. Switch safe mode off only after it passes.
+7. **Verification checklist.**
+   - The configuration test mail arrives with the subject prefix `[TEST]` from
+     the address you set, and its message headers show SPF, DKIM and DMARC as
+     pass.
+   - After a communication to internal recipients, its deliveries move from
+     Accepted to **Delivered** within a few minutes. That proves the webhook
+     URL, the signature and the verification key.
+   - Following the unsubscribe link in one of those mails puts the address on
+     the suppression list (reason Unsubscribed), and the next communication
+     skips it.
+   - Settings → Background delivery shows no `Communications · Dead letter`
+     rows.
+
+What the operations log says, and the alerts to set, are in
+[`docs/launch-runbook.md`](docs/launch-runbook.md) §5. A 400
+`INVALID_EMAIL_PROVIDER_HTTP_401` or `…_HTTP_403` from the configuration test
+means the same as `communications.send.misconfigured` in the log: a rotated or
+revoked key, an unverified sender, or the wrong region.
