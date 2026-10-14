@@ -637,20 +637,25 @@ export function UpdatesPage({
 
   async function updatePreference(eventType: string, cadence: string) {
     setPreferenceStatus("Saving…");
-    const response = await fetch("/api/v1/notifications/preferences", {
-      method: "PATCH",
-      headers: mutationHeaders(),
-      body: JSON.stringify({ eventType, cadence }),
-    });
-    if (!response.ok) {
+    try {
+      const response = await fetch("/api/v1/notifications/preferences", {
+        method: "PATCH",
+        headers: mutationHeaders(),
+        body: JSON.stringify({ eventType, cadence }),
+      });
+      if (!response.ok) {
+        setPreferenceStatus("Could not save this preference.");
+        return;
+      }
+      const saved = (await response.json()) as NotificationPreferenceItem;
+      setPreferences((items) =>
+        items.map((item) => (item.eventType === eventType ? saved : item)),
+      );
+      setPreferenceStatus("Preferences saved.");
+    } catch {
+      // The request got no answer at all (offline, the connection dropped): say so, rather than leave "Saving…" on the screen.
       setPreferenceStatus("Could not save this preference.");
-      return;
     }
-    const saved = (await response.json()) as NotificationPreferenceItem;
-    setPreferences((items) =>
-      items.map((item) => (item.eventType === eventType ? saved : item)),
-    );
-    setPreferenceStatus("Preferences saved.");
   }
 
   const durableEntries = notifications.map((notification) => ({

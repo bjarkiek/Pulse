@@ -578,7 +578,9 @@ export const customerTools: ChatTool[] = [
     title: "Set notification preference",
     description:
       "Set the delivery cadence for a notification event type. Some event types are mandatory and must " +
-      "remain Immediate — the repository rejects other cadences for those. Do not retry on timeout.",
+      "remain Immediate — the repository rejects other cadences for those. The communication.* event types " +
+      "(emails from DataCentral to the company) accept only Immediate or Off, never Daily or Weekly, and " +
+      "communication.security-advisories cannot be turned off. Do not retry on timeout.",
     inputSchema: {
       eventType: z.enum(notificationEventTypes),
       cadence: z.enum(["Immediate", "Daily", "Weekly", "Off"]),

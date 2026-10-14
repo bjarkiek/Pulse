@@ -81,8 +81,9 @@ export function ConfirmDialog({
           setPending(true);
           try {
             await onConfirm();
-          } catch {
-            // Nothing to show here: the caller reports its own failure. The dialog closes all the same.
+          } catch (error) {
+            // Nothing to show here: the caller reports its own failure. The dialog closes all the same, but a rejection is not expected, so it is logged.
+            console.error("The confirmed action was rejected.", error);
           } finally {
             setPending(false);
             onClose();

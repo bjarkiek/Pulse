@@ -34,6 +34,7 @@ export function json<T>(body: T, init: ResponseInit = {}, id?: string) {
 
 export function apiError(error: unknown, id: string) {
   const message = error instanceof Error ? error.message : "Unexpected error";
+  // INVALID_… and MANDATORY_… are both a request that is refused, and the code says why, so it is echoed; any other message is a 500 that says nothing.
   const status =
     message === "UNAUTHORIZED"
       ? 401
@@ -52,7 +53,8 @@ export function apiError(error: unknown, id: string) {
                     message === "IDEMPOTENCY_CONFLICT" ||
                     message === "ATTACHMENT_VERSION_CONFLICT"
                   ? 409
-                  : message.startsWith("INVALID_")
+                  : message.startsWith("INVALID_") ||
+                      message.startsWith("MANDATORY_")
                     ? 400
                     : 500;
   const code = status === 500 ? "INTERNAL_ERROR" : message;

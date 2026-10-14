@@ -9,6 +9,7 @@ import nextConfig from "../next.config";
 import { proxy } from "../proxy";
 import type { PulseIdentity } from "../lib/domain";
 import { ApiFailure, errorMessage } from "../lib/api-client";
+import { apiError } from "../lib/server/http";
 import { IS, makeT } from "../lib/i18n";
 import { createSessionToken } from "../lib/server/session";
 import { requestHasBody } from "../lib/server/validation";
@@ -36,6 +37,7 @@ import { POST as communicationsJobPost } from "../app/api/v1/internal/jobs/commu
 import { POST as notificationsJobPost } from "../app/api/v1/internal/jobs/notifications/route";
 import { POST as retentionJobPost } from "../app/api/v1/internal/jobs/retention/route";
 import { POST as webhooksJobPost } from "../app/api/v1/internal/jobs/webhooks/route";
+import { PATCH as preferencesPatch } from "../app/api/v1/notifications/preferences/route";
 import { GET as deliveryStatusGet, POST as deliveryStatusPost } from "../app/api/v1/admin/delivery/route";
 import { GET as settingsGet, PATCH as settingsPatch } from "../app/api/v1/admin/communications/settings/route";
 import { POST as settingsTestPost } from "../app/api/v1/admin/communications/settings/test/route";
@@ -1393,6 +1395,29 @@ test("job routes: an empty body is no body — all four answer a POST that sends
       assert.deepEqual(await refusal(await post(emptyPost(`/api/v1/internal/jobs/${name}`, { "x-pulse-job-secret": "wrong" }))), [401, "UNAUTHORIZED"], `${name}: the secret is still asked for`);
     }
   });
+});
+
+test("apiError: a refusal that names a mandatory rule is a 400 that echoes its code, and only a code that starts with MANDATORY_ is", async () => {
+  const preferences = "/api/v1/notifications/preferences";
+  // Turning a mandatory notification off is refused by the repository with MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE.
+  const refused = await preferencesPatch(send("PATCH", preferences, { eventType: "communication.security-advisories", cadence: "Off" }));
+  assert.equal(refused.status, 400);
+  const error = (await refused.json()).error;
+  assert.equal(error.code, "MANDATORY_NOTIFICATION_MUST_BE_IMMEDIATE", "the code comes back; it is not INTERNAL_ERROR");
+  assert.match(error.message, /mandatory notification must be immediate/i);
+  const kept = await preferencesPatch(send("PATCH", preferences, { eventType: "communication.security-advisories", cadence: "Immediate" }));
+  assert.equal(kept.status, 200, "what is allowed still is");
+  // The rule is the prefix and nothing broader: any other code is still a 500 that does not say what went wrong.
+  const original = console.error;
+  console.error = () => {};
+  try {
+    for (const message of ["MANDATORY", "NOT_MANDATORY_AT_ALL", "SOMETHING_ELSE"]) {
+      const response = apiError(new Error(message), "0f8fad5b-d9cb-469f-a165-70867728950e");
+      assert.deepEqual([response.status, (await response.json()).error.code], [500, "INTERNAL_ERROR"], message);
+    }
+  } finally {
+    console.error = original;
+  }
 });
 
 test("requestHasBody: a declared length decides when there is one; without one the first chunk of a copy does, and nothing more is read", async () => {
