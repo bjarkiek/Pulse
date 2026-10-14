@@ -31,7 +31,7 @@ export function DeliveryStatus() {
     }
   }
   return (
-    <article className="settings-card">
+    <article className="settings-card" data-tour="settings-delivery">
       <h3>{t("Background delivery")}</h3>
       <p>
         {t(

@@ -3983,12 +3983,12 @@ h3 {
 /* ---- Onboarding tours (Driver.js kit) ---- */
 .tour-host {
   position: fixed;
-  z-index: 140;
-  left: 22px;
+  z-index: 160;
+  right: 22px;
   bottom: 22px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 8px;
 }
 .tour-help {
@@ -4011,6 +4011,10 @@ h3 {
   transform: scale(1.06);
 }
 .tour-resume-chip {
+  margin-right: 60px;
+  max-width: calc(100vw - 104px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid var(--border);
   background: #fff;
   color: var(--neutral-600);
@@ -4297,7 +4301,7 @@ h3 {
 }
 @media (max-width: 780px) {
   .tour-host {
-    left: 14px;
+    right: 14px;
     bottom: 14px;
   }
   .tour-menu {

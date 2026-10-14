@@ -31,7 +31,9 @@ const STRINGS = {
     contents: "Contents",
     aboutTitle: "The help system in one minute",
     about: [
-      "<strong>The ? button</strong> (bottom-left) opens the guided-tours menu. Every tour can be re-run from there at any time; ✓ marks finished tours and ▶ marks one in progress.",
+      "<strong>Drafts and retries</strong> — drafts belong to your signed-in account and selected organization. Check the save status; device copies expire after 24 hours and clear on sign-out. Server drafts take precedence. If a session expires, keep the form open, sign in and retry. File selections need to be added again after a page reload.",
+      "<strong>Editing and sharing</strong> — if an item changed while you were editing, reload the latest version, review it and retry; your request edit stays in the form. Page and selected-item URLs can be shared with authorized colleagues, and Back/Forward restores your selection. Give support the Support ID shown with an error instead of copying private request text.",
+      "<strong>The ? button</strong> (bottom-right, below the chat button) opens the guided-tours menu. Every tour can be re-run from there at any time; ✓ marks finished tours and ▶ marks one in progress.",
       "<strong>Resume chip</strong> — while a tour is unfinished, a “▶ Tour · 3/9” chip sits next to the ? button. One click continues exactly where you left off, even on another device.",
       "<strong>Deep links</strong> — opening the app with <code>/?tour=welcome</code> starts that tour immediately (used by links in this manual).",
       "<strong>Hide tours forever</strong> — the last item in the ? menu hides tours and the button permanently for you. Only a system administrator can bring them back.",
@@ -47,13 +49,15 @@ const STRINGS = {
     screenshotAlt: (title: string) => `Screenshot: ${title} highlighted`,
     adminExtraTitle: "Administering onboarding",
     adminExtra: [
+      "<strong>Background delivery</strong> — Settings shows queued, retrying, processing and dead-letter email/webhook deliveries. Retry failed deliveries requeues up to 100 dead letters in the selected channel; the scheduled worker sends them later. Requeued does not mean delivered.",
       "<strong>Master switch</strong> — Settings → “Onboarding tours”. When off, nobody sees tours, the ? menu or the resume chip, regardless of per-tour settings.",
       "<strong>Per tour</strong> you control <em>Enabled</em>, <em>Auto-start</em> (runs once for eligible users who never started it) and <em>Audience</em> (Everyone, Customers only, DataCentral team, System admins). Users only ever receive tours inside their audience.",
       "<strong>Progress grid</strong> — “Tour progress by user” shows every user × tour with status, furthest step, where they engaged (Standalone or DataCentral embed) and when. Completion percentages count only users in the tour's current audience.",
       "<strong>Restore</strong> — users who chose “Hide tours forever” appear in an amber bar above the grid; the Restore button next to their name brings tours back for them. There is deliberately no user-facing undo.",
       "<strong>DataCentral embeds</strong> — inside a DataCentral iframe, tours additionally require the launch to carry the <code>Onboard</code> role. Assign that role in DataCentral to control who gets onboarding there; standalone sign-ins are unaffected.",
     ],
-    printHint: "Tip: this page prints cleanly — use it as a hand-out or a video-recording script.",
+    printHint:
+      "Tip: this page prints cleanly — use it as a hand-out or a video-recording script.",
     languageToggle: "Íslenska",
     languageToggleHref: "?lang=is",
     backToApp: "← Back to Pulse",
@@ -68,7 +72,9 @@ const STRINGS = {
     contents: "Efnisyfirlit",
     aboutTitle: "Hjálparkerfið á einni mínútu",
     about: [
-      "<strong>?-hnappurinn</strong> (neðst til vinstri) opnar leiðsagnavalmyndina. Allar leiðsagnir má endurtaka þaðan hvenær sem er; ✓ merkir kláraðar leiðsagnir og ▶ þá sem er í gangi.",
+      "<strong>Drög og endurtekning</strong> — drög tilheyra innskráðum notanda og völdu fyrirtæki. Fylgstu með vistunarstöðunni; afrit á tækinu renna út eftir 24 klukkustundir og eyðast við útskráningu. Drög á þjóninum hafa forgang. Ef innskráning rennur út skaltu halda forminu opnu, skrá þig inn og reyna aftur. Velja þarf viðhengi aftur eftir endurhleðslu síðunnar.",
+      "<strong>Breytingar og deiling</strong> — ef atriði hefur breyst meðan þú varst að vinna skaltu sækja nýjustu útgáfu, fara yfir hana og reyna aftur. Breytingin þín á beiðninni helst í forminu. Deila má slóðum á síður og atriði með samstarfsfólki sem hefur aðgang. Til baka og áfram endurheimta valið. Sendu þjónustuveri stuðningsauðkennið sem birtist með villu í stað einkatexta úr beiðni.",
+      "<strong>?-hnappurinn</strong> (neðst til hægri, undir spjallhnappnum) opnar leiðsagnavalmyndina. Allar leiðsagnir má endurtaka þaðan hvenær sem er; ✓ merkir kláraðar leiðsagnir og ▶ þá sem er í gangi.",
       "<strong>Áfram-flís</strong> — á meðan leiðsögn er ókláruð situr „▶ Leiðsögn · 3/9“ flís við ?-hnappinn. Einn smellur heldur áfram nákvæmlega þar sem frá var horfið, jafnvel á öðru tæki.",
       "<strong>Djúptenglar</strong> — sé appið opnað með <code>/?tour=welcome</code> ræsist sú leiðsögn strax (notað í tenglum þessarar handbókar).",
       "<strong>Fela leiðsagnir fyrir fullt og allt</strong> — neðsti valkosturinn í ?-valmyndinni felur leiðsagnir og hnappinn varanlega fyrir þig. Aðeins kerfisstjóri getur birt þær aftur.",
@@ -84,13 +90,15 @@ const STRINGS = {
     screenshotAlt: (title: string) => `Skjámynd: ${title} upplýst`,
     adminExtraTitle: "Umsýsla nýliðaleiðsagna",
     adminExtra: [
+      "<strong>Sendingar í bakgrunni</strong> — í stillingum sést staða tölvupósts og vefkróka: í bið, í endurtekningu, í vinnslu eða misheppnaðar sendingar. Endurtekning setur allt að 100 misheppnaðar sendingar aftur í biðröð fyrir valda rás. Áætlað bakgrunnsverk sér svo um sendinguna; biðröð staðfestir ekki afhendingu.",
       "<strong>Aðalrofi</strong> — Settings → „Onboarding tours“. Þegar slökkt er sér enginn leiðsagnir, ?-valmyndina né áfram-flísina, óháð stillingum einstakra leiðsagna.",
       "<strong>Fyrir hverja leiðsögn</strong> stýrir þú <em>Enabled</em>, <em>Auto-start</em> (keyrir einu sinni fyrir gjaldgenga notendur sem aldrei byrjuðu) og <em>Audience</em> (allir, aðeins viðskiptavinir, DataCentral-teymið, kerfisstjórar). Notendur fá aldrei leiðsagnir utan síns markhóps.",
       "<strong>Framvindutafla</strong> — „Tour progress by user“ sýnir hvern notanda × leiðsögn með stöðu, lengsta skrefi, hvar var unnið (Standalone eða DataCentral) og hvenær. Prósentur telja aðeins notendur í núverandi markhópi leiðsagnarinnar.",
       "<strong>Endurvirkja</strong> — notendur sem völdu „Fela leiðsagnir fyrir fullt og allt“ birtast í gulri rönd fyrir ofan töfluna; Restore-hnappurinn við nafnið þeirra kveikir aftur á leiðsögnum fyrir þá. Það er viljandi engin afturköllun fyrir notandann sjálfan.",
       "<strong>DataCentral-innfellingar</strong> — inni í DataCentral-iframe þurfa leiðsagnir að auki að ræsingin beri <code>Onboard</code>-hlutverkið. Úthlutaðu því hlutverki í DataCentral til að stýra hverjir fá leiðsögn þar; bein innskráning er óbreytt.",
     ],
-    printHint: "Ábending: síðan prentast hreint — nýttu hana sem dreifiblað eða upptökuhandrit.",
+    printHint:
+      "Ábending: síðan prentast hreint — nýttu hana sem dreifiblað eða upptökuhandrit.",
     languageToggle: "English",
     languageToggleHref: "?lang=en",
     backToApp: "← Til baka í Pulse",
@@ -100,8 +108,8 @@ const STRINGS = {
 // Chapter intros keyed by tour key (narration-style openers for video scripts).
 const CHAPTER_INTROS: Record<string, { en: string; is: string }> = {
   welcome: {
-    en: "Your first minute in Pulse: where things are, how to search before you ask, and where your requests live. This tour starts automatically on first sign-in.",
-    is: "Fyrsta mínútan þín í Pulse: hvar hlutirnir eru, hvernig þú leitar áður en þú biður og hvar beiðnirnar þínar búa. Þessi leiðsögn ræsist sjálfkrafa við fyrstu innskráningu.",
+    en: "Your first minute in Pulse: where things are, how to search before you ask, and where your requests live. This tour can start automatically when enabled for your account.",
+    is: "Fyrsta mínútan þín í Pulse: hvar hlutirnir eru, hvernig þú leitar áður en þú biður og hvar beiðnirnar þínar búa. Leiðsögnin getur ræst sjálfkrafa þegar hún er virk fyrir þinn aðgang.",
   },
   "submit-request": {
     en: "Filing a great request end to end: a sharp title, the duplicate suggestions, describing the outcome, and what happens after you submit.",
@@ -121,9 +129,7 @@ function renderChapter(chapter: HelpChapter, lang: Lang) {
   const t = STRINGS[lang];
   const { def } = chapter;
   const title = pick(def.title, lang);
-  const intro = CHAPTER_INTROS[def.key]
-    ? CHAPTER_INTROS[def.key][lang]
-    : "";
+  const intro = CHAPTER_INTROS[def.key] ? CHAPTER_INTROS[def.key][lang] : "";
   const minutes = Math.max(1, Math.round(def.steps.length / 3));
   const steps = def.steps
     .map((step, index) => {
@@ -299,6 +305,9 @@ export async function GET(request: Request) {
 </html>`;
   return new Response(html, {
     status: 200,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
   });
 }
