@@ -2076,6 +2076,8 @@ test("deliveries: the list filters by state and company, pages, clamps its pagin
   assert.equal((await listDeliveries(PM, created.id, { state: "Dead letter" })).total, 0);
   for (const page of [0, -3, Number.NaN, 1.5, undefined])
     assert.equal((await listDeliveries(PM, created.id, { page })).items.length, 4, `page ${page} is the first page`);
+  const huge = await listDeliveries(PM, created.id, { page: 1e12 });
+  assert.deepEqual([huge.items.length, huge.total], [0, 4], "a huge page is a page past the end, not an error");
   for (const [pageSize, expected] of [[0, 4], [-5, 1], [1000, 4], [2.9, 2], [undefined, 4]] as const)
     assert.equal((await listDeliveries(PM, created.id, { pageSize })).items.length, expected, `page size ${pageSize}`);
   assert.deepEqual((await listDeliveries(PM, created.id, { page: 2, pageSize: 2.9 })).items.map((d) => d.email), ["anna@advania.is", "cio@origo.is"], "a fractional page size pages by whole rows");
@@ -2176,7 +2178,7 @@ test("deliveries: retrying the dead letters of a campaign that has completed reo
   assert.deepEqual(audit.map((a) => [a.entityId, a.before, a.after]), [[created.id, { status: "Sent" }, { requeued: 4, status: "Sending" }]], "the audit row records the status change next to the count");
 });
 
-test("deliveries: a Test row alone does not reopen a completed campaign, and a cancelled campaign is never reopened", async () => {
+test("deliveries: a Test row alone does not reopen a completed campaign, and a cancelled campaign is neither retried nor reopened", async () => {
   await seedAudience();
   await enableSending();
   const store = getDeliveryStore();
@@ -2200,15 +2202,52 @@ test("deliveries: a Test row alone does not reopen a completed campaign, and a c
   assert.deepEqual(await retryDeadLetters(PM, sent.id), { requeued: 0 });
   assert.equal((await getCommunication(PM, sent.id)).status, "Sent");
   leftover.state = "Accepted";
+  const draft = await createCommunication(PM, draftInput);
+  memoryDeliveries().push(deliveryRow(draft.id, "Dead letter")); // however it got there: only a Sent campaign is reopened
+  assert.deepEqual(await requeueDeadLetters(draft.id), { requeued: 1, reopened: false });
+  assert.equal((await getCommunication(PM, draft.id)).status, "Draft");
 
   const cancelled = await createCommunication(PM, draftInput);
   await sendCommunication(PM, cancelled.id, {});
   const inFlight = (await store.claimBatch(10))!;
   await cancelCommunication(PM, cancelled.id, "cancel");
-  await store.markFailed(inFlight.deliveries.map((d) => d.id), "HTTP_400", null); // the batch that was with the provider dead-letters after the cancel
-  await retryDeadLetters(PM, cancelled.id);
+  const before = memoryDeliveries().find((d) => d.id === inFlight.deliveries[0].id)!;
+  before.state = "Dead letter"; // a dead letter from before the cancel
+  await assert.rejects(retryDeadLetters(PM, cancelled.id), /INVALID_COMMUNICATION_STATE/, "a cancelled campaign is not retried");
+  assert.deepEqual(await requeueDeadLetters(cancelled.id), { requeued: 0, reopened: false }, "and the store does not requeue into it either (a retry racing the cancel)");
+  assert.equal(before.state, "Dead letter");
   assert.equal((await getCommunication(PM, cancelled.id)).status, "Cancelled", "a cancelled campaign stays cancelled");
   assert.equal(await store.claimBatch(10), null, "and none of its rows is sent");
+});
+
+test("worker store: a batch that fails after its campaign was cancelled is cancelled with it, whether the failure is retryable or not; a Test row is still retried", async () => {
+  await seedAudience();
+  await enableSending();
+  const store = getDeliveryStore();
+  let last = "";
+  for (const [label, next] of [["retryable", new Date(Date.now() + 3_600_000)], ["not retryable", null]] as const) {
+    const created = await createCommunication(PM, draftInput);
+    last = created.id;
+    await sendCommunication(PM, created.id, {});
+    const batch = (await store.claimBatch(10))!; // the three English rows are with the provider
+    assert.equal(batch.communicationId, created.id, label);
+    await cancelCommunication(PM, created.id, "cancel"); // the Icelandic row is cancelled now; the three in flight are left alone
+    await store.markFailed(batch.deliveries.map((d) => d.id), "HTTP_429", next);
+    const rows = (await listDeliveries(PM, created.id, {})).items;
+    assert.deepEqual(rows.map((d) => [d.email, d.state, d.nextAttemptAt]), [
+      ["bjarki@uidata.com", "Cancelled", null], ["jon@origo.is", "Cancelled", null], ["anna@advania.is", "Cancelled", null], ["cio@origo.is", "Cancelled", null],
+    ], `${label}: nothing is left to try again`);
+    assert.deepEqual(rows.slice(0, 3).map((d) => d.lastErrorCode), ["HTTP_429", "HTTP_429", "HTTP_429"], `${label}: the code of the failure is kept`);
+    const stats = await communicationStats(created.id);
+    assert.deepEqual([stats.queued, stats.deadLettered, stats.cancelled, stats.recipients], [0, 0, 4, 4], label);
+    assert.equal(await store.claimBatch(10), null, `${label}: and the worker has nothing to claim`);
+  }
+  await testSendCommunication(PM, last, []); // a test mail of a cancelled campaign is still sent, so it is still retried
+  const test = (await store.claimBatch(10))!;
+  assert.deepEqual(test.deliveries.map((d) => d.source), ["Test"]);
+  const again = new Date(Date.now() + 3_600_000);
+  await store.markFailed(test.deliveries.map((d) => d.id), "HTTP_429", again);
+  assert.deepEqual(memoryDeliveries().filter((d) => d.source === "Test").map((d) => [d.state, d.nextAttemptAt]), [["Retry", again.toISOString()]]);
 });
 
 test("send side: the audit trail records ids and counts only, never an address, a subject or a link", async () => {
@@ -2460,7 +2499,9 @@ test("worker store, SQL: claim maps the batch of one campaign and locale; accept
     assert.match(claim.text, /FROM dbo\.CommunicationDeliveries d WITH \(UPDLOCK,READPAST,ROWLOCK\)/);
     assert.match(claim.text, /AND \(c\.status='Sending' OR d\.source='Test'\)/, "only a sending campaign's rows, and test rows whatever the campaign is");
     assert.match(claim.text, /OUTPUT CAST\(INSERTED\.id AS nvarchar\(36\)\) id,INSERTED\.email,INSERTED\.display_name displayName,INSERTED\.source,INSERTED\.attempt_count attemptCount,INSERTED\.locale,/);
-    assert.match(claim.text, /JOIN dbo\.Communications c ON c\.id=d\.communication_id\s+WHERE d\.state IN \('Queued','Retry'\);\s*$/, "the UPDATE itself claims only rows that are still waiting");
+    assert.equal(claim.text.match(/\(c\.status='Sending' OR d\.source='Test'\)/g)?.length, 3, "the gate applies where the campaign is chosen, where the rows are picked and where they are claimed");
+    assert.equal(claim.text.match(/JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.deleted_at IS NULL/g)?.length, 3, "and in all three places a deleted campaign has no rows to claim, test rows included");
+    assert.match(claim.text, /JOIN dbo\.Communications c ON c\.id=d\.communication_id AND c\.deleted_at IS NULL\s+WHERE d\.state IN \('Queued','Retry'\) AND \(c\.status='Sending' OR d\.source='Test'\);\s*$/, "the UPDATE itself claims only rows that are still waiting, of a campaign that is sending (or test rows)");
     assert.equal(claim.inTransaction, false, "READPAST cannot run in a unit of work, which is SERIALIZABLE");
     const seen = calls.length;
     for (const size of [0, -1, Number.NaN, 0.5]) assert.equal(await store.claimBatch(size), null, `size ${size}`);
@@ -2478,10 +2519,10 @@ test("worker store, SQL: claim maps the batch of one campaign and locale; accept
     const retryAt = new Date("2026-10-14T10:00:00Z");
     await store.markFailed(["id-1"], "HTTP_429", retryAt);
     await store.markFailed(["id-2"], "X".repeat(150), null);
-    const [retry, dead] = calls.filter((c) => /SET state=@state/.test(c.text));
+    const [retry, dead] = calls.filter((c) => /^UPDATE d SET state=CASE/.test(c.text));
     assert.deepEqual([retry.inputs.state, retry.inputs.next, retry.inputs.error, JSON.parse(String(retry.inputs.ids))], ["Retry", retryAt, "HTTP_429", ["id-1"]]);
     assert.deepEqual([dead.inputs.state, dead.inputs.next, dead.inputs.error], ["Dead letter", null, "X".repeat(100)], "a dead letter has no next attempt, and the code fits its column");
-    assert.match(retry.text, /^UPDATE dbo\.CommunicationDeliveries SET state=@state,next_attempt_at=@next,last_error_code=@error WHERE id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/);
+    assert.match(retry.text, /^UPDATE d SET state=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN 'Cancelled' ELSE @state END,\s+next_attempt_at=CASE WHEN c\.status='Cancelled' AND d\.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error\s+FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c WITH \(READCOMMITTEDLOCK\) ON c\.id=d\.communication_id\s+WHERE d\.id IN \(SELECT TRY_CONVERT\(uniqueidentifier,\[value\]\) FROM OPENJSON\(@ids\)\)$/, "a row of a cancelled campaign is cancelled, whatever the failure was, and a cancel that is committing is waited for; a test row keeps its retry");
 
     assert.equal(await store.acceptedToday(at), 7);
     const today = calls.find((c) => /SELECT COUNT\(\*\) count/.test(c.text))!;
@@ -2491,7 +2532,7 @@ test("worker store, SQL: claim maps the batch of one campaign and locale; accept
     assert.deepEqual(await store.completeCampaigns(at), ["COM-007", "COM-008"]);
     const complete = calls.find((c) => /OUTPUT INSERTED\.public_id id/.test(c.text))!;
     assert.equal(complete.inputs.now, at);
-    assert.match(complete.text, /UPDATE c SET status='Sent',completed_at=@now,updated_at=@now OUTPUT INSERTED\.public_id id FROM dbo\.Communications c\s+WHERE c\.status='Sending' AND NOT EXISTS \(SELECT 1 FROM dbo\.CommunicationDeliveries d WHERE d\.communication_id=c\.id AND d\.source<>'Test' AND d\.state IN \('Queued','Retry','Processing'\)\)$/);
+    assert.match(complete.text, /UPDATE c SET status='Sent',completed_at=@now,updated_at=@now OUTPUT INSERTED\.public_id id FROM dbo\.Communications c\s+WHERE c\.status='Sending' AND NOT EXISTS \(SELECT 1 FROM dbo\.CommunicationDeliveries d WITH \(READCOMMITTEDLOCK\) WHERE d\.communication_id=c\.id AND d\.source<>'Test' AND d\.state IN \('Queued','Retry','Processing'\)\)$/, "the rows are read with locks, so a retry that is committing is waited for under read-committed snapshot");
     assert.deepEqual(events, [], "the worker's statements run on their own, each one atomic, in no unit of work");
   });
 });
@@ -2537,6 +2578,9 @@ test("deliveries, SQL: stats are counted from the rows, the list pages and maps 
     await listDeliveries(CONTRIBUTOR, "COM-007", {});
     const unfiltered = calls.filter((c) => /OFFSET @offset ROWS/.test(c.text)).at(-1)!;
     assert.deepEqual([unfiltered.inputs.state, unfiltered.inputs.org, unfiltered.inputs.offset, unfiltered.inputs.pageSize], [null, null, 0, 100], "no filter means no filter, and the first page of 100");
+    await listDeliveries(CONTRIBUTOR, "COM-007", { page: 1e12, pageSize: 250 });
+    const hugePage = calls.filter((c) => /OFFSET @offset ROWS/.test(c.text)).at(-1)!;
+    assert.deepEqual([hugePage.inputs.offset, hugePage.inputs.pageSize], [99_999 * 250, 250], "a huge page is cut to page 100000, so the offset always fits an int");
     const seen = calls.length;
     assert.deepEqual(await listDeliveries(CONTRIBUTOR, "COM-007", { state: "x".repeat(40) }), { items: [], total: 0 });
     assert.deepEqual(await listDeliveries(CONTRIBUTOR, "COM-007", { organizationId: "O".repeat(33) }), { items: [], total: 0 });
@@ -2566,7 +2610,7 @@ test("deliveries, SQL: stats are counted from the rows, the list pages and maps 
     const beforeRetry = events.length;
     assert.deepEqual(await retryDeadLetters(PM, "COM-007"), { requeued: 3 });
     const requeue = calls.find((c) => /^\s*UPDATE d SET state='Queued'/.test(c.text))!;
-    assert.match(requeue.text, /^UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c ON c\.id=d\.communication_id WHERE c\.public_id=@id AND d\.state='Dead letter'$/);
+    assert.match(requeue.text, /^UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo\.CommunicationDeliveries d JOIN dbo\.Communications c ON c\.id=d\.communication_id WHERE c\.public_id=@id AND c\.status<>'Cancelled' AND d\.state='Dead letter'$/, "never into a cancelled campaign");
     assert.equal(requeue.inputs.id, "COM-007");
     const retryAudit = sqlWrites(calls).filter((c) => /AuditEvents/.test(c.text)).at(-1)!;
     assert.deepEqual([retryAudit.inputs.action, retryAudit.inputs.entity, JSON.parse(String(retryAudit.inputs.after))], ["communication.deliveries.retried", SQL_UUID, { requeued: 3 }]);
@@ -2606,10 +2650,14 @@ test("deliveries, SQL: a retry that requeues rows of a completed campaign reopen
     const audit = sqlWrites(calls).find((c) => /AuditEvents/.test(c.text))!;
     assert.deepEqual([JSON.parse(String(audit.inputs.after)), audit.inputs.before], [{ requeued: 0 }, null]);
   });
-  await withFakeSql([...requeueRows, ...reopen(0), ...sqlCampaign("COM-007", { status: "Cancelled" })], async (calls) => {
+  await withFakeSql([...requeueRows, ...reopen(0), ...sqlCampaign("COM-007", { status: "Sending" })], async (calls) => {
     assert.deepEqual(await retryDeadLetters(PM, "COM-007"), { requeued: 3 });
     const audit = sqlWrites(calls).find((c) => /AuditEvents/.test(c.text))!;
-    assert.deepEqual([JSON.parse(String(audit.inputs.after)), audit.inputs.before], [{ requeued: 3 }, null], "the campaign was not reopened (not Sent, or only a Test row waits), so only the count is recorded");
+    assert.deepEqual([JSON.parse(String(audit.inputs.after)), audit.inputs.before], [{ requeued: 3 }, null], "the campaign was not reopened (it is Sending already, or only a Test row waits), so only the count is recorded");
+  });
+  await withFakeSql([...requeueRows, ...reopen(1), ...sqlCampaign("COM-007", { status: "Cancelled" })], async (calls, events) => {
+    await assert.rejects(retryDeadLetters(PM, "COM-007"), /INVALID_COMMUNICATION_STATE/, "a cancelled campaign is refused");
+    assert.deepEqual([sqlWrites(calls).length, events], [0, []], "before anything is written or a unit of work is opened");
   });
 });
 

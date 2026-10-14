@@ -405,20 +405,24 @@ export async function testSendCommunication(identity: PulseIdentity, id: string,
 /** A whole number from a paging value, or `fallback` when it is missing or not a number. */
 const whole = (value: number | undefined, fallback: number) => (value !== undefined && Number.isFinite(value) ? Math.floor(value) : fallback);
 
-/** Pages of 100 deliveries by default, 250 at most. */
+/** Pages of 100 deliveries by default, 250 at most; the page number stops at 100000, so the OFFSET (at most 99999 x 250) always fits the int SQL binds it as. */
 export async function listDeliveries(identity: PulseIdentity, id: string, filter: { state?: string; organizationId?: string; page?: number; pageSize?: number }) {
   await requireInternalRole(identity);
   await loadOne(id);
-  return listDeliveryRows(id, { state: filter.state, organizationId: filter.organizationId, page: Math.max(1, whole(filter.page, 1)), pageSize: Math.min(Math.max(whole(filter.pageSize, 100) || 100, 1), 250) });
+  return listDeliveryRows(id, {
+    state: filter.state, organizationId: filter.organizationId,
+    page: Math.min(Math.max(whole(filter.page, 1), 1), 100_000), pageSize: Math.min(Math.max(whole(filter.pageSize, 100) || 100, 1), 250),
+  });
 }
 
 /**
  * Queues every Dead letter row of the campaign again, with its attempts started over. A campaign that had completed (Sent) is Sending
- * again so that the worker claims the rows; the audit row then records that status change next to the count.
+ * again so that the worker claims the rows; the audit row then records that status change next to the count. A Cancelled campaign is
+ * refused (INVALID_COMMUNICATION_STATE): it never sends again, so rows queued into it would wait for ever.
  */
 export async function retryDeadLetters(identity: PulseIdentity, id: string): Promise<{ requeued: number }> {
   await requirePublishRole(identity);
-  await loadOne(id);
+  if ((await loadOne(id)).status === "Cancelled") throw new Error("INVALID_COMMUNICATION_STATE");
   /** What the audit row says: the count, and the move from Sent to Sending when the campaign was reopened. */
   const audited = ({ requeued, reopened }: { requeued: number; reopened: boolean }) =>
     [reopened ? { requeued, status: "Sending" } : { requeued }, reopened ? { status: "Sent" } : undefined] as const;

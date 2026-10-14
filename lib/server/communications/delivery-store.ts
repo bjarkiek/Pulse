@@ -15,7 +15,7 @@ export type DeliveryStore = {
   promoteScheduled(now: Date): Promise<string[]>;          // Scheduled & due → freezeAudience → ids now Sending/Sent
   claimBatch(size: number): Promise<ClaimedBatch | null>;  // one campaign, one locale; Test rows claimable regardless of campaign status
   markAccepted(ids: string[], providerMessageId: string | null, now: Date): Promise<void>;
-  markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // null → Dead letter
+  markFailed(ids: string[], errorCode: string, nextAttemptAt: Date | null): Promise<void>; // null → Dead letter; a row of a Cancelled campaign → Cancelled
   acceptedToday(now: Date): Promise<number>;
   completeCampaigns(now: Date): Promise<string[]>;         // Sending with no Queued/Retry/Processing non-test rows → Sent
 };
@@ -121,7 +121,14 @@ const memoryStore: DeliveryStore = {
     for (const d of memoryDeliveries()) if (ids.includes(d.id)) Object.assign(d, { state: "Accepted", providerMessageId, acceptedAt: now.toISOString(), nextAttemptAt: null, lastErrorCode: null });
   },
   async markFailed(ids, errorCode, nextAttemptAt) {
-    for (const d of memoryDeliveries()) if (ids.includes(d.id)) Object.assign(d, { state: nextAttemptAt ? "Retry" : "Dead letter", nextAttemptAt: nextAttemptAt?.toISOString() ?? null, lastErrorCode: errorCode });
+    // A row of a campaign that was cancelled while the row was with the provider has nothing left to try again, whatever the failure was: it is
+    // cancelled, so a cancelled campaign never holds a row that nothing will claim. A Test row is claimed whatever its campaign is, so it keeps its retry.
+    const cancelled = new Set(memoryCommunications().filter((c) => c.status === "Cancelled").map((c) => c.id));
+    for (const d of memoryDeliveries()) {
+      if (!ids.includes(d.id)) continue;
+      const stopped = d.source !== "Test" && cancelled.has(d.communicationId);
+      Object.assign(d, { state: stopped ? "Cancelled" : nextAttemptAt ? "Retry" : "Dead letter", nextAttemptAt: stopped ? null : nextAttemptAt?.toISOString() ?? null, lastErrorCode: errorCode });
+    }
   },
   async acceptedToday(now) {
     const day = now.toISOString().slice(0, 10);
@@ -148,23 +155,27 @@ const sqlStore: DeliveryStore = {
   async claimBatch(size) {
     const take = Math.floor(size);
     if (!(take >= 1)) return null;
-    // The closing WHERE is what claims a row. Two workers can pick the same rows in `next_items`, but the UPDATE checks each row again under its
-    // own lock, so a row the other worker has just set to Processing is skipped instead of being claimed, and mailed, a second time.
+    // Which rows may be claimed is decided in three places, all the same: a row of a live campaign that is Sending, or a Test row of any live
+    // campaign (a deleted draft's test mail is never sent). `next_campaign` picks the campaign and locale; `next_items` fills the TOP from rows that
+    // can be claimed, so rows that cannot (whatever left them waiting) never crowd out those that can; the closing WHERE is what claims a row.
+    // Two workers can pick the same rows in `next_items`, but the UPDATE checks each row again under its own lock, so a row the other worker has
+    // just set to Processing is skipped instead of being claimed, and mailed, a second time.
     const result = await (await getSqlPool()).request().input("size", sql.Int, take).query(`
       ;WITH next_campaign AS (
         SELECT TOP (1) d.communication_id,d.locale FROM dbo.CommunicationDeliveries d WITH (UPDLOCK,READPAST,ROWLOCK)
-        JOIN dbo.Communications c ON c.id=d.communication_id
+        JOIN dbo.Communications c ON c.id=d.communication_id AND c.deleted_at IS NULL
         WHERE d.state IN ('Queued','Retry') AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=SYSUTCDATETIME()) AND (c.status='Sending' OR d.source='Test')
         ORDER BY d.created_at
       ), next_items AS (
         SELECT TOP (@size) d.id FROM dbo.CommunicationDeliveries d JOIN next_campaign n ON n.communication_id=d.communication_id AND n.locale=d.locale
-        WHERE d.state IN ('Queued','Retry') AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=SYSUTCDATETIME()) ORDER BY d.created_at
+        JOIN dbo.Communications c ON c.id=d.communication_id AND c.deleted_at IS NULL
+        WHERE d.state IN ('Queued','Retry') AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=SYSUTCDATETIME()) AND (c.status='Sending' OR d.source='Test') ORDER BY d.created_at
       )
       UPDATE d SET state='Processing',attempt_count=attempt_count+1
       OUTPUT CAST(INSERTED.id AS nvarchar(36)) id,INSERTED.email,INSERTED.display_name displayName,INSERTED.source,INSERTED.attempt_count attemptCount,INSERTED.locale,
         c.public_id communicationId,c.template_key templateKey,c.topic,c.content_json contentJson
-      FROM dbo.CommunicationDeliveries d JOIN next_items q ON q.id=d.id JOIN dbo.Communications c ON c.id=d.communication_id
-      WHERE d.state IN ('Queued','Retry');`);
+      FROM dbo.CommunicationDeliveries d JOIN next_items q ON q.id=d.id JOIN dbo.Communications c ON c.id=d.communication_id AND c.deleted_at IS NULL
+      WHERE d.state IN ('Queued','Retry') AND (c.status='Sending' OR d.source='Test');`);
     if (!result.recordset.length) return null;
     const first = result.recordset[0];
     return {
@@ -177,18 +188,25 @@ const sqlStore: DeliveryStore = {
       .query("UPDATE dbo.CommunicationDeliveries SET state='Accepted',provider_message_id=@message,accepted_at=@now,next_attempt_at=NULL,last_error_code=NULL WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))");
   },
   async markFailed(ids, errorCode, nextAttemptAt) {
+    // As in memory: a row of a campaign that was cancelled meanwhile is cancelled, not queued for another try; a Test row keeps its retry.
+    // READCOMMITTEDLOCK, as in completeCampaigns: the campaign is read with a lock, so a cancel that is committing is waited for and seen.
     await (await getSqlPool()).request().input("ids", sql.NVarChar(sql.MAX), JSON.stringify(ids)).input("state", sql.NVarChar(32), nextAttemptAt ? "Retry" : "Dead letter")
       .input("next", sql.DateTime2, nextAttemptAt).input("error", sql.NVarChar(100), errorCode.slice(0, 100))
-      .query("UPDATE dbo.CommunicationDeliveries SET state=@state,next_attempt_at=@next,last_error_code=@error WHERE id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))");
+      .query(`UPDATE d SET state=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN 'Cancelled' ELSE @state END,
+        next_attempt_at=CASE WHEN c.status='Cancelled' AND d.source<>'Test' THEN NULL ELSE @next END,last_error_code=@error
+        FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c WITH (READCOMMITTEDLOCK) ON c.id=d.communication_id
+        WHERE d.id IN (SELECT TRY_CONVERT(uniqueidentifier,[value]) FROM OPENJSON(@ids))`);
   },
   async acceptedToday(now) {
     const result = await (await getSqlPool()).request().input("day", sql.Date, now).query("SELECT COUNT(*) count FROM dbo.CommunicationDeliveries WHERE accepted_at>=@day AND accepted_at<DATEADD(day,1,@day)");
     return Number(result.recordset[0].count);
   },
   async completeCampaigns(now) {
+    // READCOMMITTEDLOCK: under read-committed snapshot (the Azure SQL default) a plain read sees the rows as they were before a retry that is
+    // committing, and the campaign would be completed with Queued rows behind it. With locks, the read waits for that retry and sees its rows.
     const result = await (await getSqlPool()).request().input("now", sql.DateTime2, now).query(`
       UPDATE c SET status='Sent',completed_at=@now,updated_at=@now OUTPUT INSERTED.public_id id FROM dbo.Communications c
-      WHERE c.status='Sending' AND NOT EXISTS (SELECT 1 FROM dbo.CommunicationDeliveries d WHERE d.communication_id=c.id AND d.source<>'Test' AND d.state IN ('Queued','Retry','Processing'))`);
+      WHERE c.status='Sending' AND NOT EXISTS (SELECT 1 FROM dbo.CommunicationDeliveries d WITH (READCOMMITTEDLOCK) WHERE d.communication_id=c.id AND d.source<>'Test' AND d.state IN ('Queued','Retry','Processing'))`);
     return result.recordset.map((r) => r.id as string);
   },
 };
@@ -292,13 +310,15 @@ export async function listDeliveryRows(publicId: string, filter: { state?: strin
  * The worker claims the rows of a Sending campaign only, and `completeCampaigns` finishes a campaign whose rows are all settled, dead letters
  * included. So a campaign that has completed (Sent) and gets a real row waiting again is Sending again, in the same unit of work as the
  * requeue: `completed_at` goes, `started_at` and the recipient count stay, and `completeCampaigns` completes it once the retried rows settle.
- * Nothing else is reopened: a Test row alone is claimed whatever its campaign is, and a Cancelled campaign stays cancelled.
+ * Nothing else is reopened: a Test row alone is claimed whatever its campaign is. Nothing is requeued into a Cancelled campaign at all, since
+ * nothing would ever claim or cancel those rows again (`retryDeadLetters` refuses such a campaign; this guards a retry racing the cancel).
  */
 export async function requeueDeadLetters(publicId: string): Promise<{ requeued: number; reopened: boolean }> {
   if (!isContentSqlActive()) {
+    const campaign = memoryCommunications().find((c) => c.id === publicId);
+    if (campaign?.status === "Cancelled") return { requeued: 0, reopened: false };
     let requeued = 0;
     for (const d of memoryDeliveries()) if (d.communicationId === publicId && d.state === "Dead letter") { Object.assign(d, { state: "Queued", attemptCount: 0, nextAttemptAt: null, lastErrorCode: null }); requeued++; }
-    const campaign = memoryCommunications().find((c) => c.id === publicId);
     const reopened = requeued > 0 && campaign?.status === "Sent" && memoryDeliveries().some((d) => d.communicationId === publicId && d.source !== "Test" && OPEN.has(d.state));
     if (campaign && reopened) Object.assign(campaign, { status: "Sending", completedAt: undefined, updatedAt: new Date().toISOString() });
     return { requeued, reopened };
@@ -306,7 +326,7 @@ export async function requeueDeadLetters(publicId: string): Promise<{ requeued: 
   return atomicSql(async () => {
     const pool = await getSqlPool();
     const requeue = await pool.request().input("id", sql.NVarChar(32), publicId)
-      .query("UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.public_id=@id AND d.state='Dead letter'");
+      .query("UPDATE d SET state='Queued',attempt_count=0,next_attempt_at=NULL,last_error_code=NULL FROM dbo.CommunicationDeliveries d JOIN dbo.Communications c ON c.id=d.communication_id WHERE c.public_id=@id AND c.status<>'Cancelled' AND d.state='Dead letter'");
     const requeued: number = requeue.rowsAffected[0];
     if (!requeued) return { requeued, reopened: false };
     // The invariant, stated once: a Sent campaign with a real row waiting is Sending. The requeue above is visible here, inside the same unit of work.
