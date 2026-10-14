@@ -7,6 +7,7 @@ import {
 import { createRequest } from "../lib/server/request-repository";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { productionConfigurationErrors } from "../lib/server/production-config";
 import { readJson, parseInput } from "../lib/server/validation";
 import { requestInputSchema, userInputSchema } from "../lib/contracts";
@@ -37,6 +38,50 @@ const request = (body: unknown, key = "security-test-key") =>
     headers: { "idempotency-key": key },
     body: JSON.stringify(body),
   });
+
+test("dependency brace expansion preserves normal globs and bounds nesting", () => {
+  const require = createRequire(import.meta.url);
+  const braces = createRequire(require.resolve("micromatch"))("braces");
+  const micromatch = require("micromatch");
+  assert.deepEqual(braces.expand("app/{api,auth}/{route,page}.{ts,tsx}"), [
+    "app/api/route.ts",
+    "app/api/route.tsx",
+    "app/api/page.ts",
+    "app/api/page.tsx",
+    "app/auth/route.ts",
+    "app/auth/route.tsx",
+    "app/auth/page.ts",
+    "app/auth/page.tsx",
+  ]);
+  assert.deepEqual(
+    micromatch(
+      ["app/api/route.ts", "app/auth/page.tsx", "lib/domain.ts"],
+      "app/{api,auth}/**/*.{ts,tsx}",
+    ),
+    ["app/api/route.ts", "app/auth/page.tsx"],
+  );
+  for (const [open, close] of [
+    ["{", "}"],
+    ["(", ")"],
+  ]) {
+    assert.doesNotThrow(() =>
+      braces.parse(open.repeat(100) + "x" + close.repeat(100)),
+    );
+    const nested = open.repeat(101) + "x" + close.repeat(101);
+    for (const operation of [
+      braces.parse,
+      braces.compile,
+      braces.expand,
+      braces.stringify,
+    ]) {
+      assert.throws(() => operation(nested), /exceeds max depth/);
+      assert.throws(
+        () => operation(nested, { maxDepth: Infinity }),
+        /exceeds max depth/,
+      );
+    }
+  }
+});
 
 test("production configuration rejects ephemeral, unresolved and bypass settings", () => {
   const errors = productionConfigurationErrors({
@@ -384,4 +429,3 @@ test("internal action schemas reject numeric text, coerced scores and malformed 
   ] as const)
     assert.throws(() => parseInput<unknown>(schema, input), /INVALID_INPUT/);
 });
-

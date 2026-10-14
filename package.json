@@ -27,12 +27,12 @@
     "@azure/communication-email": "^1.1.0",
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@slack/bolt": "^4.7.3",
     "drizzle-orm": "0.45.2",
     "jose": "^6.2.3",
     "mssql": "^12.7.0",
-    "next": "16.3.5",
+    "next": "16.3.8",
     "openid-client": "^6.8.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -40,7 +40,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.54.11",
+    "@cloudflare/vite-plugin": "1.63.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/dom-speech-recognition": "^0.0.12",
     "@types/mssql": "^9.1.11",
@@ -51,7 +51,7 @@
     "@vitejs/plugin-rsc": "0.5.35",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.3.5",
+    "eslint-config-next": "16.3.8",
     "playwright": "^1.61.1",
     "prettier": "3.9.7",
     "react-server-dom-webpack": "19.3.0",
@@ -60,7 +60,10 @@
     "typescript": "5.9.3",
     "vinext": "1.0.0-beta.10",
     "vite": "8.3.0",
-    "wrangler": "4.133.0"
+    "wrangler": "4.149.0"
+  },
+  "overrides": {
+    "braces": "npm:@dieub/braces-depth-guard@3.0.3-pn.0"
   },
   "type": "module",
   "displayName": "DataCentral Pulse"
