@@ -4714,6 +4714,22 @@ a.tour-menu-item {
   background: #fff;
   font-size: 13px;
 }
+/* What a confirmation dialog says: what it is about, then what will happen. */
+.communication-confirm {
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.communication-confirm p {
+  margin: 0;
+}
+.communication-confirm-subject {
+  overflow-wrap: anywhere;
+}
+.communication-confirm-subject code {
+  color: var(--muted);
+}
 @media (max-width: 1100px) {
   .communication-delivery-table .management-head,
   .communication-delivery-table .management-row {

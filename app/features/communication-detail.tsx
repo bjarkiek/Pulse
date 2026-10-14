@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { apiFetch, errorMessage } from "@/lib/api-client";
+import { ConfirmDialog } from "./communication-dialog";
 import {
   COMMUNICATION_STATUS_TONE,
   COMMUNICATION_TEMPLATE_LABELS,
@@ -61,6 +62,11 @@ export function CommunicationDetail({
   const [page, setPage] = useState(1);
   // True while one of the header's actions is on its way: the buttons wait, so a second click cannot send it twice.
   const [busy, setBusy] = useState(false);
+  // The version of the communication that the open question (cancel sending, unschedule) is about. The question goes away with that version:
+  // once the communication has moved on it is a different question, and one that was not asked.
+  const [confirming, setConfirming] = useState<{
+    version: string | undefined;
+  } | null>(null);
   const query = new URLSearchParams({
     page: String(page),
     pageSize: String(PAGE_SIZE),
@@ -181,6 +187,8 @@ export function CommunicationDetail({
     record.status === "Scheduled" && record.scheduledAt
       ? `${t("Scheduled")} ${when(record.scheduledAt)}`
       : record.status;
+  // A scheduled communication is taken back to a draft; one that is sending is stopped for good.
+  const unschedule = record.status === "Scheduled";
   const rows = deliveries.data?.items ?? [];
   const total = deliveries.data?.total ?? 0;
   const first = (page - 1) * PAGE_SIZE + 1;
@@ -209,11 +217,9 @@ export function CommunicationDetail({
             <Button
               variant="secondary"
               disabled={busy}
-              onClick={() => void cancel(record)}
+              onClick={() => setConfirming({ version: record.version })}
             >
-              {record.status === "Scheduled"
-                ? t("Unschedule")
-                : t("Cancel sending")}
+              {unschedule ? t("Unschedule") : t("Cancel sending")}
             </Button>
           )}
           {/* A cancelled communication never sends again, so the server refuses to queue its recipients. */}
@@ -373,6 +379,39 @@ export function CommunicationDetail({
           </span>
         </div>
       )}
+      {confirming &&
+        confirming.version === record.version &&
+        (record.status === "Scheduled" || record.status === "Sending") && (
+          <ConfirmDialog
+            id="communication-cancel-title"
+            title={
+              unschedule
+                ? t("Unschedule this communication?")
+                : t("Cancel sending this communication?")
+            }
+            keepLabel={unschedule ? t("Keep schedule") : t("Keep sending")}
+            confirmLabel={unschedule ? t("Unschedule") : t("Cancel sending")}
+            onConfirm={async () => {
+              await cancel(record);
+              setConfirming(null);
+            }}
+            onClose={() => setConfirming(null)}
+          >
+            {/* The id again: the dialog covers the header, and the wrong communication is the mistake to prevent. */}
+            <p className="communication-confirm-subject">
+              <strong>{record.id}</strong> · {record.title}
+            </p>
+            <p>
+              {unschedule
+                ? t(
+                    "It will not be sent at the scheduled time and becomes a draft again, which you can edit and schedule again. Its recipients are not chosen yet, so nobody is affected.",
+                  )
+                : t(
+                    "Recipients still waiting, including those to be tried again, will not receive it. Mail already handed to SendGrid is not recalled. This cannot be undone.",
+                  )}
+            </p>
+          </ConfirmDialog>
+        )}
     </div>
   );
 }

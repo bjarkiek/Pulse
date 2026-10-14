@@ -701,3 +701,23 @@ Object.assign(internalTranslations, {
   Reason: "Ástæða",
   Since: "Frá",
 });
+
+// The questions asked before cancelling, unscheduling and removing (ConfirmDialog).
+Object.assign(internalTranslations, {
+  "Cancel sending this communication?": "Hætta við þessa sendingu?",
+  "Recipients still waiting, including those to be tried again, will not receive it. Mail already handed to SendGrid is not recalled. This cannot be undone.":
+    "Viðtakendur sem bíða enn, líka þeir sem reynt verður við aftur, fá hana ekki. Póstur sem þegar er kominn til SendGrid er ekki kallaður til baka. Ekki er hægt að afturkalla þetta.",
+  "Keep sending": "Halda sendingu áfram",
+  "Unschedule this communication?": "Aftengja tímasetningu þessarar sendingar?",
+  "It will not be sent at the scheduled time and becomes a draft again, which you can edit and schedule again. Its recipients are not chosen yet, so nobody is affected.":
+    "Hún verður ekki send á tilsettum tíma og verður aftur að drögum sem þú getur breytt og tímasett aftur. Viðtakendur hafa ekki verið valdir enn, svo þetta hefur ekki áhrif á neinn.",
+  "Keep schedule": "Halda tímasetningu",
+  "Remove this contact?": "Fjarlægja þennan tengilið?",
+  "The contact stops receiving communications for this company. Earlier deliveries stay in their campaigns.":
+    "Tengiliðurinn fær ekki lengur sendingar fyrir þetta fyrirtæki. Fyrri afhendingar haldast í sendingunum.",
+  "Keep contact": "Halda tengilið",
+  "Remove this suppression?": "Fjarlægja þessa útilokun?",
+  "The address can receive communications again, and the contacts with it become active again. If it bounces or unsubscribes again, SendGrid reports it and it is suppressed again.":
+    "Netfangið getur fengið sendingar aftur og tengiliðir með það netfang verða virkir á ný. Ef netfangið skilar sér ekki eða er afskráð aftur lætur SendGrid vita og það er útilokað á ný.",
+  "Keep suppression": "Halda útilokun",
+});

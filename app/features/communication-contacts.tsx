@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiFetch, errorMessage } from "@/lib/api-client";
+import { ConfirmDialog } from "./communication-dialog";
 import { useResource } from "./use-resource";
 import {
   Button,
@@ -38,6 +39,8 @@ export function CommunicationContactsTab({
   const [editing, setEditing] = useState<ContactItem | "new" | "import" | null>(
     null,
   );
+  // The contact the open question ("Remove this contact?") is about.
+  const [removing, setRemoving] = useState<ContactItem | null>(null);
   const [reload, setReload] = useState(0);
   // The answer for one company: it is shown only while that company is the one chosen, so a list is never shown under another's name.
   const [loaded, setLoaded] = useState<{
@@ -73,7 +76,6 @@ export function CommunicationContactsTab({
 
   const refresh = () => setReload((count) => count + 1);
   async function remove(contact: ContactItem) {
-    if (!window.confirm(`${t("Remove")} ${contact.email}?`)) return;
     try {
       await apiFetch(`${API}/contacts/${contact.id}`, { method: "DELETE" });
       onToast(t("Contact removed."));
@@ -81,6 +83,7 @@ export function CommunicationContactsTab({
       onToast(errorMessage(error));
     }
     refresh();
+    setRemoving(null);
   }
   const closeDialog = () => {
     setEditing(null);
@@ -175,7 +178,7 @@ export function CommunicationContactsTab({
                 <Button variant="secondary" onClick={() => setEditing(contact)}>
                   {t("Edit")}
                 </Button>
-                <Button variant="ghost" onClick={() => void remove(contact)}>
+                <Button variant="ghost" onClick={() => setRemoving(contact)}>
                   {t("Remove")}
                 </Button>
               </span>
@@ -199,6 +202,26 @@ export function CommunicationContactsTab({
           onClose={closeDialog}
           onToast={onToast}
         />
+      )}
+      {removing && (
+        <ConfirmDialog
+          id="contact-remove-title"
+          title={t("Remove this contact?")}
+          keepLabel={t("Keep contact")}
+          confirmLabel={t("Remove")}
+          onConfirm={() => remove(removing)}
+          onClose={() => setRemoving(null)}
+        >
+          <p className="communication-confirm-subject">
+            <strong>{removing.displayName}</strong>{" "}
+            <code>{removing.email}</code>
+          </p>
+          <p>
+            {t(
+              "The contact stops receiving communications for this company. Earlier deliveries stay in their campaigns.",
+            )}
+          </p>
+        </ConfirmDialog>
       )}
     </section>
   );
@@ -509,6 +532,8 @@ export function SuppressionsTab({
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  // The suppression the open question ("Remove this suppression?") is about.
+  const [removing, setRemoving] = useState<SuppressionItem | null>(null);
   async function add(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -540,6 +565,7 @@ export function SuppressionsTab({
       onToast(errorMessage(error));
     }
     list.retry();
+    setRemoving(null);
   }
   return (
     <section className="page-stack" data-tour="communications-suppressions">
@@ -611,13 +637,32 @@ export function SuppressionsTab({
               <span>{t(item.source)}</span>
               <span>{item.createdAt.slice(0, 10)}</span>
               <span className="communication-row-actions">
-                <Button variant="ghost" onClick={() => void remove(item)}>
+                <Button variant="ghost" onClick={() => setRemoving(item)}>
                   {t("Remove")}
                 </Button>
               </span>
             </div>
           ))}
         </div>
+      )}
+      {removing && (
+        <ConfirmDialog
+          id="suppression-remove-title"
+          title={t("Remove this suppression?")}
+          keepLabel={t("Keep suppression")}
+          confirmLabel={t("Remove")}
+          onConfirm={() => remove(removing)}
+          onClose={() => setRemoving(null)}
+        >
+          <p className="communication-confirm-subject">
+            <code>{removing.email}</code>
+          </p>
+          <p>
+            {t(
+              "The address can receive communications again, and the contacts with it become active again. If it bounces or unsubscribes again, SendGrid reports it and it is suppressed again.",
+            )}
+          </p>
+        </ConfirmDialog>
       )}
     </section>
   );

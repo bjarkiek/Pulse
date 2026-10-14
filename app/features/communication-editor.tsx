@@ -1,12 +1,5 @@
 "use client";
-import {
-  Fragment,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ApiFailure, apiFetch, errorMessage } from "@/lib/api-client";
 import {
   Button,
@@ -18,6 +11,7 @@ import {
   type CommunicationItem,
   type Company,
 } from "./shared";
+import { ModalDialog } from "./communication-dialog";
 import {
   COMMUNICATION_TEMPLATE_LABELS,
   Field,
@@ -775,51 +769,6 @@ function PreviewFrame({ html, title }: { html: string; title: string }) {
             : undefined
         }
       />
-    </div>
-  );
-}
-
-/** The frame the shell's dialog behaviour (focus, Tab, Escape, the backdrop) expects: a `modal-layer` around a `role="dialog"` section. */
-function ModalDialog({
-  id,
-  title,
-  onClose,
-  children,
-}: {
-  id: string;
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  const t = useT();
-  return (
-    <div
-      className="modal-layer"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section
-        className="management-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={id}
-      >
-        <header>
-          <div>
-            <p className="eyebrow">{t("Confirm")}</p>
-            <h2 id={id}>{title}</h2>
-          </div>
-          <button
-            className="icon-button"
-            onClick={onClose}
-            aria-label={t("Close")}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        {children}
-      </section>
     </div>
   );
 }
