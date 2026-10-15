@@ -4881,3 +4881,11 @@ a.tour-menu-item {
     display: grid;
   }
 }
+
+.build-version {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono, "IBM Plex Mono", monospace);
+  font-size: 10px;
+  color: var(--neutral-400);
+}

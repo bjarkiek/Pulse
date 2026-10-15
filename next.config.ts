@@ -1,8 +1,20 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
 import { PREVIEW_CONTENT_SECURITY_POLICY } from "./lib/security-policy";
+
+// Version shown in the app footer and on /api/health, fixed at build time so a
+// deployment can be recognised: package version, the commit (BUILD_ID passed to
+// the container build; "local" otherwise) and the moment the build ran.
+const appVersion = JSON.parse(readFileSync("./package.json", "utf8")).version as string;
+const buildCommit = (process.env.BUILD_ID || "local").slice(0, 7);
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  env: {
+    NEXT_PUBLIC_APP_VERSION: appVersion,
+    NEXT_PUBLIC_BUILD_COMMIT: buildCommit,
+    NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
+  },
   agentRules: false,
   turbopack: { root: process.cwd() },
   poweredByHeader: false,

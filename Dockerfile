@@ -7,7 +7,9 @@ FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a55
 WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
+# Commit shown in the app footer: --build-arg BUILD_ID=<full commit sha>.
+ARG BUILD_ID=""
+ENV BUILD_ID=$BUILD_ID NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS runner

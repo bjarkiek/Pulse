@@ -696,6 +696,13 @@ export function AppShell() {
                       {organizationContexts.find((o) => o.active)?.name} ·{" "}
                       {organizationContexts.find((o) => o.active)?.role}
                     </span>
+                    <span
+                      className="build-version"
+                      title={`Built ${process.env.NEXT_PUBLIC_BUILD_TIME ?? ""}`}
+                    >
+                      v{process.env.NEXT_PUBLIC_APP_VERSION} ·{" "}
+                      {process.env.NEXT_PUBLIC_BUILD_COMMIT}
+                    </span>
                   </div>
                   <Icon name="chevron" size={15} />
                 </div>
