@@ -11,6 +11,7 @@ import { getIdentity } from "../lib/server/auth";
 import { POST as dcAuthPost } from "../app/dc-auth/route";
 import { GET as dcEmbedGet } from "../app/dc-embed/route";
 import { GET as meGet } from "../app/api/v1/me/route";
+import { GET as authenticationGet } from "../app/api/v1/admin/authentication/route";
 import { isEmbedRequest, proxy } from "../proxy";
 import { applyEmbedAuth } from "../lib/embed-auth";
 import { NextRequest } from "next/server";
@@ -264,6 +265,45 @@ test("a suspended user is refused by every sign-in path", async () => {
   await assert.rejects(resolveUserForEntra("oid-suspended", "tenant-1", "suspended@uidata.com", "Suspended"), /USER_DISABLED/);
   const listed = (await listUsers(admin)).find((u) => u.email === "suspended@uidata.com");
   assert.equal(listed?.status, "Suspended", "a refused sign-in changes nothing");
+});
+
+// The Authentication page reads the real provider state from the server: Entra ID
+// is configured through the App Service settings, so the page must reflect them
+// instead of a placeholder. The client secret never leaves the server.
+test("admin/authentication reports whether Entra ID is configured, from the environment, without the secret", async () => {
+  const saved = {
+    tenant: process.env.AUTH_ENTRA_TENANT_ID,
+    client: process.env.AUTH_ENTRA_CLIENT_ID,
+    secret: process.env.AUTH_ENTRA_CLIENT_SECRET,
+  };
+  try {
+    delete process.env.AUTH_ENTRA_TENANT_ID;
+    delete process.env.AUTH_ENTRA_CLIENT_ID;
+    delete process.env.AUTH_ENTRA_CLIENT_SECRET;
+    const unset = await authenticationGet(new Request("http://localhost/api/v1/admin/authentication"));
+    assert.equal(unset.status, 200);
+    const unsetBody = await unset.json();
+    assert.deepEqual(unsetBody.item.entra, { configured: false, clientId: null, tenantId: null });
+
+    process.env.AUTH_ENTRA_TENANT_ID = "11111111-2222-4333-8444-555555555555";
+    process.env.AUTH_ENTRA_CLIENT_ID = "66666666-7777-4888-8999-000000000000";
+    process.env.AUTH_ENTRA_CLIENT_SECRET = "never-shown";
+    const set = await authenticationGet(new Request("http://localhost/api/v1/admin/authentication"));
+    const body = await set.json();
+    assert.equal(body.item.entra.configured, true);
+    assert.equal(body.item.entra.clientId, "66666666-7777-4888-8999-000000000000");
+    assert.equal(body.item.entra.tenantId, "11111111-2222-4333-8444-555555555555");
+    assert.ok(!JSON.stringify(body).includes("never-shown"), "the secret is not in the response");
+  } finally {
+    for (const [name, value] of [
+      ["AUTH_ENTRA_TENANT_ID", saved.tenant],
+      ["AUTH_ENTRA_CLIENT_ID", saved.client],
+      ["AUTH_ENTRA_CLIENT_SECRET", saved.secret],
+    ] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("dc launch for an unknown email throws NOT_PROVISIONED", async () => {

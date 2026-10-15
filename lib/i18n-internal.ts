@@ -340,6 +340,9 @@ export const internalTranslations: Record<string, string> = {
   "Internal contributor": "Innri þátttakandi",
   "System admin": "Kerfisstjóri",
   "Demo data is not available in production.": "Sýnigögn eru ekki í boði í framleiðsluumhverfi.",
+  "Set through the App Service configuration (Bicep parameters entraClientId and entraTenantId), not on this page.":
+    "Stillt í App Service-stillingunum (Bicep-breytur entraClientId og entraTenantId), ekki á þessari síðu.",
+  "Could not read the identity provider status.": "Ekki tókst að lesa stöðu auðkennisveitunnar.",
   selected: "valið",
   Welcome: "Velkomin",
   "Your product workspace": "Vinnusvæði vöruteymisins",

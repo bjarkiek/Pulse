@@ -2810,6 +2810,12 @@ h3 {
   line-height: 1.55;
   min-height: 51px;
 }
+.provider-card > p.muted {
+  min-height: 0;
+  margin-top: 8px;
+  color: var(--neutral-500);
+}
+
 .provider-card dl {
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);

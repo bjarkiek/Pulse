@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useT, type Company, Icon, Status, Button, PageIntro } from "./shared";
+
+/** What the server reports about the identity providers (System admins only). */
+type ProviderStatus = {
+  entra: { configured: boolean; clientId: string | null; tenantId: string | null };
+  otp: { emailSenderConfigured: boolean };
+};
 
 export function AuthenticationPage({
   companies,
@@ -15,6 +21,23 @@ export function AuthenticationPage({
   const [entraOpen, setEntraOpen] = useState(false);
   const [appId, setAppId] = useState("");
   const [tenantId, setTenantId] = useState("");
+  // Entra ID is configured through the App Service settings; the card shows the
+  // server's actual state instead of a placeholder.
+  const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [providersFailed, setProvidersFailed] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/v1/admin/authentication", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        setProviders((await response.json()).item);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setProvidersFailed(true);
+      });
+    return () => controller.abort();
+  }, []);
+  const entraConfigured = providers?.entra.configured === true;
   return (
     <div className="page-stack management-page auth-page">
       <PageIntro
@@ -59,12 +82,16 @@ export function AuthenticationPage({
             {t("Manage OTP policy")}
           </Button>
         </article>
-        <article className="provider-card">
+        <article className={entraConfigured ? "provider-card active" : "provider-card"}>
           <header>
             <span className="provider-icon">
               <Icon name="building" size={21} />
             </span>
-            <Status tone="warning">{t("Configuration pending")}</Status>
+            {entraConfigured ? (
+              <Status tone="success">{t("Active")}</Status>
+            ) : (
+              <Status tone="warning">{t("Configuration pending")}</Status>
+            )}
           </header>
           <h3>{t("Microsoft Entra ID")}</h3>
           <p>
@@ -76,13 +103,13 @@ export function AuthenticationPage({
             <div>
               <dt>{t("Application ID")}</dt>
               <dd>
-                <code>{t("Not configured")}</code>
+                <code>{providers?.entra.clientId ?? t("Not configured")}</code>
               </dd>
             </div>
             <div>
               <dt>{t("Azure Tenant ID")}</dt>
               <dd>
-                <code>{t("Not configured")}</code>
+                <code>{providers?.entra.tenantId ?? t("Not configured")}</code>
               </dd>
             </div>
             <div>
@@ -90,6 +117,13 @@ export function AuthenticationPage({
               <dd>{t("Configured tenant")}</dd>
             </div>
           </dl>
+          <p className="muted">
+            {providersFailed
+              ? t("Could not read the identity provider status.")
+              : t(
+                  "Set through the App Service configuration (Bicep parameters entraClientId and entraTenantId), not on this page.",
+                )}
+          </p>
           <Button onClick={() => setEntraOpen(true)}>
             {t("Configure Entra ID")}
           </Button>
