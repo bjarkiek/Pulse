@@ -7,3 +7,14 @@ dist
 .env*
 npm-debug.log*
 
+.claude
+.superpowers
+.github
+docs
+examples
+outputs
+work
+*.pptx
+*.pdf
+tmp
+.vscode
