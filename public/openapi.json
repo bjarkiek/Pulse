@@ -2693,6 +2693,45 @@
         "x-authorization": "SendGrid Event Webhook signature"
       }
     },
+    "/api/v1/internal/communications/process": {
+      "post": {
+        "operationId": "post_api_v1_internal_communications_process",
+        "x-source-file": "app/api/v1/internal/communications/process/route.ts",
+        "x-authorization": "Active internal role; writes enforce repository-specific permissions",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "sessionBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/internal/communications": {
       "get": {
         "operationId": "listCommunications",

@@ -5,6 +5,7 @@ import { apiError, correlationId, json } from "@/lib/server/http";
 import { executeIdempotent } from "@/lib/server/idempotency";
 import { readJson, parseInput, requestHasBody } from "@/lib/server/validation";
 import { checkedMutation } from "@/lib/server/versions";
+import { processCommunicationBatch } from "@/lib/server/communications/delivery-worker";
 
 /** Sends the campaign now, or at `scheduledAt` when the body has one; no body is now. Under the version the caller read (If-Match), once per Idempotency-Key. */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -16,6 +17,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const result = await executeIdempotent(request, identity, `communication.send:${id}`, 200, async () => ({
       item: await checkedMutation(identity, "Communications", id, request.headers.get("if-match"), () => sendCommunication(identity, id, input)),
     }));
+    // Send now: start the worker straight away so the mail goes out in seconds rather than at the next tick. Production only, and
+    // best effort: the scheduled job and the ticker pick up whatever this pass leaves.
+    if (process.env.NODE_ENV === "production") void processCommunicationBatch(500).catch(() => undefined);
     return json(result.body, { status: result.status }, correlation);
   } catch (error) {
     return apiError(error, correlation);

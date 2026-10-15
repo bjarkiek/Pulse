@@ -23,6 +23,7 @@ import {
   SuppressionsTab,
 } from "./communication-contacts";
 import { useResource } from "./use-resource";
+import { ConfirmDialog } from "./communication-dialog";
 
 type Tab = "campaigns" | "contacts" | "suppressions";
 /**
@@ -81,13 +82,40 @@ const when = (iso: string) => iso.slice(0, 16).replace("T", " ");
 export function CommunicationsPage({
   companies,
   releases,
+  activeRole,
   onToast,
 }: {
   companies: Company[];
   releases: ReleaseItem[];
+  /** The role in the active company; Product managers and System admins may process the queue and archive. */
+  activeRole: string;
   onToast: (message: string) => void;
 }) {
   const t = useT();
+  const canManage = activeRole === "Product manager" || activeRole === "System admin";
+  // The communication being archived (confirmation open), and a guard so a second click does not start a second pass or archive.
+  const [archiving, setArchiving] = useState<CommunicationItem | null>(null);
+  const [processing, setProcessing] = useState(false);
+  async function processQueue() {
+    if (processing) return;
+    setProcessing(true);
+    try {
+      const data = await apiFetch<{
+        item: { skipped?: boolean; accepted: number; retried: number; deadLettered: number; completed: string[] };
+      }>(`${API}/process`, { method: "POST", headers: mutationHeaders(false) });
+      const r = data.item;
+      onToast(
+        r.skipped
+          ? "Nothing was processed: sending is disabled in Settings."
+          : `Queue processed: ${r.accepted} accepted, ${r.retried} to retry, ${r.deadLettered} failed.`,
+      );
+      reload();
+    } catch (error) {
+      onToast(errorMessage(error));
+    } finally {
+      setProcessing(false);
+    }
+  }
   const [tab, setTab] = useState<Tab>("campaigns");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<CommunicationItem | null>(null);
@@ -246,6 +274,15 @@ export function CommunicationsPage({
         description="Compose branded product updates and notices, choose the companies that receive them, and track delivery."
         action={
           <div className="communication-new">
+            {canManage && (
+              <Button
+                variant="ghost"
+                disabled={processing}
+                onClick={() => void processQueue()}
+              >
+                {processing ? t("Processing…") : t("Process queue now")}
+              </Button>
+            )}
             <Button
               icon="plus"
               dataTour="communications-new"
@@ -374,10 +411,51 @@ export function CommunicationsPage({
                     >
                       {t("Duplicate")}
                     </Button>
+                    {canManage &&
+                      ["Draft", "Sent", "Cancelled"].includes(item.status) && (
+                        <Button
+                          variant="ghost"
+                          onClick={() => setArchiving(item)}
+                        >
+                          {t("Archive")}
+                        </Button>
+                      )}
                   </span>
                 </div>
               ))}
             </div>
+          )}
+          {archiving && (
+            <ConfirmDialog
+              id="communication-archive-title"
+              title={t("Archive this communication?")}
+              keepLabel={t("Keep it")}
+              confirmLabel={t("Archive")}
+              onConfirm={async () => {
+                const target = archiving;
+                try {
+                  await apiFetch(`${API}/${target.id}`, {
+                    method: "DELETE",
+                    headers: mutationHeaders(false),
+                  });
+                  onToast(`${target.id} was archived.`);
+                  reload();
+                } catch (error) {
+                  onToast(errorMessage(error));
+                }
+                setArchiving(null);
+              }}
+              onClose={() => setArchiving(null)}
+            >
+              <p className="communication-confirm-subject">
+                <strong>{archiving.id}</strong> · {archiving.title}
+              </p>
+              <p>
+                {t(
+                  "It leaves the list and cannot be opened again. Delivery records stay in the audit trail.",
+                )}
+              </p>
+            </ConfirmDialog>
           )}
           {releases.some((release) => release.published) && (
             <p className="communication-release-hint">

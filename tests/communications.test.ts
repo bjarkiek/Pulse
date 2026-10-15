@@ -1225,6 +1225,20 @@ test("campaigns: any internal role reads, only the publish roles write, and an u
   }
 });
 
+test("campaigns: a System admin archives a Sent campaign, a Product manager cannot, and nobody archives one that is Scheduled or Sending", async () => {
+  const created = await createCommunication(PM, draftInput);
+  const stored = memoryCommunications().find((c) => c.id === created.id)!;
+  stored.status = "Sent";
+  await assert.rejects(deleteCommunication(PM, created.id), /INVALID_COMMUNICATION_NOT_DELETABLE/, "a Product manager keeps a Sent campaign");
+  for (const status of ["Scheduled", "Sending"] as const) {
+    stored.status = status;
+    await assert.rejects(deleteCommunication(ADMIN, created.id), /INVALID_COMMUNICATION_NOT_DELETABLE/, `${status}: even a System admin waits`);
+  }
+  stored.status = "Sent";
+  assert.equal(await deleteCommunication(ADMIN, created.id), undefined);
+  assert.equal(memoryCommunications().some((c) => c.id === created.id), false, "the archived campaign is gone from the list");
+});
+
 test("campaigns: only a Draft is editable, only a Draft or a Cancelled campaign that no mail left for is deletable, and a copy is always a fresh Draft", async () => {
   const created = await createCommunication(PM, draftInput);
   const stored = memoryCommunications().find((c) => c.id === created.id)!;
@@ -1721,7 +1735,7 @@ test("campaigns, SQL: a delete is one guarded soft-delete with its audit row, an
       assert.equal(await deleteCommunication(PM, "COM-007"), undefined);
       const [write, audit, ...more] = sqlWrites(calls);
       assert.equal(more.length, 0, status);
-      assert.match(write.text, /SET deleted_at=SYSUTCDATETIME\(\),updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\) WHERE public_id=@id AND status IN \('Draft','Cancelled'\) AND deleted_at IS NULL/);
+      assert.match(write.text, /SET deleted_at=SYSUTCDATETIME\(\),updated_by_user_id=@actor,updated_at=SYSUTCDATETIME\(\) WHERE public_id=@id AND status IN \('Draft','Sent','Cancelled'\) AND deleted_at IS NULL/);
       assert.deepEqual([write.inputs.id, write.inputs.actor], ["COM-007", PM.id], status);
       assert.deepEqual([audit.inputs.action, audit.inputs.entity, audit.inputs.before, audit.inputs.after], ["communication.deleted", SQL_UUID, null, "{}"], status);
       assert.ok(sqlWrites(calls).every((c) => c.inTransaction), `${status}: both writes ran inside the transaction`);

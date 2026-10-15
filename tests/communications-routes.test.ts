@@ -20,6 +20,7 @@ import { DEFAULT_COMMUNICATION_SETTINGS, saveCommunicationSettings } from "../li
 import { GET as communicationsGet, POST as communicationsPost } from "../app/api/v1/internal/communications/route";
 import { GET as communicationGet, PATCH as communicationPatch, DELETE as communicationDelete } from "../app/api/v1/internal/communications/[id]/route";
 import { POST as duplicatePost } from "../app/api/v1/internal/communications/[id]/duplicate/route";
+import { POST as processPost } from "../app/api/v1/internal/communications/process/route";
 import { GET as previewGet } from "../app/api/v1/internal/communications/[id]/preview/route";
 import { GET as audienceGet } from "../app/api/v1/internal/communications/[id]/audience/route";
 import { POST as testPost } from "../app/api/v1/internal/communications/[id]/test/route";
@@ -1570,4 +1571,12 @@ test("errorMessage: every sentence it says for a code has an Icelandic line, and
   }
   const is = makeT("is");
   assert.equal(is(errorMessage(new ApiFailure(400, "INVALID_AUDIENCE_EMPTY", "support-6"))), `${IS["Nobody matches this audience."]} Númer fyrir aðstoð: support-6`);
+});
+
+test("process: a signed-in Product manager or System admin runs one worker pass, with no body", async () => {
+  const response = await processPost(req("/api/v1/internal/communications/process", { method: "POST" }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(typeof body.item.accepted, "number");
+  assert.ok(Array.isArray(body.item.completed));
 });

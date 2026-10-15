@@ -872,6 +872,7 @@ export function AppShell() {
                   <CommunicationsPage
                     companies={companies}
                     releases={releases}
+                    activeRole={activeRole}
                     onToast={setToast}
                   />
                 )}

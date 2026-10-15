@@ -232,10 +232,13 @@ export async function duplicateCommunication(identity: PulseIdentity, id: string
  * a campaign that mailed anyone are the answer to "who received COM-012", so such a campaign stays (INVALID_COMMUNICATION_NOT_DELETABLE).
  */
 export async function deleteCommunication(identity: PulseIdentity, id: string) {
-  await requirePublishRole(identity);
+  const role = await requirePublishRole(identity);
   const current = await loadOne(id);
-  if (!["Draft", "Cancelled"].includes(current.status)) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
-  if (current.status === "Cancelled" && (await hasMailedRows(id))) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
+  // A System admin may archive any communication that is not waiting to send or sending (the list stays clean; rows are kept for the
+  // audit trail). A Product manager may remove drafts and cancelled communications that sent nothing.
+  const archivable = role === "System admin" ? ["Draft", "Sent", "Cancelled"] : ["Draft", "Cancelled"];
+  if (!archivable.includes(current.status)) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
+  if (role !== "System admin" && current.status === "Cancelled" && (await hasMailedRows(id))) throw new Error("INVALID_COMMUNICATION_NOT_DELETABLE");
   if (!isContentSqlActive()) {
     const store = memoryCommunications();
     store.splice(store.findIndex((c) => c.id === id), 1);
@@ -248,7 +251,7 @@ export async function deleteCommunication(identity: PulseIdentity, id: string) {
     const uuid = await findCommunicationUuid(id);
     // Soft delete only: deliveries keep their foreign key, and the guard is repeated so a send that wins the race deletes nothing.
     const result = await (await getSqlPool()).request().input("id", sql.NVarChar(32), id).input("actor", sql.UniqueIdentifier, identity.id)
-      .query("UPDATE dbo.Communications SET deleted_at=SYSUTCDATETIME(),updated_by_user_id=@actor,updated_at=SYSUTCDATETIME() WHERE public_id=@id AND status IN ('Draft','Cancelled') AND deleted_at IS NULL");
+      .query("UPDATE dbo.Communications SET deleted_at=SYSUTCDATETIME(),updated_by_user_id=@actor,updated_at=SYSUTCDATETIME() WHERE public_id=@id AND status IN ('Draft','Sent','Cancelled') AND deleted_at IS NULL");
     if (!result.rowsAffected[0]) throw new Error("NOT_FOUND");
     await insertAudit(identity, "communication.deleted", uuid, {});
   });

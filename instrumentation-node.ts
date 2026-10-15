@@ -9,6 +9,33 @@ import { startSlackAssistant } from "@/lib/server/slack/socket-service";
 import { getRuntimeSettings } from "@/lib/server/settings-repository";
 import { assertProductionConfiguration } from "@/lib/server/production-config";
 
+// Runs the customer-communications worker once a minute inside the web app, so queued mail goes out without an external scheduler.
+// Several instances are safe (the worker claims rows with locks and leases). Set COMMUNICATIONS_TICKER=off to rely on the scheduled
+// job alone. Needs the App Service to stay running (Always On); a stopped app sends nothing.
+declare global {
+  var pulseCommunicationsTicker: ReturnType<typeof setInterval> | undefined;
+}
+
+function startCommunicationsTicker() {
+  if (process.env.NODE_ENV !== "production") return;
+  if (process.env.COMMUNICATIONS_TICKER === "off") return;
+  if (globalThis.pulseCommunicationsTicker) return;
+  let running = false;
+  globalThis.pulseCommunicationsTicker = setInterval(async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { processCommunicationBatch } = await import("@/lib/server/communications/delivery-worker");
+      await processCommunicationBatch(500);
+    } catch {
+      // The next tick tries again; the worker logs its own failures.
+    } finally {
+      running = false;
+    }
+  }, 60_000);
+  globalThis.pulseCommunicationsTicker.unref?.();
+}
+
 export async function start() {
   if (process.env.NEXT_PHASE === "phase-production-build") return;
   assertProductionConfiguration();
@@ -17,6 +44,7 @@ export async function start() {
   // Best-effort — a failed read just means the first settings access primes it.
   try { await getRuntimeSettings(); } catch { /* SQL not reachable yet */ }
   await startSlackAssistant();
+  startCommunicationsTicker();
   // Graceful disconnect on shutdown (spec §5.3). Idempotent — the guard in
   // startSlackAssistant plus this once-handler mean at most one connection and
   // one stop per process.
