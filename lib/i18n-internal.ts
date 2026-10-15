@@ -338,6 +338,9 @@ export const internalTranslations: Record<string, string> = {
   Viewer: "Lesaðgangur",
   "Product manager": "Vörustjóri",
   "Internal contributor": "Innri þátttakandi",
+  "Choose which sign-in methods this company's users may use. At least one is required.": "Veldu hvaða innskráningarleiðir notendur þessa fyrirtækis mega nota. Að minnsta kosti ein er nauðsynleg.",
+  "The authentication policy could not be saved.": "Ekki tókst að vista auðkenningarstefnuna.",
+  "Authentication policy saved for": "Auðkenningarstefna vistuð fyrir",
   "System admin": "Kerfisstjóri",
   "Demo data is not available in production.": "Sýnigögn eru ekki í boði í framleiðsluumhverfi.",
   "Set through the App Service configuration (Bicep parameters entraClientId and entraTenantId), not on this page.":

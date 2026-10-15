@@ -12,9 +12,11 @@ type ProviderStatus = {
 
 export function AuthenticationPage({
   companies,
+  onChange,
   onToast,
 }: {
   companies: Company[];
+  onChange: (companies: Company[]) => void;
   onToast: (message: string) => void;
 }) {
   const t = useT();
@@ -38,6 +40,44 @@ export function AuthenticationPage({
     return () => controller.abort();
   }, []);
   const entraConfigured = providers?.entra.configured === true;
+  // The company whose allowed sign-in methods are being edited.
+  const [policyFor, setPolicyFor] = useState<Company | null>(null);
+  const [policy, setPolicy] = useState<("OTP" | "Entra ID")[]>([]);
+  const [policySaving, setPolicySaving] = useState(false);
+  function openPolicy(company: Company) {
+    setPolicy([...company.authentication] as ("OTP" | "Entra ID")[]);
+    setPolicyFor(company);
+  }
+  function togglePolicy(method: "OTP" | "Entra ID") {
+    setPolicy((current) =>
+      current.includes(method)
+        ? current.filter((value) => value !== method)
+        : [...current, method],
+    );
+  }
+  async function savePolicy() {
+    if (!policyFor || policy.length === 0 || policySaving) return;
+    setPolicySaving(true);
+    try {
+      const response = await fetch("/api/v1/admin/organizations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...policyFor, authentication: policy }),
+      });
+      if (!response.ok) {
+        onToast("The authentication policy could not be saved.");
+        return;
+      }
+      const saved = (await response.json()).item as Company;
+      onChange(companies.map((item) => (item.id === saved.id ? saved : item)));
+      onToast(`Authentication policy saved for ${saved.name}.`);
+      setPolicyFor(null);
+    } catch {
+      onToast("The authentication policy could not be saved.");
+    } finally {
+      setPolicySaving(false);
+    }
+  }
   return (
     <div className="page-stack management-page auth-page">
       <PageIntro
@@ -189,9 +229,7 @@ export function AuthenticationPage({
                 </span>
                 <button
                   className="text-link"
-                  onClick={() =>
-                    onToast(`Authentication policy opened for ${company.name}.`)
-                  }
+                  onClick={() => openPolicy(company)}
                 >
                   {t("Manage")}
                   <Icon name="arrow" size={13} />
@@ -200,6 +238,66 @@ export function AuthenticationPage({
             ))}
         </div>
       </section>
+      {policyFor && (
+        <div
+          className="modal-layer"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPolicyFor(null);
+          }}
+        >
+          <section
+            className="management-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="policy-title"
+          >
+            <header>
+              <div>
+                <p className="eyebrow">{t("Company authentication policy")}</p>
+                <h2 id="policy-title">{policyFor.name}</h2>
+                <p>
+                  {t(
+                    "Choose which sign-in methods this company's users may use. At least one is required.",
+                  )}
+                </p>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setPolicyFor(null)}
+                aria-label={t("Close")}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <fieldset className="auth-options">
+              <legend>{t("Allowed authentication")}</legend>
+              {(["OTP", "Entra ID"] as const).map((method) => (
+                <label key={method}>
+                  <input
+                    type="checkbox"
+                    checked={policy.includes(method)}
+                    onChange={() => togglePolicy(method)}
+                  />
+                  <span>
+                    <strong>{method === "OTP" ? t("One-time password") : t("Microsoft Entra ID")}</strong>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <footer>
+              <Button variant="secondary" onClick={() => setPolicyFor(null)}>
+                {t("Cancel")}
+              </Button>
+              <Button
+                onClick={savePolicy}
+                disabled={policy.length === 0 || policySaving}
+              >
+                {policySaving ? t("Saving…") : t("Save policy")}
+              </Button>
+            </footer>
+          </section>
+        </div>
+      )}
       {entraOpen && (
         <div
           className="modal-layer"

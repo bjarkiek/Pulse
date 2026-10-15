@@ -902,6 +902,7 @@ export function AppShell() {
                 {page === "authentication" && (
                   <AuthenticationPage
                     companies={companies}
+                    onChange={setCompanies}
                     onToast={setToast}
                   />
                 )}
