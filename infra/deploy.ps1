@@ -215,9 +215,12 @@ else {
     '--registry', $acrName,
     '--image', "pulse:$Tag",
     '--image', 'pulse:latest',
-    '--file', 'Dockerfile',
-    $repoRoot
+    '--file', 'Dockerfile'
   )
+  # The commit shown in the app footer and on /api/health.
+  $fullSha = (& git -C $repoRoot rev-parse HEAD 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $fullSha) { $buildArgs += @('--build-arg', "BUILD_ID=$($fullSha.Trim())") }
+  $buildArgs += $repoRoot
   # `az acr build` streams the cloud build logs, which contain the `▲ Next.js`
   # banner. az's isolated Python defaults its stdout to cp1252 on Windows and
   # crashes trying to write `▲`. Run az's own interpreter with `-X utf8` (the one
