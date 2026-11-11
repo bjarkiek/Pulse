@@ -81,8 +81,6 @@ export function AuthenticationPage({
   return (
     <div className="page-stack management-page auth-page">
       <PageIntro
-        eyebrow="Identity providers"
-        title="Authentication"
         description="DataCentral Pulse supports email OTP and Microsoft Entra ID. Authentication identifies the person; company memberships authorize their customer access."
       />
       <div className="provider-grid">

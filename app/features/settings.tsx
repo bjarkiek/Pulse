@@ -1,8 +1,9 @@
 "use client";
+import { formatDateTime } from "@/lib/format-date";
 
 import { CommunicationSettingsCard } from "./communication-settings";
 import { DeliveryStatus } from "./delivery-status";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 import {
   audienceMatches,
@@ -30,6 +31,7 @@ export function SettingsPage({
   onToast: (message: string) => void;
 }) {
   const t = useT();
+  const sectionsRef = useRef<HTMLDivElement>(null);
   const [settings, setSettings] = useState<PulseSettings>({
     formulaVersion: 1,
     attachmentMaxMb: 25,
@@ -169,10 +171,10 @@ export function SettingsPage({
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="System administration"
-        title="Product settings"
         description="Govern taxonomy, customer wording, retention, scoring, localization, and secure attachment policy."
       />
+      <SectionJumpList container={sectionsRef} />
+      <div className="page-stack settings-sections" ref={sectionsRef}>
       <section className="settings-grid">
         <CommunicationSettingsCard onToast={onToast} />
         <DeliveryStatus />
@@ -477,7 +479,76 @@ export function SettingsPage({
         </article>
       </section>
       <OnboardingSettings onToast={onToast} />
+      </div>
     </div>
+  );
+}
+
+/**
+ * The way around a long settings page: one chip per section, pinned under the top bar. Every section stays on the page (the guided
+ * tours point at several of them), so this only scrolls. The list is read from the cards that are actually drawn, in the language
+ * they are drawn in, so a card added later needs nothing here.
+ */
+/** Numbers the sections once for the life of the page, so two runs of the effect can never hand out the same id. */
+let sectionSerial = 0;
+
+function SectionJumpList({
+  container,
+}: {
+  container: RefObject<HTMLDivElement | null>;
+}) {
+  const t = useT();
+  const [sections, setSections] = useState<{ id: string; label: string }[]>(
+    [],
+  );
+  useEffect(() => {
+    const root = container.current;
+    if (!root) return;
+    const read = () => {
+      const next = [
+        ...root.querySelectorAll<HTMLElement>(
+          ".settings-card, .tour-progress-panel",
+        ),
+      ].flatMap((card) => {
+        const label = card.querySelector("h3")?.textContent?.trim();
+        if (!label) return [];
+        if (!card.id) card.id = `settings-section-${++sectionSerial}`;
+        return [{ id: card.id, label }];
+      });
+      setSections((current) =>
+        JSON.stringify(current) === JSON.stringify(next) ? current : next,
+      );
+    };
+    read();
+    // The cards arrive as their data does, and their headings change with the language.
+    const observer = new MutationObserver(read);
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    return () => observer.disconnect();
+  }, [container]);
+  if (sections.length < 2) return null;
+  return (
+    <nav className="section-jump" aria-label={t("Jump to section")}>
+      {sections.map((section) => (
+        <button
+          key={section.id}
+          onClick={() =>
+            document.getElementById(section.id)?.scrollIntoView({
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                .matches
+                ? "auto"
+                : "smooth",
+              block: "start",
+            })
+          }
+        >
+          {section.label}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -842,7 +913,7 @@ export function OnboardingSettings({
                   : "—"}
               </span>
               <span>
-                {row ? row.updatedAt.slice(0, 16).replace("T", " ") : "—"}
+                {row ? formatDateTime(row.updatedAt) : "—"}
               </span>
             </div>
           ))}

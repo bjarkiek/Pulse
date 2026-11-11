@@ -58,8 +58,6 @@ export function InternalIdeasPage({
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="Internal product workspace"
-        title="Canonical product ideas"
         description="Consolidate customer evidence, score priorities, stage safe wording, and publish deliberate product decisions."
         action={
           <Button icon="plus" onClick={() => setEditing("new")}>

@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ApiFailure, apiFetch, errorMessage } from "@/lib/api-client";
+import { formatDateTime } from "@/lib/format-date";
 import {
   Button,
   COMMUNICATION_TOPIC_LABELS,
@@ -679,7 +680,7 @@ export function CommunicationEditor({
               {scheduleAt && (
                 <>
                   <dt>{t("Scheduled for")}</dt>
-                  <dd>{new Date(scheduleAt).toLocaleString()}</dd>
+                  <dd>{formatDateTime(scheduleAt)}</dd>
                 </>
               )}
             </dl>

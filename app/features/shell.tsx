@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 
 import { useEffect, useMemo, useState } from "react";
 
-import { apiFetch, errorMessage } from "@/lib/api-client";
+import { apiFetch, errorMessage, isFailureMessage } from "@/lib/api-client";
 
 import { clearDeviceDrafts } from "@/lib/draft-storage";
 
@@ -17,8 +17,8 @@ import { ChatPanel } from "../chat-panel";
 import { TourHost } from "../tour-host";
 
 import {
-  useT,
   mutationHeaders,
+  isUntriaged,
   DraftOwnerContext,
   LocaleContext,
   UserContext,
@@ -35,6 +35,7 @@ import {
   type IconName,
   Icon,
   Button,
+  SkeletonRows,
 } from "./shared";
 
 import {
@@ -98,13 +99,69 @@ const SettingsPage = dynamic(
 
 import { NotificationsPopover } from "./notifications";
 
-export const navItems: { id: Page; label: string; icon: IconName }[] = [
+type NavItem = { id: Page; label: string; icon: IconName; tour?: string };
+
+export const navItems: NavItem[] = [
   { id: "home", label: "Home", icon: "home" },
   { id: "ideas", label: "Browse ideas", icon: "spark" },
   { id: "roadmap", label: "Roadmap", icon: "map" },
   { id: "requests", label: "My requests", icon: "inbox" },
   { id: "updates", label: "Updates", icon: "bell" },
+  { id: "help", label: "Help", icon: "help", tour: "nav-help" },
 ];
+
+/** The pages of the DataCentral team: any of the three internal roles may open them. */
+const teamNavItems: NavItem[] = [
+  { id: "triage", label: "Triage inbox", icon: "layers", tour: "nav-triage" },
+  {
+    id: "productIdeas",
+    label: "Product ideas",
+    icon: "spark",
+    tour: "nav-product-ideas",
+  },
+  { id: "releases", label: "Releases", icon: "check", tour: "nav-releases" },
+  {
+    id: "communications",
+    label: "Communications",
+    icon: "send",
+    tour: "nav-communications",
+  },
+  { id: "analytics", label: "Analytics", icon: "chart", tour: "nav-analytics" },
+];
+
+/** The pages the server gives to a System admin only. */
+const adminNavItems: NavItem[] = [
+  { id: "companies", label: "Companies", icon: "building" },
+  { id: "users", label: "Users", icon: "users" },
+  { id: "authentication", label: "Authentication", icon: "shield" },
+  { id: "settings", label: "Settings", icon: "settings", tour: "nav-settings" },
+  { id: "audit", label: "Audit log", icon: "clock" },
+];
+
+const TEAM_ROLES = ["Internal contributor", "Product manager", "System admin"];
+
+/**
+ * Which groups of pages the sidebar offers. This only decides what is shown: the server authorizes every request on its own.
+ * The server grants the team pages to a membership in an Internal company, so that is what is read here. The local preview signs in
+ * a System admin of a Customer company, so the two roles that only the team can hold count on any membership too: showing a page
+ * the server then refuses is harmless, hiding one a person may use is not.
+ */
+export function navAccess(organizations: OrganizationContext[]) {
+  const roles = organizations
+    .filter(
+      (o) =>
+        (o.type === "Internal" && TEAM_ROLES.includes(o.role)) ||
+        o.role === "System admin" ||
+        o.role === "Internal contributor",
+    )
+    .map((o) => o.role);
+  return {
+    team: roles.length > 0,
+    admin: roles.includes("System admin"),
+    // The roles the server lets record a triage decision; an Internal contributor reviews and adds notes.
+    decide: roles.some((r) => r === "Product manager" || r === "System admin"),
+  };
+}
 
 export const pageTitles: Record<Page, string> = {
   home: "Home",
@@ -142,7 +199,13 @@ export function AppShell() {
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [organizationMenuOpen, setOrganizationMenuOpen] = useState(false);
   const [identityReady, setIdentityReady] = useState(false);
+  // Whether the first answer for each list has come (a failure counts: the list is then empty for a reason the toast gives).
+  // They stay set through later refetches, so a list never flickers back to placeholders, and are cleared on a company switch.
+  const [requestsLoaded, setRequestsLoaded] = useState(false);
+  const [ideasLoaded, setIdeasLoaded] = useState(false);
+  const [requestsFailed, setRequestsFailed] = useState(false);
   const [organizationContexts, setOrganizationContexts] = useState<
     OrganizationContext[]
   >([]);
@@ -284,10 +347,16 @@ export function AppShell() {
           ? response.json()
           : Promise.reject(new Error("load failed")),
       )
-      .then((data) => setRequests(data.items))
+      .then((data) => {
+        setRequests(data.items);
+        setRequestsFailed(false);
+        setRequestsLoaded(true);
+      })
       .catch((error) => {
-        if (error.name !== "AbortError")
-          setToast("Unable to load requests. Please retry.");
+        if (error.name === "AbortError") return;
+        setRequestsFailed(true);
+        setRequestsLoaded(true);
+        setToast("Unable to load requests. Please retry.");
       });
     return () => controller.abort();
   }, [identityReady, dataVersion]);
@@ -325,8 +394,14 @@ export function AppShell() {
     window.history.pushState({}, "", url);
   }
 
+  const access = useMemo(
+    () => navAccess(organizationContexts),
+    [organizationContexts],
+  );
+
+  // The team and admin lists are only asked for by the people the server answers.
   useEffect(() => {
-    if (!identityReady) return;
+    if (!identityReady || !access.team) return;
     const controller = new AbortController();
     Promise.all([
       fetch("/api/v1/internal/ideas", { signal: controller.signal }),
@@ -342,10 +417,10 @@ export function AppShell() {
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [identityReady, dataVersion]);
+  }, [identityReady, dataVersion, access.team]);
 
   useEffect(() => {
-    if (!identityReady) return;
+    if (!identityReady || !access.admin) return;
     const controller = new AbortController();
     Promise.all([
       fetch("/api/v1/admin/organizations", { signal: controller.signal }),
@@ -358,7 +433,7 @@ export function AppShell() {
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [identityReady, dataVersion]);
+  }, [identityReady, dataVersion, access.admin]);
 
   useEffect(() => {
     if (!identityReady) return;
@@ -369,17 +444,44 @@ export function AppShell() {
           ? response.json()
           : Promise.reject(new Error("load failed")),
       )
-      .then((data) => setIdeas(data.items))
-      .catch(() => {});
+      .then((data) => {
+        setIdeas(data.items);
+        setIdeasLoaded(true);
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") setIdeasLoaded(true);
+      });
     return () => controller.abort();
   }, [identityReady, dataVersion]);
 
+  // A failure is read, not glanced at: it stays longer and can be dismissed.
+  const toastFailed = toast ? isFailureMessage(toast) : false;
   useEffect(() => {
     if (toast) {
-      const timer = window.setTimeout(() => setToast(null), 3200);
+      const timer = window.setTimeout(
+        () => setToast(null),
+        toastFailed ? 8000 : 3200,
+      );
       return () => window.clearTimeout(timer);
     }
-  }, [toast]);
+  }, [toast, toastFailed]);
+
+  useEffect(() => {
+    if (!organizationMenuOpen) return;
+    const outside = (event: MouseEvent) => {
+      if (!(event.target as Element)?.closest(".organization-switcher"))
+        setOrganizationMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOrganizationMenuOpen(false);
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [organizationMenuOpen]);
 
   useEffect(() => {
     if (!identityReady) return;
@@ -402,6 +504,7 @@ export function AppShell() {
     setPage(next);
     setMenuOpen(false);
     setNotificationsOpen(false);
+    setOrganizationMenuOpen(false);
   }
 
   function addRequest(request: RequestItem) {
@@ -456,6 +559,8 @@ export function AppShell() {
     setDetailIdea(null);
     setRequests([]);
     setIdeas([]);
+    setRequestsLoaded(false);
+    setIdeasLoaded(false);
     setNotifications([]);
     setDataVersion((v) => v + 1);
     const url = new URL(window.location.href);
@@ -493,7 +598,28 @@ export function AppShell() {
       ? `${meUser.id}:${organizationContexts.find((o) => o.active)?.id || ""}`
       : null;
   // The role in the company the person is signed in to: it decides what the Updates page offers.
-  const activeRole = organizationContexts.find((o) => o.active)?.role ?? "";
+  const activeOrganization = organizationContexts.find((o) => o.active);
+  const activeRole = activeOrganization?.role ?? "";
+  const unreadCount = notifications.filter((n) => !n.readAt).length;
+  const untriagedCount = requests.filter(isUntriaged).length;
+  // An address naming a page this person is not offered (an old bookmark, a shared link) lands on Home, not on an empty page.
+  const pageAllowed =
+    (!teamNavItems.some((item) => item.id === page) || access.team) &&
+    (!adminNavItems.some((item) => item.id === page) || access.admin);
+  const shownPage: Page = pageAllowed ? page : "home";
+  const navButton = (item: NavItem, count = 0) => (
+    <button
+      key={item.id}
+      className={`nav-item ${shownPage === item.id ? "active" : ""}`}
+      aria-current={shownPage === item.id ? "page" : undefined}
+      onClick={() => navigate(item.id)}
+      data-tour={item.tour}
+    >
+      <Icon name={item.icon} size={17} />
+      <span>{t(item.label)}</span>
+      {count > 0 && <span className="nav-count">{count}</span>}
+    </button>
+  );
 
   if (!identityReady)
     return (
@@ -559,116 +685,30 @@ export function AppShell() {
                 aria-label="Primary navigation"
                 data-tour="nav"
               >
-                {navItems.map((item) => (
-                  <button
-                    key={item.id}
-                    className={`nav-item ${page === item.id ? "active" : ""}`}
-                    onClick={() => navigate(item.id)}
-                  >
-                    <Icon name={item.icon} size={17} />
-                    <span>{t(item.label)}</span>
-                    {item.id === "updates" &&
-                      notifications.some(
-                        (notification) => !notification.readAt,
-                      ) && (
-                        <span className="nav-count">
-                          {
-                            notifications.filter(
-                              (notification) => !notification.readAt,
-                            ).length
-                          }
-                        </span>
-                      )}
-                  </button>
-                ))}
-                <button
-                  className={`nav-item ${page === "help" ? "active" : ""}`}
-                  onClick={() => navigate("help")}
-                  data-tour="nav-help"
-                >
-                  <Icon name="help" size={17} />
-                  <span>{t("Help")}</span>
-                </button>
-                <div className="nav-section-label">{t("DataCentral team")}</div>
-                <button
-                  className={`nav-item ${page === "triage" ? "active" : ""}`}
-                  onClick={() => navigate("triage")}
-                  data-tour="nav-triage"
-                >
-                  <Icon name="layers" size={17} />
-                  <span>{t("Triage inbox")}</span>
-                  <span className="nav-count">
-                    {requests.filter((r) => r.status === "Submitted").length}
-                  </span>
-                </button>
-                <button
-                  className={`nav-item ${page === "productIdeas" ? "active" : ""}`}
-                  onClick={() => navigate("productIdeas")}
-                  data-tour="nav-product-ideas"
-                >
-                  <Icon name="spark" size={17} />
-                  <span>{t("Product ideas")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "releases" ? "active" : ""}`}
-                  onClick={() => navigate("releases")}
-                  data-tour="nav-releases"
-                >
-                  <Icon name="check" size={17} />
-                  <span>{t("Releases")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "communications" ? "active" : ""}`}
-                  onClick={() => navigate("communications")}
-                  data-tour="nav-communications"
-                >
-                  <Icon name="send" size={17} />
-                  <span>{t("Communications")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "analytics" ? "active" : ""}`}
-                  onClick={() => navigate("analytics")}
-                  data-tour="nav-analytics"
-                >
-                  <Icon name="map" size={17} />
-                  <span>{t("Analytics")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "companies" ? "active" : ""}`}
-                  onClick={() => navigate("companies")}
-                >
-                  <Icon name="building" size={17} />
-                  <span>{t("Companies")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "users" ? "active" : ""}`}
-                  onClick={() => navigate("users")}
-                >
-                  <Icon name="users" size={17} />
-                  <span>{t("Users")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "authentication" ? "active" : ""}`}
-                  onClick={() => navigate("authentication")}
-                >
-                  <Icon name="settings" size={17} />
-                  <span>{t("Authentication")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "settings" ? "active" : ""}`}
-                  onClick={() => navigate("settings")}
-                  data-tour="nav-settings"
-                >
-                  <Icon name="settings" size={17} />
-                  <span>{t("Settings")}</span>
-                </button>
-                <button
-                  className={`nav-item ${page === "audit" ? "active" : ""}`}
-                  onClick={() => navigate("audit")}
-                >
-                  <Icon name="clock" size={17} />
-                  <span>{t("Audit log")}</span>
-                </button>
+                {navItems.map((item) =>
+                  navButton(item, item.id === "updates" ? unreadCount : 0),
+                )}
+                {access.team && (
+                  <>
+                    <div className="nav-section-label">
+                      {t("DataCentral team")}
+                    </div>
+                    {teamNavItems.map((item) =>
+                      navButton(
+                        item,
+                        item.id === "triage" ? untriagedCount : 0,
+                      ),
+                    )}
+                  </>
+                )}
+                {access.admin && (
+                  <>
+                    <div className="nav-section-label">
+                      {t("Administration")}
+                    </div>
+                    {adminNavItems.map((item) => navButton(item))}
+                  </>
+                )}
               </nav>
               {!dcEmbed && (
                 <div className="sidebar-profile">
@@ -693,8 +733,7 @@ export function AppShell() {
                       {t("Sign out")}
                     </a>
                     <span>
-                      {organizationContexts.find((o) => o.active)?.name} ·{" "}
-                      {organizationContexts.find((o) => o.active)?.role}
+                      {activeOrganization?.name} · {t(activeRole)}
                     </span>
                     <span
                       className="build-version"
@@ -704,7 +743,6 @@ export function AppShell() {
                       {process.env.NEXT_PUBLIC_BUILD_COMMIT}
                     </span>
                   </div>
-                  <Icon name="chevron" size={15} />
                 </div>
               )}
             </aside>
@@ -727,7 +765,7 @@ export function AppShell() {
                   >
                     <Icon name="menu" />
                   </button>
-                  <h1>{t(pageTitles[page])}</h1>
+                  <h1>{t(pageTitles[shownPage])}</h1>
                 </div>
                 <div className="topbar-actions">
                   <button
@@ -746,30 +784,79 @@ export function AppShell() {
                   >
                     {locale === "is" ? "EN" : "IS"}
                   </button>
-                  {!dcEmbed && (
-                    <button className="workspace-switcher">
-                      <Icon name="building" size={15} />
-                      <span>
-                        {organizationContexts.find((o) => o.active)?.name}
+                  {!dcEmbed &&
+                    (organizationContexts.length > 1 ? (
+                      <div className="organization-switcher">
+                        <button
+                          className="workspace-switcher"
+                          aria-haspopup="menu"
+                          aria-expanded={organizationMenuOpen}
+                          aria-label={`${t("Switch organization")}: ${activeOrganization?.name ?? ""}`}
+                          onClick={() => {
+                            setNotificationsOpen(false);
+                            setOrganizationMenuOpen(!organizationMenuOpen);
+                          }}
+                        >
+                          <Icon name="building" size={15} />
+                          <span>{activeOrganization?.name}</span>
+                          <Icon name="chevron" size={13} />
+                        </button>
+                        {organizationMenuOpen && (
+                          <div className="organization-menu" role="menu">
+                            {organizationContexts.map((organization) => (
+                              <button
+                                key={organization.id}
+                                role="menuitemradio"
+                                aria-checked={Boolean(organization.active)}
+                                onClick={() => {
+                                  setOrganizationMenuOpen(false);
+                                  if (!organization.active)
+                                    void chooseOrganization(organization.id);
+                                }}
+                              >
+                                <span>
+                                  <strong>{organization.name}</strong>
+                                  <small>{t(organization.role)}</small>
+                                </span>
+                                {organization.active && (
+                                  <Icon name="check" size={15} />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      // One company: nothing to switch to, so it is a label and not a button.
+                      <span className="workspace-switcher workspace-label">
+                        <Icon name="building" size={15} />
+                        <span>{activeOrganization?.name}</span>
                       </span>
-                      <Icon name="chevron" size={13} />
-                    </button>
-                  )}
+                    ))}
                   <button
                     className="icon-button notification-button"
-                    aria-label={t("Notifications")}
+                    aria-label={
+                      unreadCount > 0
+                        ? `${t("Notifications")} (${unreadCount})`
+                        : t("Notifications")
+                    }
+                    aria-expanded={notificationsOpen}
                     data-tour="notifications"
-                    onClick={() => setNotificationsOpen(!notificationsOpen)}
+                    onClick={() => {
+                      setOrganizationMenuOpen(false);
+                      setNotificationsOpen(!notificationsOpen);
+                    }}
                   >
                     <Icon name="bell" />
-                    <span />
+                    {unreadCount > 0 && <span />}
                   </button>
                   <Button
                     icon="plus"
                     dataTour="submit-request"
                     onClick={() => setComposerOpen(true)}
+                    ariaLabel={t("Submit a request")}
                   >
-                    {t("Submit a request")}
+                    <span>{t("Submit a request")}</span>
                   </Button>
                 </div>
                 {notificationsOpen && (
@@ -793,7 +880,7 @@ export function AppShell() {
               </header>
 
               <main className="content">
-                {page === "home" && (
+                {shownPage === "home" && (
                   <HomePage
                     requests={requests}
                     ideas={ideas}
@@ -802,27 +889,36 @@ export function AppShell() {
                     onOpenIdea={openIdea}
                     onNavigate={navigate}
                     dcEmbed={dcEmbed}
+                    loading={!requestsLoaded}
+                    ideasLoading={!ideasLoaded}
                   />
                 )}
-                {page === "ideas" && (
+                {shownPage === "ideas" && (
                   <IdeasPage
                     ideas={ideas}
+                    loading={!ideasLoaded}
                     onOpen={openIdea}
                     onFollow={followIdea}
                     onSubmit={() => setComposerOpen(true)}
                   />
                 )}
-                {page === "roadmap" && (
+                {shownPage === "roadmap" && (
                   <RoadmapPage ideas={ideas} onOpen={openIdea} />
                 )}
-                {page === "requests" && (
+                {shownPage === "requests" && (
                   <RequestsPage
                     requests={requests}
+                    loading={!requestsLoaded}
+                    failed={requestsFailed}
+                    onRetry={() => {
+                      setRequestsLoaded(false);
+                      setDataVersion((v) => v + 1);
+                    }}
                     onOpen={openRequest}
                     onSubmit={() => setComposerOpen(true)}
                   />
                 )}
-                {page === "updates" && (
+                {shownPage === "updates" && (
                   <UpdatesPage
                     ideas={ideas}
                     notifications={notifications}
@@ -831,7 +927,7 @@ export function AppShell() {
                     onToast={setToast}
                   />
                 )}
-                {page === "help" && (
+                {shownPage === "help" && (
                   // The server-rendered manual (audience-gated, with tour screenshots)
                   // shown in the content area; same-origin so CSP frame-src 'self' allows it.
                   <iframe
@@ -841,15 +937,17 @@ export function AppShell() {
                     data-tour="help-frame"
                   />
                 )}
-                {page === "triage" && (
+                {shownPage === "triage" && (
                   <TriagePage
                     requests={requests}
-                    ideas={ideas}
+                    ideas={internalIdeas}
+                    canDecide={access.decide}
+                    loading={!requestsLoaded}
                     setRequests={setRequests}
                     onToast={setToast}
                   />
                 )}
-                {page === "productIdeas" && (
+                {shownPage === "productIdeas" && (
                   <InternalIdeasPage
                     ideas={internalIdeas}
                     requests={requests}
@@ -858,7 +956,7 @@ export function AppShell() {
                     onToast={setToast}
                   />
                 )}
-                {page === "releases" && (
+                {shownPage === "releases" && (
                   <ReleasesPage
                     releases={releases}
                     ideas={internalIdeas}
@@ -868,7 +966,7 @@ export function AppShell() {
                     onDraftEmail={draftEmailFromRelease}
                   />
                 )}
-                {page === "communications" && (
+                {shownPage === "communications" && (
                   <CommunicationsPage
                     companies={companies}
                     releases={releases}
@@ -876,15 +974,15 @@ export function AppShell() {
                     onToast={setToast}
                   />
                 )}
-                {page === "audit" && <AuditPage items={audit} />}
-                {page === "analytics" && (
+                {shownPage === "audit" && <AuditPage items={audit} />}
+                {shownPage === "analytics" && (
                   <AnalyticsPage
                     requests={requests}
                     ideas={ideas}
                     onToast={setToast}
                   />
                 )}
-                {page === "companies" && (
+                {shownPage === "companies" && (
                   <CompaniesPage
                     companies={companies}
                     users={managedUsers}
@@ -892,7 +990,7 @@ export function AppShell() {
                     onToast={setToast}
                   />
                 )}
-                {page === "users" && (
+                {shownPage === "users" && (
                   <UsersPage
                     users={managedUsers}
                     companies={companies}
@@ -900,14 +998,14 @@ export function AppShell() {
                     onToast={setToast}
                   />
                 )}
-                {page === "authentication" && (
+                {shownPage === "authentication" && (
                   <AuthenticationPage
                     companies={companies}
                     onChange={setCompanies}
                     onToast={setToast}
                   />
                 )}
-                {page === "settings" && <SettingsPage onToast={setToast} />}
+                {shownPage === "settings" && <SettingsPage onToast={setToast} />}
               </main>
             </div>
 
@@ -949,11 +1047,22 @@ export function AppShell() {
               />
             )}
             {toast && (
-              <div className="toast" role="status">
+              <div
+                className={`toast ${toastFailed ? "toast-error" : ""}`}
+                role={toastFailed ? "alert" : "status"}
+              >
                 <span className="toast-icon">
-                  <Icon name="check" size={15} />
+                  <Icon name={toastFailed ? "x" : "check"} size={15} />
                 </span>
                 <span>{t(toast)}</span>
+                {toastFailed && (
+                  <button
+                    aria-label={t("Dismiss")}
+                    onClick={() => setToast(null)}
+                  >
+                    <Icon name="x" size={14} />
+                  </button>
+                )}
               </div>
             )}
             <ChatPanel
@@ -962,7 +1071,7 @@ export function AppShell() {
             />
             <TourHost
               ready={identityReady}
-              view={page}
+              view={shownPage}
               locale={locale}
               onNavigate={(next) => {
                 // "compose" is a tour pseudo-view: the submit-request tour's later
@@ -984,6 +1093,5 @@ export function AppShell() {
 }
 
 function LoadingFeature() {
-  const t = useT();
-  return <p role="status">{t("Loading…")}</p>;
+  return <SkeletonRows count={5} />;
 }

@@ -270,6 +270,36 @@ export const internalTranslations: Record<string, string> = {
   "Your role and access are evaluated separately in each context.":
     "Hlutverk þitt og aðgangur eru metin sérstaklega fyrir hvert fyrirtæki.",
   "DataCentral team": "DataCentral-teymið",
+  // --- triage inbox ---
+  "Search queue": "Leita í biðröð",
+  "waiting on customer": "bíða svars viðskiptavinar",
+  "assigned to me": "úthlutað mér",
+  "Nothing is waiting for triage.": "Ekkert bíður flokkunar.",
+  "No requests match this view.": "Engar beiðnir passa við þessa sýn.",
+  "Select a request to review it.": "Veldu beiðni til að yfirfara hana.",
+  "No requests have been submitted yet.": "Engar beiðnir hafa borist enn.",
+  "Your role reviews requests and adds notes. A Product manager or System admin records the decision.":
+    "Hlutverk þitt yfirfer beiðnir og bætir við athugasemdum. Vörustjóri eða kerfisstjóri skráir ákvörðunina.",
+  "Question for the customer": "Spurning til viðskiptavinar",
+  "The customer sees this question on the request and is notified.":
+    "Viðskiptavinurinn sér þessa spurningu á beiðninni og fær tilkynningu.",
+  "Send question": "Senda spurningu",
+  "Support case URL or reference": "Slóð eða tilvísun í þjónustumál",
+  "The customer is told the request is handled through support.":
+    "Viðskiptavinurinn fær að vita að beiðnin er afgreidd í gegnum þjónustu.",
+  "Route request": "Vísa beiðni áfram",
+  "Explanation for the customer": "Skýring til viðskiptavinar",
+  "The customer sees this explanation on the closed request.":
+    "Viðskiptavinurinn sér þessa skýringu á lokuðu beiðninni.",
+  "The request follows the idea from now on, and its customer sees the idea's progress.":
+    "Beiðnin fylgir hugmyndinni héðan í frá og viðskiptavinurinn sér framvindu hennar.",
+  "Product idea": "Vöruhugmynd",
+  "Select a product idea": "Veldu vöruhugmynd",
+  "The question was saved, but the status could not be changed.":
+    "Spurningin var vistuð en ekki tókst að breyta stöðunni.",
+  "Try again": "Reyna aftur",
+  "Add evidence, constraints, or a decision rationale":
+    "Bættu við gögnum, takmörkunum eða rökum fyrir ákvörðun",
   "Triage inbox": "Flokkun beiðna",
   "Product ideas": "Vöruhugmyndir",
   Releases: "Útgáfur",

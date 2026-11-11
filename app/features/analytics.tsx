@@ -50,8 +50,6 @@ export function AnalyticsPage({
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="Product intelligence"
-        title="Feedback analytics"
         description="Demand, flow, and data quality across the currently authorized customer scope."
         action={
           <Button variant="secondary" icon="arrow" onClick={exportCsv}>

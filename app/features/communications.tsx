@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "@/lib/format-date";
 import { useEffect, useState } from "react";
 import { ApiFailure, apiFetch, errorMessage } from "@/lib/api-client";
 import {
@@ -77,7 +78,7 @@ function forgetParam() {
 }
 
 /** A time from the server (UTC) as `2026-11-02 14:30`. */
-const when = (iso: string) => iso.slice(0, 16).replace("T", " ");
+const when = (iso: string) => formatDateTime(iso);
 
 export function CommunicationsPage({
   companies,
@@ -269,8 +270,6 @@ export function CommunicationsPage({
   return (
     <div className="page-stack management-page" data-tour="communications-page">
       <PageIntro
-        eyebrow="Customer communication"
-        title="Communications"
         description="Compose branded product updates and notices, choose the companies that receive them, and track delivery."
         action={
           <div className="communication-new">

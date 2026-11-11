@@ -25,6 +25,16 @@ export const IS: Record<string, string> = {
   "Primary navigation": "Aðalvalmynd",
   "Open navigation": "Opna valmynd",
   "Close navigation": "Loka valmynd",
+  "Switch organization": "Skipta um fyrirtæki",
+  "No requests yet": "Engar beiðnir enn",
+  "Requests could not be loaded": "Ekki tókst að sækja beiðnir",
+  "Check your connection and try again.":
+    "Athugaðu tenginguna og reyndu aftur.",
+  "Submit your first request and follow its progress here.":
+    "Sendu inn fyrstu beiðnina og fylgstu með framvindu hennar hér.",
+  "Ideas delivered": "Afhentar hugmyndir",
+  "Jump to section": "Fara í hluta",
+  Dismiss: "Loka",
   Notifications: "Tilkynningar",
   "Resolving your authorized organization…":
     "Staðfesti aðgang fyrirtækisins þíns…",

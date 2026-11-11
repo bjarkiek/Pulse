@@ -76,8 +76,29 @@ function failureSentence(error: ApiFailure) {
   return words ? `${words[0].toUpperCase()}${words.slice(1)}.` : error.message;
 }
 
+/** The sentences `errorMessage` has produced, so the toast can show them as failures rather than with the success tick. */
+const failureMessages = new Set<string>();
+
 export function errorMessage(error: unknown) {
-  return error instanceof ApiFailure
-    ? `${failureSentence(error)}${error.supportId ? ` Support ID: ${error.supportId}` : ""}`
-    : "Unable to connect. Your input is still here; please retry.";
+  const message =
+    error instanceof ApiFailure
+      ? `${failureSentence(error)}${error.supportId ? ` Support ID: ${error.supportId}` : ""}`
+      : "Unable to connect. Your input is still here; please retry.";
+  // Bounded: a support id makes each sentence unique, so the oldest are dropped.
+  if (failureMessages.size > 200) failureMessages.clear();
+  failureMessages.add(message);
+  return message;
+}
+
+/**
+ * Whether a toast message reports a failure. Pages hand the shell a plain sentence, so this recognises the ones `errorMessage` built and
+ * the wording the pages use for a refusal ("… could not be saved."). Anything else is shown as a success.
+ */
+export function isFailureMessage(message: string) {
+  return (
+    failureMessages.has(message) ||
+    /could not|unable to|not saved|no longer available|there are no visible/i.test(
+      message,
+    )
+  );
 }

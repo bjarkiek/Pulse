@@ -378,8 +378,9 @@ export const TOUR_CATALOG: TourDefinition[] = [
         },
       },
       {
-        // The Settings entry of the team's menu, which every internal role sees (the card itself is for System admins, and a role that cannot see it
-        // would wait for its anchor in vain). The route is the page of the step before, so nothing changes under the person's hands.
+        // The Settings entry of the menu, which only a System admin is shown (the sidebar offers each role the pages the server gives it). For
+        // the other internal roles the anchor is absent, so the engine skips this step and the one before it ends the tour with "Done".
+        // The route is the page of the step before, so nothing changes under the person's hands.
         element: "[data-tour='nav-settings']",
         route: "/communications",
         side: "right",

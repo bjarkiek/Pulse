@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDate } from "@/lib/format-date";
 import dynamic from "next/dynamic";
 
 import { useContext, useEffect, useState } from "react";
@@ -19,6 +20,8 @@ import {
   Button,
   PageIntro,
   EmptyState,
+  SkeletonRows,
+  isActiveRequest,
 } from "./shared";
 
 // Only a Company admin has this section, and it brings the contact dialogs with it: it is loaded when it is first drawn.
@@ -34,9 +37,14 @@ export function HomePage({
   onOpenIdea,
   onNavigate,
   dcEmbed,
+  loading,
+  ideasLoading,
 }: {
   requests: RequestItem[];
   ideas: Idea[];
+  /** The requests, and the ideas, have not arrived yet: show placeholders, not zeros. */
+  loading: boolean;
+  ideasLoading: boolean;
   onSubmit: () => void;
   onOpenRequest: (request: RequestItem) => void;
   onOpenIdea: (idea: Idea) => void;
@@ -60,7 +68,6 @@ export function HomePage({
     <div className="page-stack home-page">
       <section className="welcome-row">
         <div>
-          <p className="eyebrow">{t("Customer feedback")}</p>
           {!dcEmbed && (
             <h2>
               {t("Welcome")}
@@ -72,9 +79,6 @@ export function HomePage({
               "Track your requests and help shape what DataCentral builds next.",
             )}
           </p>
-        </div>
-        <div className="home-meta">
-          <strong>{t("Your product workspace")}</strong>
         </div>
       </section>
 
@@ -126,11 +130,7 @@ export function HomePage({
           <div>
             <span>{t("Active requests")}</span>
             <strong>
-              {
-                requests.filter(
-                  (r) => !["Released", "Closed"].includes(r.status),
-                ).length
-              }
+              {loading ? "–" : requests.filter(isActiveRequest).length}
             </strong>
             <small>{t("Across your organization")}</small>
           </div>
@@ -146,7 +146,10 @@ export function HomePage({
           <div>
             <span>{t("Needs your input")}</span>
             <strong>
-              {requests.filter((r) => r.status === "Needs information").length}
+              {loading
+                ? "–"
+                : requests.filter((r) => r.status === "Needs information")
+                    .length}
             </strong>
             <small>{t("Response requested")}</small>
           </div>
@@ -159,9 +162,11 @@ export function HomePage({
           <div>
             <span>{t("Recently released")}</span>
             <strong>
-              {ideas.filter((i) => i.status === "Released").length}
+              {ideasLoading
+                ? "–"
+                : ideas.filter((i) => i.status === "Released").length}
             </strong>
-            <small>{t("In the last 30 days")}</small>
+            <small>{t("Ideas delivered")}</small>
           </div>
           <Icon name="chevron" size={16} />
         </button>
@@ -184,6 +189,10 @@ export function HomePage({
             </button>
           </div>
           <div className="request-list">
+            {loading && <SkeletonRows count={3} />}
+            {!loading && !requests.length && (
+              <p className="list-empty">{t("No requests yet")}</p>
+            )}
             {requests.slice(0, 3).map((request) => (
               <button
                 className="request-row"
@@ -231,7 +240,8 @@ export function HomePage({
                 </button>
               </div>
             ))}
-          {!ideas.some((i) => i.status === "Released") && (
+          {ideasLoading && <SkeletonRows count={2} />}
+          {!ideasLoading && !ideas.some((i) => i.status === "Released") && (
             <p>{t("No releases published yet.")}</p>
           )}
         </div>
@@ -242,11 +252,13 @@ export function HomePage({
 
 export function IdeasPage({
   ideas,
+  loading,
   onOpen,
   onFollow,
   onSubmit,
 }: {
   ideas: Idea[];
+  loading: boolean;
   onOpen: (idea: Idea) => void;
   onFollow: (id: string) => void;
   onSubmit: () => void;
@@ -264,14 +276,7 @@ export function IdeasPage({
   return (
     <div className="page-stack">
       <PageIntro
-        eyebrow="Product ideas"
-        title="Browse customer-driven ideas"
         description="See what DataCentral is reviewing, planning, and delivering. Follow an idea to receive meaningful updates."
-        action={
-          <Button icon="plus" onClick={onSubmit}>
-            {t("Submit a request")}
-          </Button>
-        }
       />
       <div className="toolbar">
         <div className="search-input">
@@ -329,7 +334,8 @@ export function IdeasPage({
             </div>
           </article>
         ))}
-        {filtered.length === 0 && (
+        {loading && <SkeletonRows count={3} />}
+        {!loading && filtered.length === 0 && (
           <EmptyState
             title="No ideas match these filters"
             description="Adjust the search or submit the requirement your team needs."
@@ -358,8 +364,6 @@ export function RoadmapPage({
   return (
     <div className="page-stack">
       <PageIntro
-        eyebrow="Directional roadmap"
-        title="Where the product is heading"
         description="Roadmap horizons express current intent and may change as customer evidence and delivery constraints evolve."
       />
       <div className="roadmap-callout">
@@ -438,10 +442,17 @@ export function RoadmapPage({
 
 export function RequestsPage({
   requests,
+  loading,
+  failed,
+  onRetry,
   onOpen,
   onSubmit,
 }: {
   requests: RequestItem[];
+  loading: boolean;
+  /** The list could not be fetched: an empty list then means "unknown", not "none". */
+  failed: boolean;
+  onRetry: () => void;
   onOpen: (request: RequestItem) => void;
   onSubmit: () => void;
 }) {
@@ -477,7 +488,7 @@ export function RequestsPage({
     const statusMatch =
       filter === "All" ||
       (filter === "Active"
-        ? !["Closed", "Withdrawn"].includes(request.status)
+        ? isActiveRequest(request)
         : request.status === filter);
     const areaMatch = area === "All areas" || request.area === area;
     const searchMatch = `${request.id} ${request.title} ${request.problem}`
@@ -492,14 +503,8 @@ export function RequestsPage({
   return (
     <div className="page-stack">
       <PageIntro
-        eyebrow="Your organization"
-        title={t("Requests") + " · " + user.organization}
+        lead={user.organization}
         description="Every request keeps its original context, status history, and link to the corresponding product idea."
-        action={
-          <Button icon="plus" onClick={onSubmit}>
-            {t("Submit a request")}
-          </Button>
-        }
       />
       <div className="tabs" role="tablist">
         {["All", "Active", "Needs information", "Closed"].map((tab) => (
@@ -513,9 +518,7 @@ export function RequestsPage({
               {tab === "All"
                 ? requests.length
                 : requests.filter((r) =>
-                    tab === "Active"
-                      ? !["Closed", "Withdrawn"].includes(r.status)
-                      : r.status === tab,
+                    tab === "Active" ? isActiveRequest(r) : r.status === tab,
                   ).length}
             </span>
           </button>
@@ -531,8 +534,8 @@ export function RequestsPage({
             aria-label={t("Search requests")}
           />
         </label>
-        <label className="select-control">
-          <Icon name="filter" size={15} />
+        <label className="select-wrap">
+          <Icon name="filter" size={16} />
           <select
             value={area}
             onChange={(event) => setArea(event.target.value)}
@@ -573,7 +576,24 @@ export function RequestsPage({
             <Icon name="chevron" size={15} />
           </button>
         ))}
-        {visible.length === 0 && (
+        {loading && <SkeletonRows count={4} />}
+        {!loading && failed && requests.length === 0 && (
+          <EmptyState
+            title="Requests could not be loaded"
+            description="Check your connection and try again."
+            action="Retry"
+            onAction={onRetry}
+          />
+        )}
+        {!loading && !failed && requests.length === 0 && (
+          <EmptyState
+            title="No requests yet"
+            description="Submit your first request and follow its progress here."
+            action="Submit a request"
+            onAction={onSubmit}
+          />
+        )}
+        {!loading && requests.length > 0 && visible.length === 0 && (
           <EmptyState
             title="No requests match these filters"
             description="Try a different phrase, product area, or status."
@@ -659,10 +679,7 @@ export function UpdatesPage({
   }
 
   const durableEntries = notifications.map((notification) => ({
-    date: new Date(notification.createdAt).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-    }),
+    date: formatDate(notification.createdAt),
     title: notification.eventType
       .replaceAll(".", " ")
       .replace(/\b\w/g, (letter) => letter.toUpperCase()),
@@ -678,8 +695,6 @@ export function UpdatesPage({
   return (
     <div className="page-stack updates-layout">
       <PageIntro
-        eyebrow="Product updates"
-        title="Changes that matter to your team"
         description="A focused record of decisions, progress, and releases for requests you follow."
       />
       <section

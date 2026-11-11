@@ -1,4 +1,5 @@
 "use client";
+import { formatDate } from "@/lib/format-date";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiFetch, errorMessage } from "@/lib/api-client";
 import { ConfirmDialog } from "./communication-dialog";
@@ -635,7 +636,7 @@ export function SuppressionsTab({
                 {item.note ? ` · ${item.note}` : ""}
               </span>
               <span>{t(item.source)}</span>
-              <span>{item.createdAt.slice(0, 10)}</span>
+              <span>{formatDate(item.createdAt)}</span>
               <span className="communication-row-actions">
                 <Button variant="ghost" onClick={() => setRemoving(item)}>
                   {t("Remove")}

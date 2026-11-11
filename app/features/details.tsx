@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { formatDateTime } from "@/lib/format-date";
 import { useResource } from "./use-resource";
 import ReactMarkdown from "react-markdown";
 
@@ -382,7 +383,7 @@ export function RequestDrawer({
                 <article key={comment.id}>
                   <header>
                     <strong>{comment.author}</strong>
-                    <code>{new Date(comment.createdAt).toLocaleString()}</code>
+                    <code>{formatDateTime(comment.createdAt)}</code>
                   </header>
                   <div className="comment-markdown">
                     <ReactMarkdown
@@ -462,9 +463,7 @@ export function RequestDrawer({
                   </strong>
                   <p>{entry.actor ? `By ${entry.actor}` : "System event"}</p>
                   <code>
-                    {Number.isNaN(new Date(entry.createdAt).getTime())
-                      ? entry.createdAt.toUpperCase()
-                      : new Date(entry.createdAt).toLocaleString()}
+                    {formatDateTime(entry.createdAt)}
                   </code>
                 </div>
               </div>

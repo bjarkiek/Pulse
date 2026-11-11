@@ -170,6 +170,16 @@ export type RequestItem = {
   attachmentCount?: number;
 };
 
+/** A request that is still open for its customer. Home's tile and the Active tab of My requests count the same thing. */
+export function isActiveRequest(request: { status: string }) {
+  return !["Closed", "Withdrawn"].includes(request.status);
+}
+
+/** A request nobody has decided on yet. The sidebar badge and the Triage inbox count the same thing. */
+export function isUntriaged(request: { status: string }) {
+  return request.status === "Submitted";
+}
+
 export type RequestAttachment = {
   id: string;
   fileName: string;
@@ -420,9 +430,25 @@ export type IconName =
   | "send"
   | "link"
   | "eye"
-  | "help";
+  | "help"
+  | "shield"
+  | "chart";
 
 export const iconPaths: Record<IconName, ReactNode> = {
+  shield: (
+    <>
+      <path d="M12 3 5 6v6c0 4.2 2.9 7.6 7 9 4.1-1.4 7-4.8 7-9V6l-7-3Z" />
+      <path d="m9.5 12 1.8 1.8 3.4-3.6" />
+    </>
+  ),
+  chart: (
+    <>
+      <path d="M3 21h18" />
+      <path d="M7 21V11" />
+      <path d="M12 21V5" />
+      <path d="M17 21v-7" />
+    </>
+  ),
   help: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -596,6 +622,7 @@ export function Button({
   className = "",
   disabled = false,
   dataTour,
+  ariaLabel,
 }: {
   children: ReactNode;
   variant?: "primary" | "secondary" | "ghost";
@@ -605,11 +632,14 @@ export function Button({
   className?: string;
   disabled?: boolean;
   dataTour?: string;
+  /** For a button whose label is hidden on a narrow screen, where only its icon is left. */
+  ariaLabel?: string;
 }) {
   const t = useT();
   return (
     <button
       type={type}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={onClick}
       className={`button button-${variant} ${className}`}
@@ -621,27 +651,41 @@ export function Button({
   );
 }
 
+/**
+ * The line under the top bar that says what a page is for, with the page's main action beside it. The top bar already carries the
+ * page's name, so there is no second heading here: in the DataCentral frame every row of height counts.
+ */
 export function PageIntro({
-  eyebrow,
-  title,
+  lead,
   description,
   action,
 }: {
-  eyebrow: string;
-  title: string;
+  /** A few words set before the description, already in the reader's language: the company a list belongs to, for instance. */
+  lead?: string;
   description: string;
   action?: ReactNode;
 }) {
   const t = useT();
   return (
     <header className="page-intro">
-      <div>
-        <p className="eyebrow">{t(eyebrow)}</p>
-        <h2>{t(title)}</h2>
-        <p>{t(description)}</p>
-      </div>
+      <p>
+        {lead && <strong>{lead}</strong>}
+        {t(description)}
+      </p>
       {action}
     </header>
+  );
+}
+
+/** Placeholder rows while a list is being fetched, so an empty list is never mistaken for "there is nothing". */
+export function SkeletonRows({ count = 3 }: { count?: number }) {
+  const t = useT();
+  return (
+    <div className="skeleton-rows" role="status" aria-label={t("Loading…")}>
+      {Array.from({ length: count }, (_, index) => (
+        <span key={index} />
+      ))}
+    </div>
   );
 }
 

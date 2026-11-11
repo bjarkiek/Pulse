@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "@/lib/format-date";
 import { useState } from "react";
 import { apiFetch, errorMessage } from "@/lib/api-client";
 import { ConfirmDialog } from "./communication-dialog";
@@ -39,7 +40,7 @@ const DELIVERY_TONE: Record<string, Tone> = {
 };
 
 /** A time from the server (UTC) as `2026-11-02 14:30`. */
-const when = (iso: string) => iso.slice(0, 16).replace("T", " ");
+const when = (iso: string) => formatDateTime(iso);
 
 export function CommunicationDetail({
   id,

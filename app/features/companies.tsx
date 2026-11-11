@@ -53,8 +53,6 @@ export function CompaniesPage({
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="Customer administration"
-        title="Manage companies"
         description="Companies define the customer boundary. Requests, users, memberships, and authentication policies are scoped to a company."
         action={
           <Button icon="plus" onClick={() => setEditing("new")}>

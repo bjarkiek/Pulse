@@ -1,5 +1,6 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-date";
 import { useT, type NotificationItem, Icon } from "./shared";
 
 export function NotificationsPopover({
@@ -49,7 +50,7 @@ export function NotificationsPopover({
                   .replaceAll(".", " ")
                   .replace(/\b\w/g, (letter) => letter.toUpperCase())}
               </strong>
-              <small>{new Date(item.createdAt).toLocaleString()}</small>
+              <small>{formatDateTime(item.createdAt)}</small>
             </span>
           </button>
         ))

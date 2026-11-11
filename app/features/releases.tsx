@@ -108,8 +108,6 @@ export function ReleasesPage({
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="Release communication"
-        title="Releases"
         description="Publish availability, documentation, and safe release notes to requesters and followers."
         action={
           <Button icon="plus" onClick={() => setCreating(true)}>

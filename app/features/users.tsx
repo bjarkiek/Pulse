@@ -62,8 +62,6 @@ export function UsersPage({
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="Identity and access"
-        title="Manage users and company access"
         description="A user has one identity and any number of explicit company memberships. Roles are assigned separately inside each company."
         action={
           <Button icon="plus" onClick={() => setEditing("new")}>

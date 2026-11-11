@@ -352,6 +352,60 @@ h3 {
 .workspace-switcher:hover {
   background: var(--neutral-50);
 }
+/* One company: a label, so it must not look or behave like a button. */
+.workspace-label {
+  color: var(--neutral-600);
+  cursor: default;
+}
+.workspace-label:hover {
+  background: #fff;
+}
+.organization-switcher {
+  position: relative;
+}
+.organization-menu {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  top: 40px;
+  min-width: 220px;
+  max-height: min(60vh, 360px);
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+}
+.organization-menu > button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 8px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  color: var(--violet-600);
+}
+.organization-menu > button:hover {
+  background: var(--neutral-50);
+}
+.organization-menu > button > span {
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+}
+.organization-menu strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.organization-menu small {
+  font-size: 11px;
+  color: var(--muted);
+}
 .button {
   height: 36px;
   border-radius: 6px;
@@ -631,9 +685,9 @@ h3 {
 }
 .metric-card > div:nth-child(2) {
   display: grid;
-  grid-template-columns: auto auto;
-  column-gap: 8px;
-  align-items: baseline;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  align-items: center;
 }
 .metric-card span {
   font-size: 12px;
@@ -642,9 +696,15 @@ h3 {
 }
 .metric-card strong {
   grid-row: 1/3;
-  grid-column: 2;
+  grid-column: 1;
+  min-width: 1.2ch;
   font-family: var(--font-heading);
   font-size: 27px;
+  line-height: 1;
+}
+.metric-card span,
+.metric-card small {
+  grid-column: 2;
 }
 .metric-card small {
   font-size: 11px;
@@ -748,6 +808,23 @@ h3 {
   border: 0;
   align-items: flex-start;
 }
+/* The released idea sits in a wrapper, so it needs the panel's side padding as the plain paragraph has. */
+.shipped-panel > div:not(.panel-header) {
+  padding: 0 18px;
+}
+.shipped-panel > div:not(.panel-header) > h3 {
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+.shipped-panel > div:not(.panel-header) > p {
+  color: var(--neutral-600);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.shipped-panel > div:not(.panel-header) > .text-link {
+  margin-top: 12px;
+  padding-left: 0;
+}
 .shipped-panel > p {
   padding: 0 18px;
   color: var(--neutral-600);
@@ -826,11 +903,103 @@ h3 {
 .status-error .status-dot {
   background: var(--red-500);
 }
+/* One line that says what the page is for, with the page's action beside it. The top bar carries the page's name. */
 .page-intro {
-  padding: 4px 0 6px;
+  padding: 0;
+  align-items: center;
+  min-height: 36px;
 }
-.page-intro > div > p:last-child {
+.page-intro > p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
   max-width: 760px;
+}
+.page-intro > p > strong {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 8px;
+}
+.page-intro > p > strong::after {
+  content: "·";
+  margin-left: 8px;
+  color: var(--neutral-400);
+  font-weight: 400;
+}
+/* Placeholder rows while a list loads. */
+.skeleton-rows {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  grid-column: 1 / -1;
+}
+.skeleton-rows > span {
+  height: 44px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--neutral-100) 25%,
+    var(--neutral-50) 50%,
+    var(--neutral-100) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-sweep 1.4s linear infinite;
+}
+@keyframes skeleton-sweep {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-rows > span {
+    animation: none;
+  }
+}
+.list-empty {
+  padding: 22px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* Settings: the chips that jump to a section, pinned under the 56px top bar. */
+.section-jump {
+  position: sticky;
+  top: 56px;
+  z-index: 10;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 0;
+  margin: -8px 0;
+  background: var(--page);
+  scrollbar-width: none;
+}
+.section-jump::-webkit-scrollbar {
+  display: none;
+}
+/* A guided tour scrolls its own target into place; a pinned bar would sit over the top of the card it points at. */
+body.driver-active .section-jump {
+  position: static;
+}
+.section-jump > button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--neutral-600);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.section-jump > button:hover {
+  border-color: var(--violet-200);
+  color: var(--violet-700);
+  background: var(--violet-50);
+}
+.settings-sections .settings-card,
+.settings-sections .tour-progress-panel {
+  scroll-margin-top: 112px;
 }
 .toolbar {
   display: flex;
@@ -1278,6 +1447,10 @@ h3 {
 .triage-summary {
   align-items: center;
 }
+.triage-summary > div > p:last-child {
+  margin-top: 0;
+  font-size: 14px;
+}
 .triage-metrics {
   display: flex;
   border: 1px solid var(--border);
@@ -1322,6 +1495,64 @@ h3 {
   display: flex;
   gap: 6px;
 }
+.queue-toolbar .select-wrap {
+  height: 34px;
+  min-width: 0;
+  flex: 0 1 132px;
+}
+.queue-toolbar .select-wrap select {
+  min-width: 0;
+  width: 100%;
+  font-size: 12px;
+}
+.queue-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.triage-detail-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 240px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.triage-detail-head > .status {
+  flex: 0 0 auto;
+}
+.decision-panel > button:disabled,
+.suggestion-list > button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.decision-panel > button:disabled:hover {
+  border-color: var(--border);
+  background: #fff;
+}
+/* The words a triage decision needs, asked in a dialog. */
+.decision-subject {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 14px;
+  overflow-wrap: anywhere;
+}
+.decision-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: -6px;
+}
+.decision-error {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  background: var(--red-100);
+  color: var(--red-600);
+  font-size: 12px;
+}
 .queue-toolbar .search-input {
   min-width: 0;
   flex: 1;
@@ -1351,6 +1582,7 @@ h3 {
 }
 .queue-list {
   overflow: auto;
+  min-height: 0;
 }
 .queue-list > button {
   width: 100%;
@@ -1786,6 +2018,10 @@ h3 {
   font-size: 11px;
 }
 .composer form > footer {
+  /* The dialog scrolls as a whole; the actions stay pinned so they are in reach at the 640px embed height. */
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   margin: 20px -24px 0;
   padding: 14px 24px;
   background: var(--neutral-50);
@@ -2030,9 +2266,12 @@ h3 {
 .toast {
   position: fixed;
   z-index: 200;
-  right: 22px;
+  /* Bottom centre: the bottom-right corner belongs to the assistant and help buttons. */
+  left: 50%;
+  transform: translateX(-50%);
   bottom: 22px;
   min-width: 300px;
+  max-width: calc(100vw - 28px);
   background: var(--neutral-900);
   color: #fff;
   border-radius: 8px;
@@ -2046,9 +2285,25 @@ h3 {
 }
 @keyframes toast-in {
   from {
-    transform: translateY(8px);
+    transform: translate(-50%, 8px);
     opacity: 0;
   }
+}
+.toast-error .toast-icon {
+  background: var(--red-500, #ef4444);
+}
+.toast > button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  display: grid;
+  place-items: center;
+  padding: 2px;
+}
+.toast > button:hover {
+  opacity: 1;
 }
 .toast-icon {
   width: 25px;
@@ -2190,8 +2445,29 @@ h3 {
   .workspace-switcher {
     display: none;
   }
+  /* The language toggle shares the switcher's look but must stay reachable on a phone, and so must the way to another
+     company for the people who have more than one. The label goes, the icon stays. */
+  .workspace-switcher.locale-toggle,
+  .organization-switcher > .workspace-switcher {
+    display: flex;
+  }
+  .organization-switcher > .workspace-switcher > span {
+    display: none;
+  }
   .topbar {
     padding: 0 14px;
+    gap: 8px;
+  }
+  .topbar-left {
+    min-width: 0;
+  }
+  .topbar h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .topbar-actions {
+    flex: 0 0 auto;
   }
   .topbar-actions > .button span {
     display: none;
@@ -2213,6 +2489,10 @@ h3 {
   }
   .ask-search-row {
     flex-direction: column;
+  }
+  /* Stacked, the field's flex:1 would be measured along the column and squeeze it to a sliver. */
+  .ask-search-row .search-input.large {
+    flex: 0 0 42px;
   }
   .metric-grid {
     grid-template-columns: 1fr;
@@ -2259,7 +2539,16 @@ h3 {
   }
   .triage-queue {
     border-right: 0;
+    border-bottom: 1px solid var(--border);
     max-height: 380px;
+    /* Without this the list ignores the height above and paints over the detail below it. */
+    overflow: hidden;
+  }
+  /* The status sits under the title on a phone, where there is no room beside it. */
+  .triage-detail-head {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .triage-detail-grid {
     grid-template-columns: 1fr;
@@ -4064,6 +4353,13 @@ h3 {
     right: 14px;
     bottom: 70px;
   }
+}
+
+/* A dialog or drawer owns the screen: the floating assistant and help buttons would otherwise sit on top of its actions
+   (on a phone, right over "Submit request"). */
+body:has(.modal-layer, .drawer-layer) .chat-launcher,
+body:has(.modal-layer, .drawer-layer) .tour-host {
+  display: none;
 }
 
 /* ---- Onboarding tours (Driver.js kit) ---- */

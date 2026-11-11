@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "@/lib/format-date";
 import { useT } from "./shared";
 
 import { type AuditItem, PageIntro, EmptyState } from "./shared";
@@ -8,8 +9,6 @@ export function AuditPage({ items }: { items: AuditItem[] }) {
   return (
     <div className="page-stack management-page">
       <PageIntro
-        eyebrow="Immutable history"
-        title="Audit log"
         description="Security and business history for publication, roles, links, status, scoring, exports, and administrative changes."
       />
       <div className="management-toolbar">
@@ -35,7 +34,7 @@ export function AuditPage({ items }: { items: AuditItem[] }) {
         ) : (
           items.map((item) => (
             <div className="audit-row" key={item.id}>
-              <code>{new Date(item.createdAt).toLocaleString()}</code>
+              <code>{formatDateTime(item.createdAt)}</code>
               <strong>{item.action}</strong>
               <span>
                 {item.entityType} · {item.entityId?.slice(0, 12) || "—"}
