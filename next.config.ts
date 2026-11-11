@@ -23,7 +23,9 @@ const nextConfig: NextConfig = {
   // the route chunks separate copies, and a SQL pool created by one copy
   // rejects the other copy's type objects ("r.type.validate is not a function")
   // — killing every SQL-backed API in production.
-  serverExternalPackages: ["@slack/bolt", "@slack/socket-mode", "@slack/web-api", "mssql"],
+  // @azure/identity stays external too: 4.14.1 moved to "open" 11, whose PowerShell helper
+  // names C:\Windows\...\powershell.exe, and Turbopack fails the build trying to resolve that path.
+  serverExternalPackages: ["@azure/identity", "@slack/bolt", "@slack/socket-mode", "@slack/web-api", "mssql"],
   async headers() {
     return [
       { source: "/(.*)", headers: [
