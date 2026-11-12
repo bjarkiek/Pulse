@@ -1,4 +1,4 @@
-// Renders player.html to MP4, one frame at a time, so no frame is ever dropped.
+// Renders public/explainers/player.html (the page Pulse serves at /explainers/player.html) to MP4, one frame at a time, so no frame is ever dropped.
 //   node marketing/explainer-video/render.mjs            all three cuts
 //   node marketing/explainer-video/render.mjs customers  one cut
 //   node marketing/explainer-video/render.mjs --stills   only the check frames (out/stills)
@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const player = join(here, "..", "..", "public", "explainers", "player.html");
 const out = join(here, "out");
 const FPS = 30;
 const args = process.argv.slice(2);
@@ -20,7 +21,7 @@ mkdirSync(join(out, "stills"), { recursive: true });
 const browser = await chromium.launch();
 for (const cut of cuts) {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-  await page.goto(pathToFileURL(join(here, "player.html")).href + `?v=${cut}&capture`);
+  await page.goto(pathToFileURL(player).href + `?v=${cut}&capture`);
   await page.evaluate(() => document.fonts.ready);
   const duration = await page.evaluate(() => window.DURATION);
   const starts = await page.evaluate(() => scenes.map((s) => [s.start, s.dur]));

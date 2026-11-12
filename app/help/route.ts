@@ -7,7 +7,7 @@ import { pick } from "@/lib/server/tour-catalog";
 // chapter mirrors a guided tour step by step, with the screenshots produced by
 // scripts/capture-help-screenshots.mjs (real Driver.js highlights). Reachable
 // standalone at /help, from the ? tour menu, the sidebar, and the admin
-// onboarding card. Audience-gated like the tours themselves: customers never
+// onboarding card. It links to the explainer videos in public/explainers. Audience-gated like the tours themselves: customers never
 // receive the admin chapters. Detailed enough to narrate a video tutorial from.
 
 function esc(value: string) {
@@ -72,6 +72,11 @@ const STRINGS = {
       "<strong>Your choices</strong> — DataCentral emails product updates, service notices and general announcements. On the Updates page, under “Notification preferences”, everyone switches each topic on or off for themselves. Security advisories are always delivered.",
       "<strong>For Company admins</strong> — The same page shows “Who receives DataCentral communications for your company”. Colleagues with a Pulse account receive email automatically. Add people without an account here, one at a time or with “Paste list”, and edit or remove them whenever you need to. Only Company admins see this section.",
     ],
+    explainersTitle: "Explainer videos",
+    explainers: (count: string) =>
+      `${count} one-minute videos show how Pulse works. They are silent and captioned.`,
+    explainersCount: ["Two", "Three"],
+    explainersLink: "Watch the explainers",
     printHint:
       "Tip: this page prints cleanly — use it as a hand-out or a video-recording script.",
     languageToggle: "Íslenska",
@@ -129,6 +134,11 @@ const STRINGS = {
       "<strong>Þínar stillingar</strong> — DataCentral sendir vöruuppfærslur, þjónustutilkynningar og almennar tilkynningar í tölvupósti. Á uppfærslusíðunni, undir „Tilkynningastillingar“, kveikir eða slekkur hver og einn á hverjum efnisflokki fyrir sig. Öryggistilkynningar eru alltaf sendar.",
       "<strong>Fyrir fyrirtækisstjóra</strong> — Á sömu síðu er hlutinn „Hverjir fá samskipti frá DataCentral fyrir fyrirtækið þitt“. Samstarfsfólk með Pulse-aðgang fær tölvupóst sjálfkrafa. Bættu hér við fólki án aðgangs, einu í einu eða með „Líma lista“, og breyttu þeim eða fjarlægðu þegar þörf krefur. Aðeins fyrirtækisstjórar sjá þennan hluta.",
     ],
+    explainersTitle: "Kynningarmyndbönd",
+    explainers: (count: string) =>
+      `${count} einnar mínútu myndbönd sýna hvernig Pulse virkar. Þau eru án hljóðs og með texta á ensku.`,
+    explainersCount: ["Tvö", "Þrjú"],
+    explainersLink: "Horfa á myndböndin",
     printHint:
       "Ábending: síðan prentast hreint — nýttu hana sem dreifiblað eða upptökuhandrit.",
     languageToggle: "English",
@@ -240,6 +250,8 @@ export async function GET(request: Request) {
         : "en";
   const t = STRINGS[lang];
   const showAdmin = data.adminChapters.length > 0;
+  // The explainers are static pages in public/explainers. The team cut is left out for readers who do not get the admin manual.
+  const explainersHref = `/explainers/index.html?from=help${lang === "is" ? "&lang=is" : ""}${showAdmin ? "" : "&for=customers"}`;
 
   const html = `<!doctype html>
 <html lang="${lang}">
@@ -275,6 +287,8 @@ export async function GET(request: Request) {
   .about h5,.admin-extra h5{margin:0 0 10px;font-family:var(--font-heading);font-size:15px}
   .about ul,.admin-extra ul{margin:0;padding-left:18px}
   .about li,.admin-extra li{margin:7px 0}
+  .explainers p{margin:0 0 10px}
+  .explainers p:last-child{margin:0}
   code{font-family:var(--font-mono);font-size:12px;background:var(--violet-50);border-radius:4px;padding:1px 5px}
   .chapter{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px 24px;margin:18px 0}
   .chapter-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
@@ -294,7 +308,7 @@ export async function GET(request: Request) {
   @media print{
     body{background:#fff}
     .wrap{max-width:none;padding:0}
-    .top,.start-link{display:none}
+    .top,.start-link,.explainers{display:none}
     .chapter,.about,.admin-extra,.toc{border:0;box-shadow:none;padding:0}
     .step{break-inside:avoid}
     h2{break-before:page}
@@ -310,6 +324,12 @@ export async function GET(request: Request) {
   <h1>${esc(t.heading)}</h1>
   <p class="lead">${esc(t.intro)}</p>
   <p class="hint">${esc(t.printHint)}</p>
+
+  <div class="about explainers" id="explainers">
+    <h5>${esc(t.explainersTitle)}</h5>
+    <p>${esc(t.explainers(t.explainersCount[showAdmin ? 1 : 0]))}</p>
+    <p><a class="start-link" href="${esc(explainersHref)}">${esc(t.explainersLink)}</a></p>
+  </div>
 
   <nav class="toc">
     <h5>${esc(t.contents)}</h5>
